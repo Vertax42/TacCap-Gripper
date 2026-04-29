@@ -6,6 +6,7 @@ add_executable(taccap_unit_tests
     test_codec.cpp
     test_python_compat.cpp
     test_stuff.cpp
+    test_transport.cpp
 )
 
 target_link_libraries(taccap_unit_tests
@@ -13,6 +14,7 @@ target_link_libraries(taccap_unit_tests
         taccap_core
         GTest::gtest
         GTest::gtest_main
+        util            # openpty(), forkpty()
 )
 
 include(GoogleTest)

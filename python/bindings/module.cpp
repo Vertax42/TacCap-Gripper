@@ -14,6 +14,8 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/chrono.h>
+#include <pybind11/functional.h>
 
 #include <taccap/version.hpp>
 #include <taccap/vision.hpp>
@@ -23,10 +25,13 @@
 #include <taccap/protocol/codec.hpp>
 #include <taccap/bus/frame.hpp>
 #include <taccap/bus/serial_bus.hpp>
+#include <taccap/bus/transport.hpp>
 
 #include <xense/core/version.hpp>  // defines XENSESDK_VERSION_STRING
 
+#include <chrono>
 #include <cstring>
+#include <memory>
 #include <string>
 
 namespace py = pybind11;
@@ -226,4 +231,122 @@ PYBIND11_MODULE(_taccap_native, m) {
             return s.config().baudrate;
         })
         .def_static("list_ports", &tb::SerialBus::list_ports);
+
+    // ---- AckResponse + Transport ----------------------------------------
+    py::class_<tb::AckResponse>(m, "AckResponse")
+        .def_readonly("seq",         &tb::AckResponse::seq)
+        .def_readonly("error_code",  &tb::AckResponse::error_code)
+        .def_readonly("retry_count", &tb::AckResponse::retry_count)
+        .def_property_readonly(
+            "payload",
+            [](const tb::AckResponse& a) { return vec_to_bytes(a.payload); })
+        .def("__repr__", [](const tb::AckResponse& a) {
+            return "AckResponse(seq=" + std::to_string(a.seq) +
+                   ", error=" + tp::to_string(a.error_code) +
+                   ", retries=" + std::to_string(a.retry_count) +
+                   ", payload=" + std::to_string(a.payload.size()) + "B)";
+        });
+
+    py::class_<tb::Transport::Stats>(m, "TransportStats")
+        .def_readonly("bytes_read",          &tb::Transport::Stats::bytes_read)
+        .def_readonly("bytes_written",       &tb::Transport::Stats::bytes_written)
+        .def_readonly("frames_received",     &tb::Transport::Stats::frames_received)
+        .def_readonly("frames_sent",         &tb::Transport::Stats::frames_sent)
+        .def_readonly("ack_timeouts",        &tb::Transport::Stats::ack_timeouts)
+        .def_readonly("retries",             &tb::Transport::Stats::retries)
+        .def_readonly("unexpected_frames",   &tb::Transport::Stats::unexpected_frames)
+        .def_readonly("callback_exceptions", &tb::Transport::Stats::callback_exceptions);
+
+    py::class_<tb::Transport>(m, "Transport")
+        .def(py::init([](const std::string& dev,
+                         uint32_t baud,
+                         tp::Address peer,
+                         unsigned ack_timeout_ms,
+                         unsigned max_retries,
+                         unsigned retry_interval_ms,
+                         unsigned read_timeout_ms,
+                         unsigned write_timeout_ms,
+                         std::size_t rx_chunk_bytes,
+                         std::size_t parser_max_buf) {
+                tb::Transport::Config cfg;
+                cfg.serial.device           = dev;
+                cfg.serial.baudrate         = baud;
+                cfg.serial.read_timeout_ms  = read_timeout_ms;
+                cfg.serial.write_timeout_ms = write_timeout_ms;
+                cfg.peer                    = peer;
+                cfg.ack_timeout             = std::chrono::milliseconds(ack_timeout_ms);
+                cfg.max_retries             = max_retries;
+                cfg.retry_interval          = std::chrono::milliseconds(retry_interval_ms);
+                cfg.rx_chunk_bytes          = rx_chunk_bytes;
+                cfg.parser_max_buf          = parser_max_buf;
+                // Release the GIL while opening the serial port (can be slow).
+                py::gil_scoped_release gil;
+                return std::make_unique<tb::Transport>(cfg);
+             }),
+             py::arg("device"),
+             py::arg("baudrate")          = 3'000'000u,
+             py::arg("peer")              = tp::Address::MCU,
+             py::arg("ack_timeout_ms")    = 10u,
+             py::arg("max_retries")       = 3u,
+             py::arg("retry_interval_ms") = 10u,
+             py::arg("read_timeout_ms")   = 1u,
+             py::arg("write_timeout_ms")  = 1000u,
+             py::arg("rx_chunk_bytes")    = std::size_t{4096},
+             py::arg("parser_max_buf")    = std::size_t{64u * 1024u})
+        .def("send_cmd",
+             [](tb::Transport& t, tp::Cmd cmd, py::bytes payload,
+                unsigned timeout_ms) {
+                 auto v = bytes_to_vec(payload);
+                 // Block on serial without holding the GIL.
+                 py::gil_scoped_release gil;
+                 return t.send_cmd(cmd, v, std::chrono::milliseconds(timeout_ms));
+             },
+             py::arg("cmd"),
+             py::arg("payload")    = py::bytes(""),
+             py::arg("timeout_ms") = 0u)
+        .def("send_cmd_no_ack",
+             [](tb::Transport& t, tp::Cmd cmd, py::bytes payload) {
+                 auto v = bytes_to_vec(payload);
+                 py::gil_scoped_release gil;
+                 t.send_cmd_no_ack(cmd, v);
+             },
+             py::arg("cmd"), py::arg("payload") = py::bytes(""))
+        .def("subscribe",
+             [](tb::Transport& t, tp::Cmd cmd, py::function pycb) {
+                 // Hold a strong ref to the Python callable; reacquire GIL
+                 // before calling it from the reader thread.
+                 auto cb = std::make_shared<py::function>(std::move(pycb));
+                 return t.subscribe(cmd, [cb](const tb::Frame& f) {
+                     py::gil_scoped_acquire acquire;
+                     try {
+                         (*cb)(f);
+                     } catch (py::error_already_set& e) {
+                         e.discard_as_unraisable("xense.taccap.Transport callback");
+                     } catch (...) {
+                         // C++ exception from the Python callback path.
+                         // Cannot propagate; swallow.
+                     }
+                 });
+             },
+             py::arg("cmd"), py::arg("callback"))
+        .def("unsubscribe", &tb::Transport::unsubscribe, py::arg("subscription_id"))
+        .def("stop",
+             [](tb::Transport& t) {
+                 py::gil_scoped_release gil;
+                 t.stop();
+             })
+        .def_property_readonly("is_running", &tb::Transport::is_running)
+        .def_property_readonly("stats",      &tb::Transport::stats)
+        .def_property_readonly("device", [](const tb::Transport& t) {
+            return t.config().serial.device;
+        })
+        .def_property_readonly("baudrate", [](const tb::Transport& t) {
+            return t.config().serial.baudrate;
+        })
+        .def("__enter__", [](tb::Transport& t) -> tb::Transport& { return t; })
+        .def("__exit__",
+             [](tb::Transport& t, py::object, py::object, py::object) {
+                 py::gil_scoped_release gil;
+                 t.stop();
+             });
 }

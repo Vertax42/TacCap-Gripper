@@ -47,6 +47,11 @@ unstuff_data = _taccap_native.unstuff_data
 # ---- Serial transport -------------------------------------------------------
 SerialBus = _taccap_native.SerialBus
 
+# ---- Async transport (background reader + ACK matching + DATA dispatch) -----
+Transport = _taccap_native.Transport
+AckResponse = _taccap_native.AckResponse
+TransportStats = _taccap_native.TransportStats
+
 # ---- Exceptions -------------------------------------------------------------
 ProtocolError = _taccap_native.ProtocolError
 CrcError = _taccap_native.CrcError
@@ -78,6 +83,10 @@ __all__ = [
     "unstuff_data",
     # Serial transport
     "SerialBus",
+    # Async transport
+    "Transport",
+    "AckResponse",
+    "TransportStats",
     # Exceptions
     "ProtocolError",
     "CrcError",

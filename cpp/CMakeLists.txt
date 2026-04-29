@@ -5,6 +5,7 @@ add_library(taccap_core SHARED
     src/protocol/codec.cpp
     src/bus/frame.cpp
     src/bus/serial_bus.cpp
+    src/bus/transport.cpp
 )
 
 # Generate the version header into the build tree.
