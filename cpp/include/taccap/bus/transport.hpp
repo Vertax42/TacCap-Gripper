@@ -32,12 +32,25 @@
 
 namespace xense::taccap::bus {
 
-// Decoded ACK / NACK from the firmware.
+// Decoded ACK / NACK from the firmware. The wire format mirrors firmware
+// `protocol_handler.c` exactly:
+//
+//   - Failure path → `protocol_send_ack(seq, err)`:
+//       frame.cmd == 0, frame.payload = [err_code]   (1 byte)
+//   - Success path → `protocol_send_response(seq, cmd, ERR_OK, data, n)`:
+//       frame.cmd == cmd
+//       frame.payload = [ERR_OK] when n == 0 (handler had no data)
+//       frame.payload = data    when n > 0  (NO err_code prefix)
+//
+// There is no retry_count on the wire — that field of `protocol::AckPayload`
+// is firmware-internal retry book-keeping, not the ACK frame layout.
 struct AckResponse {
-    uint8_t              seq;          // sequence we ACKed
-    protocol::ErrorCode  error_code;   // Ok, or NACK reason
-    uint16_t             retry_count;  // firmware-side retry counter
-    std::vector<uint8_t> payload;      // full ACK payload (>= 4 bytes; first 4 are AckPayload struct)
+    uint8_t              seq;         // matched against the request seq
+    protocol::Cmd        cmd;         // 0 ↔ NACK; original cmd ↔ success
+    bool                 is_nack;     // true iff static_cast<uint8_t>(cmd) == 0
+    protocol::ErrorCode  error_code;  // Ok on success; payload[0] on NACK
+    std::vector<uint8_t> data;        // wire payload as-is (response data on
+                                      // success, [err_code] on NACK)
 };
 
 class Transport {

@@ -80,18 +80,30 @@ public:
         }
     }
 
-    void send_ack(uint8_t ack_seq,
-                  tp::ErrorCode err = tp::ErrorCode::Ok,
-                  uint16_t retry_count = 0) {
-        tp::AckPayload ack{};
-        ack.ack_seq     = ack_seq;
-        ack.error_code  = static_cast<uint8_t>(err);
-        ack.retry_count = retry_count;
-        std::vector<uint8_t> body(sizeof(ack));
-        std::memcpy(body.data(), &ack, sizeof(ack));
-        // ACK frames echo the original CMD byte; tests don't check it strictly.
-        write_frame(tp::Address::MCU, ack_seq, tp::FrameType::ACK,
-                    tp::Cmd::GetVersion, body);
+    // Mirrors the firmware's two response paths (protocol_handler.c).
+    //
+    // success_with_data: protocol_send_response(seq, cmd, ERR_OK, payload, n).
+    void send_response(uint8_t seq, tp::Cmd cmd,
+                       std::vector<uint8_t> data) {
+        // Firmware path: payload is data only (no err prefix). Empty data
+        // becomes a single ERR_OK byte (mimics protocol_send_response with
+        // payload_len == 0).
+        if (data.empty()) data.push_back(static_cast<uint8_t>(tp::ErrorCode::Ok));
+        write_frame(tp::Address::MCU, seq, tp::FrameType::ACK, cmd, data);
+    }
+
+    // failure: protocol_send_ack(seq, err) — frame.cmd = 0, payload = [err].
+    void send_nack(uint8_t seq, tp::ErrorCode err) {
+        std::vector<uint8_t> body{static_cast<uint8_t>(err)};
+        write_frame(tp::Address::MCU, seq,
+                    tp::FrameType::ACK,
+                    static_cast<tp::Cmd>(0),  // NACK uses cmd=0
+                    body);
+    }
+
+    // Convenience: success ACK with no extra data (just the ERR_OK byte).
+    void send_ack_ok(uint8_t seq, tp::Cmd echoed_cmd) {
+        send_response(seq, echoed_cmd, {});
     }
 
     void send_data(uint8_t seq, tp::Cmd cmd,
@@ -147,12 +159,16 @@ TEST(Transport, SendCmdReceivesAck) {
         ASSERT_TRUE(f.has_value());
         EXPECT_EQ(f->cmd,  tp::Cmd::GetVersion);
         EXPECT_EQ(f->type, tp::FrameType::CMD_NEED_ACK);
-        pty.send_ack(f->seq, tp::ErrorCode::Ok);
+        // Firmware "success no data" path: send_response with empty payload
+        // → wire ACK with cmd=GetVersion and payload=[ERR_OK].
+        pty.send_ack_ok(f->seq, tp::Cmd::GetVersion);
     });
 
     auto ack = host.send_cmd(tp::Cmd::GetVersion);
     EXPECT_EQ(ack.error_code, tp::ErrorCode::Ok);
-    EXPECT_EQ(ack.payload.size(), sizeof(tp::AckPayload));
+    EXPECT_FALSE(ack.is_nack);
+    EXPECT_EQ(ack.cmd, tp::Cmd::GetVersion);
+    EXPECT_EQ(ack.data.size(), 1u);  // single ERR_OK byte
 
     fw.join();
     EXPECT_EQ(host.stats().ack_timeouts, 0u);
@@ -167,7 +183,7 @@ TEST(Transport, SendCmdNackThrowsProtocolError) {
     std::thread fw([&]() {
         auto f = pty.expect_frame();
         ASSERT_TRUE(f.has_value());
-        pty.send_ack(f->seq, tp::ErrorCode::InvalidParam);
+        pty.send_nack(f->seq, tp::ErrorCode::InvalidParam);
     });
 
     EXPECT_THROW(host.send_cmd(tp::Cmd::SetSn, std::vector<uint8_t>{1, 2, 3}),
@@ -195,7 +211,7 @@ TEST(Transport, RetryThenSucceed) {
         }
         auto f = pty.expect_frame(500);
         ASSERT_TRUE(f.has_value());
-        pty.send_ack(f->seq, tp::ErrorCode::Ok);
+        pty.send_ack_ok(f->seq, tp::Cmd::GetVersion);
     });
 
     auto ack = host.send_cmd(tp::Cmd::GetVersion);
@@ -316,7 +332,7 @@ TEST(Transport, StrayAckIgnored) {
     tb::Transport host(base_config(pty.slave_path()));
 
     // No outstanding command — push a stray ACK with a random seq.
-    pty.send_ack(/*ack_seq=*/123, tp::ErrorCode::Ok);
+    pty.send_ack_ok(/*seq=*/123, tp::Cmd::GetVersion);
 
     // Give the reader a moment to process.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -335,7 +351,7 @@ TEST(Transport, StatsCountersIncrement) {
     std::thread fw([&]() {
         auto f = pty.expect_frame();
         ASSERT_TRUE(f.has_value());
-        pty.send_ack(f->seq, tp::ErrorCode::Ok);
+        pty.send_ack_ok(f->seq, tp::Cmd::GetVersion);
     });
     host.send_cmd(tp::Cmd::GetVersion);
     fw.join();

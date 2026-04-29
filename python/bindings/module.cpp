@@ -234,17 +234,22 @@ PYBIND11_MODULE(_taccap_native, m) {
 
     // ---- AckResponse + Transport ----------------------------------------
     py::class_<tb::AckResponse>(m, "AckResponse")
-        .def_readonly("seq",         &tb::AckResponse::seq)
-        .def_readonly("error_code",  &tb::AckResponse::error_code)
-        .def_readonly("retry_count", &tb::AckResponse::retry_count)
+        .def_readonly("seq",        &tb::AckResponse::seq)
+        .def_readonly("cmd",        &tb::AckResponse::cmd)
+        .def_readonly("is_nack",    &tb::AckResponse::is_nack)
+        .def_readonly("error_code", &tb::AckResponse::error_code)
+        .def_property_readonly(
+            "data",
+            [](const tb::AckResponse& a) { return vec_to_bytes(a.data); })
+        // Backwards-compat alias: `payload` used to exist.
         .def_property_readonly(
             "payload",
-            [](const tb::AckResponse& a) { return vec_to_bytes(a.payload); })
+            [](const tb::AckResponse& a) { return vec_to_bytes(a.data); })
         .def("__repr__", [](const tb::AckResponse& a) {
-            return "AckResponse(seq=" + std::to_string(a.seq) +
+            return std::string("AckResponse(seq=") + std::to_string(a.seq) +
+                   ", cmd=" + (a.is_nack ? "NACK" : tp::to_string(a.cmd)) +
                    ", error=" + tp::to_string(a.error_code) +
-                   ", retries=" + std::to_string(a.retry_count) +
-                   ", payload=" + std::to_string(a.payload.size()) + "B)";
+                   ", data=" + std::to_string(a.data.size()) + "B)";
         });
 
     py::class_<tb::Transport::Stats>(m, "TransportStats")

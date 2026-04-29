@@ -188,24 +188,13 @@ void Transport::dispatch_(const Frame& f) {
 }
 
 void Transport::handle_ack_(const Frame& f) {
-    if (f.payload.size() < sizeof(protocol::AckPayload)) {
-        stat_unexpected_frames_.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-    auto ack = protocol::decode_ack(f.payload.data(),
-                                    sizeof(protocol::AckPayload));
-
-    AckResponse r{};
-    r.seq         = ack.ack_seq;
-    r.error_code  = static_cast<protocol::ErrorCode>(ack.error_code);
-    r.retry_count = ack.retry_count;
-    r.payload     = f.payload;
-
+    // Match by frame.seq (firmware echoes the request seq into the response
+    // frame's seq field).
     std::promise<AckResponse> winning_promise;
     bool found = false;
     {
         std::lock_guard<std::mutex> lk(pending_mu_);
-        auto it = pending_acks_.find(ack.ack_seq);
+        auto it = pending_acks_.find(f.seq);
         if (it != pending_acks_.end()) {
             winning_promise = std::move(it->second.promise);
             pending_acks_.erase(it);
@@ -218,8 +207,17 @@ void Transport::handle_ack_(const Frame& f) {
         return;
     }
 
-    // Surface NACKs as a ProtocolError so callers can `try { send_cmd } catch`.
-    if (r.error_code != protocol::ErrorCode::Ok) {
+    AckResponse r{};
+    r.seq      = f.seq;
+    r.cmd      = f.cmd;
+    r.is_nack  = (static_cast<uint8_t>(f.cmd) == 0);
+    r.data     = f.payload;
+
+    if (r.is_nack) {
+        // NACK — payload[0] carries the error code.
+        r.error_code = (!f.payload.empty())
+            ? static_cast<protocol::ErrorCode>(f.payload[0])
+            : protocol::ErrorCode::InvalidCmd;
         try {
             winning_promise.set_exception(std::make_exception_ptr(
                 ProtocolError(std::string("NACK: ") +
@@ -227,6 +225,11 @@ void Transport::handle_ack_(const Frame& f) {
         } catch (...) { /* promise already satisfied — ignore */ }
         return;
     }
+
+    // Success. The wire payload is the response data verbatim. Note: firmware
+    // sends a single 0x00 byte for "success but no data"; callers can treat
+    // that as a confirmation acknowledgement.
+    r.error_code = protocol::ErrorCode::Ok;
     try {
         winning_promise.set_value(std::move(r));
     } catch (...) { /* ditto */ }
