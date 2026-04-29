@@ -6,6 +6,10 @@ add_library(taccap_core SHARED
     src/bus/frame.cpp
     src/bus/serial_bus.cpp
     src/bus/transport.cpp
+    src/components/imu.cpp
+    src/components/encoder.cpp
+    src/components/camera.cpp
+    src/components/tactile_sensor.cpp
 )
 
 # Generate the version header into the build tree.
@@ -21,9 +25,15 @@ target_include_directories(taccap_core
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
 )
 
+# Camera component uses cv::VideoCapture which lives in opencv_videoio
+# (not in libxensesdk's transitive set). Pull in just that one extra
+# component; the rest of OpenCV comes through xensesdk PUBLIC.
+find_package(OpenCV REQUIRED COMPONENTS videoio)
+
 target_link_libraries(taccap_core
-    PUBLIC  xensesdk          # libxense lite — exposes xense::Sensor / Rectifier in vision.hpp
-    PRIVATE Threads::Threads  # poll() + future async transport
+    PUBLIC  xensesdk             # libxense lite — vision.hpp aliases
+    PUBLIC  opencv_videoio       # cv::VideoCapture in Camera component
+    PRIVATE Threads::Threads     # poll() + future async transport
 )
 
 set_target_properties(taccap_core PROPERTIES

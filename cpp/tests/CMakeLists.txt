@@ -7,6 +7,7 @@ add_executable(taccap_unit_tests
     test_python_compat.cpp
     test_stuff.cpp
     test_transport.cpp
+    test_components.cpp
 )
 
 target_link_libraries(taccap_unit_tests
