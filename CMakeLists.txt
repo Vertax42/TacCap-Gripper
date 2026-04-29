@@ -18,6 +18,14 @@ endif()
 # ==============================================================================
 option(TACCAP_BUILD_PYTHON   "Build pybind11 module (xense.taccap)" ON)
 option(TACCAP_BUILD_EXAMPLES "Build C++ examples"                   OFF)
+option(TACCAP_BUILD_TESTS    "Build C++ unit tests"                 OFF)
+
+# Threads (used by SerialBus + future async Transport)
+find_package(Threads REQUIRED)
+
+if(TACCAP_BUILD_TESTS)
+    enable_testing()
+endif()
 
 # ==============================================================================
 # Vendored libxensesdk in lite mode
@@ -35,37 +43,15 @@ endif()
 add_subdirectory(third_party/libxensesdk EXCLUDE_FROM_ALL)
 
 # ==============================================================================
-# Generated version header
+# TacCap C++ core (declares taccap_core SHARED library inside cpp/)
 # ==============================================================================
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include/taccap/version.hpp.in
-    ${CMAKE_CURRENT_BINARY_DIR}/include/taccap/version.hpp
-    @ONLY
-)
+add_subdirectory(cpp)
 
 # ==============================================================================
-# taccap_core (header-only / interface library)
-# ==============================================================================
-# Public TacCap API. For now this is just a namespace alias header re-exporting
-# the libxense lite subset under xense::taccap::. New TacCap-native types
-# (Camera, IMU, Encoder, Motor, LeaderGripper, FollowerGripper) will be added
-# here in subsequent steps.
-add_library(taccap_core INTERFACE)
-target_include_directories(taccap_core INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp/include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-)
-target_link_libraries(taccap_core INTERFACE xensesdk)
-
-# ==============================================================================
-# Python bindings & examples
+# Python bindings
 # ==============================================================================
 if(TACCAP_BUILD_PYTHON)
     add_subdirectory(python)
-endif()
-
-if(TACCAP_BUILD_EXAMPLES)
-    add_subdirectory(cpp/examples)
 endif()
 
 # ==============================================================================
@@ -78,5 +64,6 @@ message(STATUS "  Build type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ standard:      ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Python bindings:   ${TACCAP_BUILD_PYTHON}")
 message(STATUS "  C++ examples:      ${TACCAP_BUILD_EXAMPLES}")
+message(STATUS "  C++ tests:         ${TACCAP_BUILD_TESTS}")
 message(STATUS "  libxensesdk mode:  LITE (XENSE_LITE_BUILD=ON)")
 message(STATUS "")

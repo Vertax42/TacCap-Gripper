@@ -1,0 +1,19 @@
+find_package(GTest CONFIG REQUIRED)
+
+add_executable(taccap_unit_tests
+    test_crc.cpp
+    test_frame.cpp
+    test_codec.cpp
+    test_python_compat.cpp
+    test_stuff.cpp
+)
+
+target_link_libraries(taccap_unit_tests
+    PRIVATE
+        taccap_core
+        GTest::gtest
+        GTest::gtest_main
+)
+
+include(GoogleTest)
+gtest_discover_tests(taccap_unit_tests)
