@@ -8,6 +8,8 @@
 #include <cctype>
 #include <cerrno>
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <regex>
 #include <system_error>
 
@@ -19,7 +21,48 @@ namespace {
 
 bool is_digit_(char c) noexcept { return c >= '0' && c <= '9'; }
 
-// Last digit (0-9 only, ignoring trailing letters) → Side.
+// Resolve `dev_path` (a /dev/* node, possibly a symlink under
+// /dev/serial/by-id or /dev/v4l/by-id) to the USB hub key it lives on.
+//
+// We mirror xense-flare/hub_scanner.py exactly: pick the leftmost
+// `<bus>-<ports>` segment from the canonical sysfs path. All four devices
+// of one TacCap-Gripper unit (MCU + 2 OG + wrist) sit under the same
+// external host port (via internal Corechips hubs), so this prefix is the
+// stable per-gripper grouping key.
+//
+// Returns empty string when the path can't be resolved (device gone, or
+// not a USB-attached tty / video node).
+std::string find_hub_path(const std::string& dev_path) {
+    std::error_code ec;
+    fs::path canon = fs::canonical(dev_path, ec);
+    if (ec) return {};
+
+    std::string base = canon.filename().string();   // e.g. "ttyACM1" / "video5"
+
+    fs::path sys_class;
+    if (base.rfind("tty", 0) == 0) {
+        sys_class = fs::path("/sys/class/tty") / base;
+    } else if (base.rfind("video", 0) == 0) {
+        sys_class = fs::path("/sys/class/video4linux") / base;
+    } else {
+        return {};
+    }
+
+    fs::path sys_dev = fs::canonical(sys_class, ec);
+    if (ec) return {};
+    const std::string s = sys_dev.string();
+
+    // xense-flare's regex literal — matches "/<N>-<P[.P...]>/" or
+    // "/<N>-<P[.P...]>:" (the colon delimits a USB interface, dot delimits
+    // sub-ports). re.search picks the leftmost occurrence which is the
+    // root port: even devices on different sub-hubs of the same gripper
+    // share this prefix.
+    static const std::regex re(R"(/(\d+-[\d.]+)(?:/|:))");
+    std::smatch m;
+    if (std::regex_search(s, m, re)) return m[1].str();
+    return {};
+}
+
 }  // namespace
 
 std::optional<Side> side_from_serial(const std::string& s) noexcept {
@@ -115,58 +158,61 @@ std::vector<WristCameraEndpoint> scan_wrist_cameras() {
 }
 
 std::vector<GripperEndpoints> scan_all() {
-    std::vector<GripperEndpoints> out;
+    // Per-hub accumulator. One TacCap-Gripper unit = one external host USB
+    // port (the "hub_path" key here, e.g. "1-3"). All MCU + OG + wrist
+    // devices belonging to that gripper share the same key.
+    struct Group {
+        std::string                      hub_path;
+        std::optional<McuEndpoint>       mcu;
+        std::vector<OgEndpoint>          ogs;
+        std::optional<WristCameraEndpoint> wrist;
+    };
+    std::map<std::string, Group> groups;
 
-    auto mcus  = scan_mcus();
-    if (mcus.empty()) return out;
+    auto gat = [&groups](const std::string& hub) -> Group& {
+        auto& g = groups[hub];
+        if (g.hub_path.empty()) g.hub_path = hub;
+        return g;
+    };
 
-    auto ogs    = scan_og_sensors();
-    auto wrists = scan_wrist_cameras();
-
-    // Single-gripper case: pair the lone MCU with the OG sensors and wrist
-    // camera that are visible. Multi-gripper systems will need USB-topology
-    // matching (TODO: walk /sys/bus/usb to attribute each device to its
-    // upstream hub and group accordingly).
-    if (mcus.size() == 1) {
-        GripperEndpoints g{};
-        g.side       = mcus[0].side;
-        g.mcu_device = mcus[0].device;
-        g.mcu_serial = mcus[0].serial_number;
-        for (const auto& og : ogs) {
-            (og.side == Side::Left ? g.tactile_left_serial
-                                   : g.tactile_right_serial) = og.serial;
-        }
-        if (!wrists.empty()) g.wrist_video = wrists.front().device;
-        out.push_back(std::move(g));
-        return out;
+    // ---- 1) MCUs (CH343 if02 entries) ----
+    for (auto& mcu : scan_mcus()) {
+        const std::string hub = find_hub_path(mcu.device);
+        if (hub.empty()) continue;
+        gat(hub).mcu = std::move(mcu);
     }
 
-    // Multi-gripper: split MCUs by side. We don't yet know which OG / wrist
-    // belongs to which MCU, so each gripper gets its same-side OG (if any)
-    // and the wrist of the same parity (if available).
-    for (const auto& mcu : mcus) {
-        GripperEndpoints g{};
-        g.side       = mcu.side;
-        g.mcu_device = mcu.device;
-        g.mcu_serial = mcu.serial_number;
-        for (const auto& og : ogs) {
-            // For now: bilateral grippers each report two OGs locally; without
-            // hub matching we just put both OGs of matching parity rule into
-            // the single gripper's slot. This works for one-gripper-at-a-time
-            // captures and overwrites benignly when we have a real matcher.
-            (og.side == Side::Left ? g.tactile_left_serial
-                                   : g.tactile_right_serial) = og.serial;
+    // ---- 2) OG visuotactile sensors (libxense lite enumerate) ----
+    for (auto& og : scan_og_sensors()) {
+        const std::string hub = find_hub_path(og.video_path);
+        if (hub.empty()) continue;
+        gat(hub).ogs.push_back(std::move(og));
+    }
+
+    // ---- 3) Wrist UVC cameras (XC* / Sunplus) ----
+    for (auto& w : scan_wrist_cameras()) {
+        const std::string hub = find_hub_path(w.device);
+        if (hub.empty()) continue;
+        gat(hub).wrist = std::move(w);
+    }
+
+    // ---- 4) Build GripperEndpoints, one per hub that has at least an MCU.
+    // The MCU's chip SN parity decides the gripper's side. OG sensors are
+    // distributed to .tactile_left_serial / .tactile_right_serial by their
+    // own SN parity (xense-flare convention, see is_left_device()).
+    std::vector<GripperEndpoints> out;
+    for (auto& [hub, g] : groups) {
+        if (!g.mcu) continue;   // hub without an MCU isn't a complete gripper
+        GripperEndpoints e{};
+        e.side       = g.mcu->side;
+        e.mcu_device = g.mcu->device;
+        e.mcu_serial = g.mcu->serial_number;
+        if (g.wrist) e.wrist_video = g.wrist->device;
+        for (const auto& og : g.ogs) {
+            (og.side == Side::Left ? e.tactile_left_serial
+                                   : e.tactile_right_serial) = og.serial;
         }
-        for (const auto& w : wrists) {
-            if (w.side && *w.side == mcu.side) {
-                g.wrist_video = w.device;
-                break;
-            }
-        }
-        if (g.wrist_video.empty() && !wrists.empty()) {
-            g.wrist_video = wrists.front().device;
-        }
-        out.push_back(std::move(g));
+        out.push_back(std::move(e));
     }
     return out;
 }
