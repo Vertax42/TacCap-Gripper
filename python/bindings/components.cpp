@@ -1,0 +1,307 @@
+// Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
+//
+// pybind11 bindings for the component classes (IMU, Encoder, Camera,
+// TactileSensor, LeaderGripper) and their POD samples.
+//
+// Sample structs use numpy arrays for vector fields so users get the
+// expected `s.accel_mps2[0]` / `np.linalg.norm(s.accel_mps2)` ergonomics
+// without an extra Python conversion step.
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/numpy.h>
+#include <pybind11/functional.h>
+
+#include <taccap/components/imu.hpp>
+#include <taccap/components/encoder.hpp>
+#include <taccap/components/camera.hpp>
+#include <taccap/components/tactile_sensor.hpp>
+#include <taccap/leader_gripper.hpp>
+#include <taccap/discovery.hpp>
+
+#include <chrono>
+#include <memory>
+
+namespace py = pybind11;
+
+namespace {
+
+// ---- helpers --------------------------------------------------------------
+
+// Convert std::chrono::steady_clock::time_point to seconds-since-epoch float.
+// We expose a monotonic-ish double; users that need wall-clock can compare
+// against time.monotonic() in Python.
+double tp_to_seconds(std::chrono::steady_clock::time_point tp) {
+    using ns = std::chrono::nanoseconds;
+    return std::chrono::duration_cast<ns>(tp.time_since_epoch()).count() * 1e-9;
+}
+
+// Wrap a std::array<float, 3> as a numpy float32 array of shape (3,).
+py::array make_vec3(const std::array<float, 3>& v) {
+    py::array_t<float> arr(3);
+    auto* p = arr.mutable_data();
+    p[0] = v[0]; p[1] = v[1]; p[2] = v[2];
+    return arr;
+}
+
+// Wrap a cv::Mat (BGR8 expected) as a (H, W, 3) uint8 numpy array. This
+// makes a copy so the array is safe across frame boundaries.
+py::array mat_to_numpy(const cv::Mat& m) {
+    if (m.empty()) {
+        return py::array_t<uint8_t>({0, 0, 3});
+    }
+    if (m.type() != CV_8UC3) {
+        // For now we only handle 8-bit 3-channel; advanced users can use
+        // OpenCV directly. Fall back to empty.
+        return py::array_t<uint8_t>({0, 0, 3});
+    }
+    py::array_t<uint8_t> arr({m.rows, m.cols, 3});
+    auto* dst = arr.mutable_data();
+    if (m.isContinuous()) {
+        std::memcpy(dst, m.data, static_cast<size_t>(m.rows) * m.cols * 3);
+    } else {
+        for (int r = 0; r < m.rows; ++r) {
+            std::memcpy(dst + r * m.cols * 3, m.ptr(r), m.cols * 3);
+        }
+    }
+    return arr;
+}
+
+}  // namespace
+
+namespace xense::taccap::python {
+
+void bind_components(py::module_& m) {
+    using namespace xense::taccap;
+
+    // ---- ImuSample / EncoderSample -------------------------------------
+    py::class_<ImuSample>(m, "ImuSample")
+        .def_property_readonly("host_time", [](const ImuSample& s) {
+            return tp_to_seconds(s.host_time);
+        })
+        .def_readonly("mcu_timestamp_us", &ImuSample::mcu_timestamp_us)
+        .def_readonly("valid_flag",       &ImuSample::valid_flag)
+        .def_readonly("seq",              &ImuSample::seq)
+        .def_readonly("temperature_c",    &ImuSample::temperature_c)
+        .def_property_readonly("accel_mps2", [](const ImuSample& s) { return make_vec3(s.accel_mps2); })
+        .def_property_readonly("gyro_radps", [](const ImuSample& s) { return make_vec3(s.gyro_radps); })
+        .def_property_readonly("mag_uT",     [](const ImuSample& s) { return make_vec3(s.mag_uT); })
+        .def("__repr__", [](const ImuSample& s) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "ImuSample(seq=%u, accel=[%.2f,%.2f,%.2f], gyro=[%.3f,%.3f,%.3f], temp=%.2fC)",
+                s.seq, s.accel_mps2[0], s.accel_mps2[1], s.accel_mps2[2],
+                s.gyro_radps[0], s.gyro_radps[1], s.gyro_radps[2], s.temperature_c);
+            return std::string(buf);
+        });
+
+    py::class_<EncoderSample>(m, "EncoderSample")
+        .def_property_readonly("host_time", [](const EncoderSample& s) {
+            return tp_to_seconds(s.host_time);
+        })
+        .def_readonly("mcu_timestamp_us", &EncoderSample::mcu_timestamp_us)
+        .def_readonly("position_rad",     &EncoderSample::position_rad)
+        .def_readonly("velocity_rad_s",   &EncoderSample::velocity_rad_s)
+        .def_readonly("status",           &EncoderSample::status)
+        .def_readonly("seq",              &EncoderSample::seq)
+        .def("__repr__", [](const EncoderSample& s) {
+            char buf[120];
+            std::snprintf(buf, sizeof(buf),
+                "EncoderSample(seq=%u, pos=%.4frad, vel=%.4frad/s)",
+                s.seq, s.position_rad, s.velocity_rad_s);
+            return std::string(buf);
+        });
+
+    // ---- CameraFrame / TactileFrame ------------------------------------
+    py::class_<CameraFrame>(m, "CameraFrame")
+        .def_property_readonly("host_time", [](const CameraFrame& f) {
+            return tp_to_seconds(f.host_time);
+        })
+        .def_readonly("frame_index", &CameraFrame::frame_index)
+        .def_property_readonly("image", [](const CameraFrame& f) { return mat_to_numpy(f.image); });
+
+    py::class_<TactileFrame>(m, "TactileFrame")
+        .def_property_readonly("host_time", [](const TactileFrame& f) {
+            return tp_to_seconds(f.host_time);
+        })
+        .def_readonly("frame_index", &TactileFrame::frame_index)
+        .def_property_readonly("raw",       [](const TactileFrame& f) { return mat_to_numpy(f.raw); })
+        .def_property_readonly("rectified", [](const TactileFrame& f) { return mat_to_numpy(f.rectified); });
+
+    // ---- IMU ------------------------------------------------------------
+    py::class_<IMU>(m, "IMU")
+        .def("read_once", [](IMU& self, unsigned timeout_ms) {
+            py::gil_scoped_release gil;
+            return self.read_once(std::chrono::milliseconds(timeout_ms));
+        }, py::arg("timeout_ms") = 100)
+        .def("on_data", [](IMU& self, py::function pycb) {
+            auto cb = std::make_shared<py::function>(std::move(pycb));
+            return self.on_data([cb](const ImuSample& s) {
+                py::gil_scoped_acquire acq;
+                try { (*cb)(s); }
+                catch (py::error_already_set& e) {
+                    e.discard_as_unraisable("xense.taccap.IMU callback");
+                } catch (...) {}
+            });
+        }, py::arg("callback"))
+        .def("off", &IMU::off, py::arg("subscription_id"));
+
+    // ---- Encoder --------------------------------------------------------
+    py::class_<Encoder>(m, "Encoder")
+        .def("read_once", [](Encoder& self, unsigned timeout_ms) {
+            py::gil_scoped_release gil;
+            return self.read_once(std::chrono::milliseconds(timeout_ms));
+        }, py::arg("timeout_ms") = 100)
+        .def("on_data", [](Encoder& self, py::function pycb) {
+            auto cb = std::make_shared<py::function>(std::move(pycb));
+            return self.on_data([cb](const EncoderSample& s) {
+                py::gil_scoped_acquire acq;
+                try { (*cb)(s); }
+                catch (py::error_already_set& e) {
+                    e.discard_as_unraisable("xense.taccap.Encoder callback");
+                } catch (...) {}
+            });
+        }, py::arg("callback"))
+        .def("off", &Encoder::off, py::arg("subscription_id"));
+
+    // ---- Camera ---------------------------------------------------------
+    py::class_<Camera>(m, "Camera")
+        .def(py::init([](const std::string& dev, int w, int h, double fps, bool mjpg) {
+            return std::make_unique<Camera>(Camera::Config{dev, w, h, fps, mjpg});
+        }),
+            py::arg("device"), py::arg("width") = 640, py::arg("height") = 480,
+            py::arg("fps") = 30.0, py::arg("use_mjpg") = true)
+        .def("read", [](Camera& self, unsigned timeout_ms) -> py::object {
+            CameraFrame f;
+            bool ok;
+            {
+                py::gil_scoped_release gil;
+                ok = self.read(f, std::chrono::milliseconds(timeout_ms));
+            }
+            if (!ok) return py::none();
+            return py::cast(std::move(f));
+        }, py::arg("timeout_ms") = 500)
+        .def("start", [](Camera& self, py::function pycb) {
+            auto cb = std::make_shared<py::function>(std::move(pycb));
+            self.start([cb](const CameraFrame& f) {
+                py::gil_scoped_acquire acq;
+                try { (*cb)(f); }
+                catch (py::error_already_set& e) {
+                    e.discard_as_unraisable("xense.taccap.Camera callback");
+                } catch (...) {}
+            });
+        }, py::arg("callback"))
+        .def("stop", [](Camera& self) {
+            py::gil_scoped_release gil;
+            self.stop();
+        })
+        .def_property_readonly("is_streaming",   &Camera::is_streaming)
+        .def_property_readonly("total_frames",   &Camera::total_frames)
+        .def_property_readonly("dropped_frames", &Camera::dropped_frames)
+        .def_property_readonly("actual_fps",     &Camera::actual_fps);
+
+    // ---- TactileSensor --------------------------------------------------
+    py::class_<TactileSensor>(m, "TactileSensor")
+        .def(py::init([](const std::string& serial, bool rectify) {
+            return std::make_unique<TactileSensor>(TactileSensor::Config{serial, rectify});
+        }),
+            py::arg("serial"), py::arg("rectify") = true)
+        .def("start", [](TactileSensor& self, py::function pycb) {
+            auto cb = std::make_shared<py::function>(std::move(pycb));
+            self.start([cb](const TactileFrame& f) {
+                py::gil_scoped_acquire acq;
+                try { (*cb)(f); }
+                catch (py::error_already_set& e) {
+                    e.discard_as_unraisable("xense.taccap.TactileSensor callback");
+                } catch (...) {}
+            });
+        }, py::arg("callback"))
+        .def("stop", [](TactileSensor& self) {
+            py::gil_scoped_release gil;
+            self.stop();
+        })
+        .def_property_readonly("serial",         &TactileSensor::serial)
+        .def_property_readonly("is_streaming",   &TactileSensor::is_streaming)
+        .def_property_readonly("total_frames",   &TactileSensor::total_frames)
+        .def_property_readonly("dropped_frames", &TactileSensor::dropped_frames)
+        .def_property_readonly("actual_fps",     &TactileSensor::actual_fps);
+
+    // ---- discovery ------------------------------------------------------
+    py::enum_<discovery::Side>(m, "Side")
+        .value("Left",  discovery::Side::Left)
+        .value("Right", discovery::Side::Right);
+
+    py::class_<discovery::GripperEndpoints>(m, "GripperEndpoints")
+        .def_readonly("side",                 &discovery::GripperEndpoints::side)
+        .def_readonly("mcu_device",           &discovery::GripperEndpoints::mcu_device)
+        .def_readonly("mcu_serial",           &discovery::GripperEndpoints::mcu_serial)
+        .def_readonly("wrist_video",          &discovery::GripperEndpoints::wrist_video)
+        .def_readonly("tactile_left_serial",  &discovery::GripperEndpoints::tactile_left_serial)
+        .def_readonly("tactile_right_serial", &discovery::GripperEndpoints::tactile_right_serial)
+        .def("__repr__", [](const discovery::GripperEndpoints& e) {
+            return std::string("GripperEndpoints(side=") +
+                   discovery::to_string(e.side) +
+                   ", mcu=" + e.mcu_device +
+                   " sn=" + e.mcu_serial +
+                   ", wrist=" + e.wrist_video +
+                   ", tactile_l=" + e.tactile_left_serial +
+                   ", tactile_r=" + e.tactile_right_serial + ")";
+        });
+    m.def("scan_grippers", &discovery::scan_all);
+    m.def("find_one",      &discovery::find_one);
+    m.def("find_left",     &discovery::find_left);
+    m.def("find_right",    &discovery::find_right);
+
+    // ---- LeaderGripper --------------------------------------------------
+    py::class_<LeaderGripper>(m, "LeaderGripper")
+        .def(py::init([](const std::string& mcu, const std::string& wrist,
+                         const std::string& tac_l, const std::string& tac_r,
+                         uint32_t baud, unsigned ack_ms, unsigned retries,
+                         bool rectify) {
+                LeaderGripper::Config cfg;
+                cfg.mcu_device           = mcu;
+                cfg.wrist_video          = wrist;
+                cfg.tactile_left_serial  = tac_l;
+                cfg.tactile_right_serial = tac_r;
+                cfg.baudrate             = baud;
+                cfg.ack_timeout_ms       = ack_ms;
+                cfg.max_retries          = retries;
+                cfg.rectify_tactile      = rectify;
+                py::gil_scoped_release gil;
+                return std::make_unique<LeaderGripper>(cfg);
+             }),
+             py::arg("mcu_device"),
+             py::arg("wrist_video"),
+             py::arg("tactile_left_serial"),
+             py::arg("tactile_right_serial"),
+             py::arg("baudrate")            = 3'000'000u,
+             py::arg("ack_timeout_ms")      = 200u,
+             py::arg("max_retries")         = 1u,
+             py::arg("rectify_tactile")     = true)
+        .def_static("open", []() {
+            py::gil_scoped_release gil;
+            return LeaderGripper::open();   // returns unique_ptr<LeaderGripper>
+        })
+        .def("start_streaming", [](LeaderGripper& self, unsigned imu_hz, unsigned enc_hz) {
+            py::gil_scoped_release gil;
+            self.start_streaming(imu_hz, enc_hz);
+        }, py::arg("imu_hz") = 100u, py::arg("encoder_hz") = 100u)
+        .def("stop_streaming", [](LeaderGripper& self) {
+            py::gil_scoped_release gil;
+            self.stop_streaming();
+        })
+        .def_property_readonly("imu",           [](LeaderGripper& g) -> IMU&            { return g.imu(); },           py::return_value_policy::reference_internal)
+        .def_property_readonly("encoder",       [](LeaderGripper& g) -> Encoder&        { return g.encoder(); },       py::return_value_policy::reference_internal)
+        .def_property_readonly("wrist_camera",  [](LeaderGripper& g) -> Camera&         { return g.wrist_camera(); },  py::return_value_policy::reference_internal)
+        .def_property_readonly("tactile_left",  [](LeaderGripper& g) -> TactileSensor&  { return g.tactile_left(); },  py::return_value_policy::reference_internal)
+        .def_property_readonly("tactile_right", [](LeaderGripper& g) -> TactileSensor&  { return g.tactile_right(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("transport",     [](LeaderGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
+        .def_property_readonly("is_streaming",  &LeaderGripper::is_streaming)
+        .def("__enter__", [](LeaderGripper& g) -> LeaderGripper& { return g; })
+        .def("__exit__",  [](LeaderGripper& g, py::object, py::object, py::object) {
+            py::gil_scoped_release gil;
+            g.stop_streaming();
+        });
+}
+
+}  // namespace xense::taccap::python

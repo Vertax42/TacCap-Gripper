@@ -1,6 +1,9 @@
 find_package(pybind11 CONFIG REQUIRED)
 
-pybind11_add_module(_taccap_native MODULE bindings/module.cpp)
+pybind11_add_module(_taccap_native MODULE
+    bindings/module.cpp
+    bindings/components.cpp
+)
 target_link_libraries(_taccap_native PRIVATE taccap_core)
 
 # In-tree development build: place the .so next to the Python sources so

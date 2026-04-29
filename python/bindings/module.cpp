@@ -53,6 +53,10 @@ py::bytes vec_to_bytes(const std::vector<uint8_t>& v) {
 
 }  // namespace
 
+namespace xense::taccap::python {
+void bind_components(py::module_& m);  // defined in components.cpp
+}
+
 PYBIND11_MODULE(_taccap_native, m) {
     m.doc() = "TacCap-Gripper native module (lite scaffold + TC-GU-01 protocol)";
 
@@ -354,4 +358,7 @@ PYBIND11_MODULE(_taccap_native, m) {
                  py::gil_scoped_release gil;
                  t.stop();
              });
+
+    // Component classes (IMU/Encoder/Camera/TactileSensor/LeaderGripper).
+    xense::taccap::python::bind_components(m);
 }

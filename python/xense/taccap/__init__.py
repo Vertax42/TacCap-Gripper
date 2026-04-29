@@ -52,6 +52,25 @@ Transport = _taccap_native.Transport
 AckResponse = _taccap_native.AckResponse
 TransportStats = _taccap_native.TransportStats
 
+# ---- Components (typed wrappers around Transport + libxense lite) -----------
+ImuSample = _taccap_native.ImuSample
+EncoderSample = _taccap_native.EncoderSample
+CameraFrame = _taccap_native.CameraFrame
+TactileFrame = _taccap_native.TactileFrame
+IMU = _taccap_native.IMU
+Encoder = _taccap_native.Encoder
+Camera = _taccap_native.Camera
+TactileSensor = _taccap_native.TactileSensor
+
+# ---- Aggregate gripper + discovery ------------------------------------------
+LeaderGripper = _taccap_native.LeaderGripper
+GripperEndpoints = _taccap_native.GripperEndpoints
+Side = _taccap_native.Side
+scan_grippers = _taccap_native.scan_grippers
+find_one = _taccap_native.find_one
+find_left = _taccap_native.find_left
+find_right = _taccap_native.find_right
+
 # ---- Exceptions -------------------------------------------------------------
 ProtocolError = _taccap_native.ProtocolError
 CrcError = _taccap_native.CrcError
@@ -87,6 +106,23 @@ __all__ = [
     "Transport",
     "AckResponse",
     "TransportStats",
+    # Components
+    "ImuSample",
+    "EncoderSample",
+    "CameraFrame",
+    "TactileFrame",
+    "IMU",
+    "Encoder",
+    "Camera",
+    "TactileSensor",
+    # Aggregate + discovery
+    "LeaderGripper",
+    "GripperEndpoints",
+    "Side",
+    "scan_grippers",
+    "find_one",
+    "find_left",
+    "find_right",
     # Exceptions
     "ProtocolError",
     "CrcError",
