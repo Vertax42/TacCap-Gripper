@@ -1,0 +1,91 @@
+// Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
+//
+// Zero-config gripper discovery.
+//
+// We follow the xense-flare convention: parse the board / sensor serial
+// number's last numeric digit; **odd → left**, **even → right**. No udev
+// rules, no system-level setup.
+//
+//   MCU board (CH343 dual-serial, VID:PID 1a86:55d2):
+//       /dev/serial/by-id/usb-1a86_USB_Dual_Serial_<SN>-if02
+//                                                  ^^^^^ last digit
+//
+//   Wrist UVC camera (Sunplus VID 1bcf or Xense PID-bearing):
+//       /dev/v4l/by-id/usb-Xense_..._XC<NNNNNN>_...   (last digit of XC SN)
+//
+//   Tactile (OG) sensors via libxense lite Context::enumerate_devices():
+//       OG<NNNNNN> serial; last digit decides which side of *its* gripper
+//       it sits on.
+//
+// One physical gripper unit = one MCU board + one wrist camera + a pair of
+// OG sensors. Today's prototype has a single gripper plugged in at a time;
+// the API is designed so that adding a second one (e.g. left + right) just
+// requires the user to call `find_left()` / `find_right()` instead of
+// `find_one()`.
+
+#pragma once
+
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace xense::taccap::discovery {
+
+enum class Side : char { Left = 'L', Right = 'R' };
+constexpr const char* to_string(Side s) noexcept {
+    return s == Side::Left ? "Left" : "Right";
+}
+
+// One MCU board entry.
+struct McuEndpoint {
+    std::string device;          // e.g. /dev/serial/by-id/...-if02
+    std::string serial_number;   // e.g. "5C2C247728"
+    Side        side;            // from last digit of serial_number
+};
+
+// One OG visuotactile sensor entry.
+struct OgEndpoint {
+    std::string serial;          // e.g. "OG000477"
+    std::string video_path;      // e.g. /dev/video1
+    Side        side;            // from last digit of serial
+};
+
+// One wrist UVC camera entry (Sunplus / Xense XC* device).
+struct WristCameraEndpoint {
+    std::string device;          // e.g. /dev/v4l/by-id/...XC000008...-video-index0
+    std::string serial;          // e.g. "XC000008" (parsed from path) or empty
+    std::optional<Side> side;    // populated iff serial is parsable
+};
+
+// One complete gripper unit: MCU + wrist + 2 OG sensors.
+// `side` of the gripper is taken from the MCU board's serial.
+struct GripperEndpoints {
+    Side        side;
+    std::string mcu_device;
+    std::string mcu_serial;
+    std::string wrist_video;
+    std::string tactile_left_serial;     // OG with odd last digit (within this gripper)
+    std::string tactile_right_serial;    // OG with even last digit
+};
+
+// Lower-level scan helpers (testable / inspectable).
+std::vector<McuEndpoint>         scan_mcus();
+std::vector<OgEndpoint>          scan_og_sensors();
+std::vector<WristCameraEndpoint> scan_wrist_cameras();
+
+// Pair MCU + OG sensors + wrist camera into per-gripper bundles.
+// Today this assumes a single gripper unit is plugged in; future work
+// (USB-topology matching) can extend the matching for multi-gripper setups.
+std::vector<GripperEndpoints> scan_all();
+
+// Convenience accessors. Throw IoError if the requested gripper isn't found.
+GripperEndpoints find_one();    // exactly one gripper plugged in (any side)
+GripperEndpoints find_left();   // gripper whose MCU SN is odd
+GripperEndpoints find_right();  // gripper whose MCU SN is even
+
+// Parse the last numeric digit out of a serial-like string. Returns Left
+// for odd / Right for even. If the string contains no digits, returns
+// std::nullopt so callers can skip / error.
+std::optional<Side> side_from_serial(const std::string& s) noexcept;
+
+}  // namespace xense::taccap::discovery

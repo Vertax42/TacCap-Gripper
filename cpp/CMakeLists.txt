@@ -10,6 +10,8 @@ add_library(taccap_core SHARED
     src/components/encoder.cpp
     src/components/camera.cpp
     src/components/tactile_sensor.cpp
+    src/discovery.cpp
+    src/leader_gripper.cpp
 )
 
 # Generate the version header into the build tree.
