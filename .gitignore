@@ -1,0 +1,28 @@
+# Build
+build/
+build_*/
+dist/
+*.egg-info/
+*.so
+*.o
+*.a
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.cache/
+compile_commands.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project — embedded debugging code lives outside this repo
+Embedded Software/

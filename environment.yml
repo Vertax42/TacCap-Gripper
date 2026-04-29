@@ -1,0 +1,53 @@
+# =============================================================================
+# taccap-gripper development environment
+# =============================================================================
+#
+# Create:    mamba env create -f environment.yml
+# Activate:  mamba activate taccap
+# Update:    mamba env update -f environment.yml
+#
+# Note: this is a lite consumer of libxensesdk — no ONNX / CUDA / MIGraphX.
+# =============================================================================
+
+name: taccap
+
+channels:
+  - conda-forge
+
+dependencies:
+  # Build tools
+  - cmake>=3.20
+  - ninja
+  - pkg-config
+  - make
+
+  # C++ toolchain (aligned with libxensesdk env)
+  - gcc=14.*
+  - gxx=14.*
+  - gcc_linux-64=14.*
+  - gxx_linux-64=14.*
+
+  # libxense_lite C++ transitive deps (still required in lite mode).
+  # Use libopencv (C++ only) here; the Python cv2 binding is pinned via pip
+  # below to opencv-python==4.12.0.88 to align with the rest of the
+  # XenseRobotics Python toolchain (xense-flare etc.).
+  - libopencv=4.12.0
+  - eigen=3.4.0
+  - openssl=3.6.0
+  - zlib=1.3.1
+  - nlohmann_json=3.11.3
+
+  # Testing
+  - gtest=1.17.0
+
+  # Python
+  - python=3.12
+  - pybind11
+  - scikit-build-core
+  - numpy
+  - pyserial         # used in step 2+ for TC-GU-01 serial; pre-installed
+  - pytest
+  - ruff
+  - pip
+  - pip:
+      - opencv-python==4.12.0.88   # pinned across XenseRobotics SDKs

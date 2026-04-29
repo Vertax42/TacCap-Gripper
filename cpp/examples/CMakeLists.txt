@@ -1,0 +1,2 @@
+add_executable(taccap_hello taccap_hello.cpp)
+target_link_libraries(taccap_hello PRIVATE taccap_core)
