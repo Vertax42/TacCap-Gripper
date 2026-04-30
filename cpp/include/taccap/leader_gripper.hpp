@@ -47,8 +47,12 @@ public:
         std::string tactile_left_serial;    // OG..."
         std::string tactile_right_serial;   // OG..."
         uint32_t    baudrate            = 3'000'000;
-        unsigned    ack_timeout_ms      = 200;
-        unsigned    max_retries         = 1;
+        // The firmware can be slow to ACK StartStream / StopStream while
+        // a previous stream is still flushing — give it a generous window
+        // so a back-to-back run doesn't time out before the queued DATA
+        // frames drain through the kernel rx buffer.
+        unsigned    ack_timeout_ms      = 1000;
+        unsigned    max_retries         = 2;
         bool        rectify_tactile     = true;
         Camera::Config wrist_cam_extra{};   // width/height/fps overrides
     };

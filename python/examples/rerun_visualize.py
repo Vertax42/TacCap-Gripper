@@ -115,6 +115,8 @@ def _video(name, origin):
 def _ts(name, origin):
     return rrb.TimeSeriesView(name=name, origin=origin)
 
+PERF_STREAMS = ["imu", "encoder", "tac0", "tac1", "wrist"]
+
 blueprint = rrb.Blueprint(
     rrb.Horizontal(
         rrb.Vertical(
@@ -129,7 +131,15 @@ blueprint = rrb.Blueprint(
             _ts("imu / gyro (rad/s)", f"/{side_str}/imu/gyro"),
             _ts("imu / mag (µT)",     f"/{side_str}/imu/mag"),
             _ts("imu / temperature (°C)", f"/{side_str}/imu/temperature"),
-            _ts("observed fps",       "/perf/fps"),
+            # Be explicit about which series to plot — rerun's automatic
+            # origin-based discovery sometimes leaves siblings off the
+            # legend, especially when their entities show up after the
+            # blueprint is sent.
+            rrb.TimeSeriesView(
+                name="observed fps",
+                origin="/perf/fps",
+                contents=[f"+ $origin/{s}" for s in PERF_STREAMS],
+            ),
             row_shares=[2, 2, 2, 2, 1, 1],
         ),
         column_shares=[3, 2],
@@ -138,6 +148,13 @@ blueprint = rrb.Blueprint(
     rrb.TimePanel(state="collapsed"),
 )
 rr.send_blueprint(blueprint)
+
+# Pre-create the perf entities at t=0 so the TimeSeriesView legend is fully
+# populated before any data arrives. Without this, rerun's blueprint
+# resolution can drop series whose first sample lands after the view is
+# created, leaving them off the legend.
+for s in PERF_STREAMS:
+    rr.log(f"/perf/fps/{s}", rr.Scalars(0.0))
 
 # ---------------------------------------------------------------------------
 # Streaming
@@ -228,21 +245,28 @@ def on_wrist(f) -> None:
 print(f"[open] LeaderGripper.open() ...")
 g = LeaderGripper.open()
 
-print(f"[subscribe] callbacks attached")
-g.imu.on_data(on_imu)
-g.encoder.on_data(on_encoder)
-g.tactile_left.start(make_tactile_handler(0))   # 0 = odd-last-SN OG
-g.tactile_right.start(make_tactile_handler(1))  # 1 = even-last-SN OG
-g.wrist_camera.start(on_wrist)
-
-print(f"[stream] starting (imu={args.imu_hz}Hz, encoder={args.encoder_hz}Hz) ...")
-g.start_streaming(imu_hz=args.imu_hz, encoder_hz=args.encoder_hz)
-
-print(f"[run]    {'Ctrl+C to stop' if args.duration <= 0 else f'duration={args.duration}s'}")
-
-last_print = time.time()
-last_counts = defaultdict(int)
+# Wrap everything that touches background threads (subscribe + start +
+# main loop) in try/finally. If start_streaming or any callback throws,
+# we still stop the camera/tactile worker threads BEFORE Python begins
+# tearing the interpreter down — otherwise a worker thread that's mid-
+# callback during Python shutdown can crash with
+#   `FATAL: exception not rethrown / Aborted (core dumped)`
+# from pybind11's GIL acquire path on a half-dead interpreter.
 try:
+    print(f"[subscribe] callbacks attached")
+    g.imu.on_data(on_imu)
+    g.encoder.on_data(on_encoder)
+    g.tactile_left.start(make_tactile_handler(0))   # 0 = odd-last-SN OG
+    g.tactile_right.start(make_tactile_handler(1))  # 1 = even-last-SN OG
+    g.wrist_camera.start(on_wrist)
+
+    print(f"[stream] starting (imu={args.imu_hz}Hz, encoder={args.encoder_hz}Hz) ...")
+    g.start_streaming(imu_hz=args.imu_hz, encoder_hz=args.encoder_hz)
+
+    print(f"[run]    {'Ctrl+C to stop' if args.duration <= 0 else f'duration={args.duration}s'}")
+
+    last_print = time.time()
+    last_counts = defaultdict(int)
     while True:
         time.sleep(0.5)
 
@@ -274,15 +298,20 @@ try:
 except KeyboardInterrupt:
     print(f"\n[done] Ctrl+C")
 
-# ---------------------------------------------------------------------------
-# Cleanup
-# ---------------------------------------------------------------------------
-
-print(f"[stop] streaming ...")
-g.stop_streaming()
-g.tactile_left.stop()
-g.tactile_right.stop()
-g.wrist_camera.stop()
+finally:
+    # Always stop the worker threads, even if an exception bubbled up
+    # before we reached the success path.
+    print(f"[stop] streaming + workers ...")
+    for stop_fn in (
+        lambda: g.tactile_left.stop(),
+        lambda: g.tactile_right.stop(),
+        lambda: g.wrist_camera.stop(),
+        lambda: g.stop_streaming() if g.is_streaming else None,
+    ):
+        try:
+            stop_fn()
+        except Exception as e:
+            print(f"  warn during stop: {type(e).__name__}: {e}")
 
 elapsed = time.time() - t_start
 print(f"\n[summary] {elapsed:.2f}s total")

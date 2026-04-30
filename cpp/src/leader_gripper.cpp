@@ -67,6 +67,17 @@ std::unique_ptr<LeaderGripper> LeaderGripper::open() {
 void LeaderGripper::start_streaming(unsigned imu_hz, unsigned encoder_hz) {
     if (streaming_) return;
 
+    // Best-effort reset of the firmware streaming state. If a previous host
+    // process exited without calling stop_streaming() the MCU keeps
+    // pushing DATA frames; sending StopStream first drains that backlog
+    // and gets the firmware into a quiescent state before we configure
+    // the new run. We swallow timeouts/NACKs here because "already
+    // stopped" is the desired outcome either way.
+    try {
+        t_.send_cmd(protocol::Cmd::StopStream, {},
+                    std::chrono::milliseconds(500));
+    } catch (...) { /* expected when fw is already idle */ }
+
     // Build StreamConfig (12 bytes — see protocol::StreamConfig).
     protocol::StreamConfig sc{};
     sc.source_mask  = protocol::StreamSrc::Imu | protocol::StreamSrc::Encoder;
