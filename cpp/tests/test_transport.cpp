@@ -363,6 +363,43 @@ TEST(Transport, StatsCountersIncrement) {
     EXPECT_GT(s.bytes_read,      0u);
 }
 
+TEST(Transport, PureAckCmdZeroOkIsSuccess) {
+    // Firmware quirk (TC-GU-01 v1.1): some handlers (notably StopStream) take
+    // the protocol_send_ack(seq, ERR_OK) wire path, producing an ACK frame
+    // with cmd=0 and payload=[0x00]. That's "success with no data", NOT a
+    // NACK — the host must accept it.
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    tb::Transport host(base_config(pty.slave_path()));
+
+    std::thread fw([&]() {
+        auto f = pty.expect_frame();
+        ASSERT_TRUE(f.has_value());
+        pty.send_nack(f->seq, tp::ErrorCode::Ok);   // cmd=0, payload=[0x00]
+    });
+    auto ack = host.send_cmd(tp::Cmd::StopStream);
+    EXPECT_FALSE(ack.is_nack);
+    EXPECT_EQ(ack.error_code, tp::ErrorCode::Ok);
+    EXPECT_EQ(static_cast<uint8_t>(ack.cmd), 0u);   // cmd is 0 on this path
+    fw.join();
+}
+
+TEST(Transport, PureAckCmdZeroNonOkIsNack) {
+    // A real NACK still produces ProtocolError.
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    tb::Transport host(base_config(pty.slave_path()));
+
+    std::thread fw([&]() {
+        auto f = pty.expect_frame();
+        ASSERT_TRUE(f.has_value());
+        pty.send_nack(f->seq, tp::ErrorCode::InvalidParam);
+    });
+    EXPECT_THROW(host.send_cmd(tp::Cmd::SetSn, std::vector<uint8_t>{1}),
+                 xense::taccap::ProtocolError);
+    fw.join();
+}
+
 TEST(Transport, StopIsIdempotent) {
     Pty pty;
     ASSERT_GE(pty.master(), 0);

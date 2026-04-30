@@ -210,29 +210,43 @@ void Transport::handle_ack_(const Frame& f) {
     AckResponse r{};
     r.seq      = f.seq;
     r.cmd      = f.cmd;
-    r.is_nack  = (static_cast<uint8_t>(f.cmd) == 0);
+    r.is_nack  = false;
     r.data     = f.payload;
 
-    if (r.is_nack) {
-        // NACK — payload[0] carries the error code.
-        r.error_code = (!f.payload.empty())
+    if (static_cast<uint8_t>(f.cmd) == 0) {
+        // cmd == 0 means the firmware took the protocol_send_ack(seq, err)
+        // wire path instead of protocol_send_response. The first payload
+        // byte carries the error code:
+        //   - ERR_OK : the handler succeeded but didn't echo the command
+        //              (e.g. StopStream uses this path on TC-GU-01 v1.1
+        //              firmware). Treat as success with no data.
+        //   - !ERR_OK: a real NACK.
+        const auto err = (!f.payload.empty())
             ? static_cast<protocol::ErrorCode>(f.payload[0])
             : protocol::ErrorCode::InvalidCmd;
-        try {
-            winning_promise.set_exception(std::make_exception_ptr(
-                ProtocolError(std::string("NACK: ") +
-                              protocol::to_string(r.error_code))));
-        } catch (...) { /* promise already satisfied — ignore */ }
-        return;
+        if (err != protocol::ErrorCode::Ok) {
+            r.is_nack    = true;
+            r.error_code = err;
+            try {
+                winning_promise.set_exception(std::make_exception_ptr(
+                    ProtocolError(std::string("NACK: ") +
+                                  protocol::to_string(err))));
+            } catch (...) { /* promise already satisfied — ignore */ }
+            return;
+        }
+        // else: pure-ACK success → fall through to the success path below
+        r.error_code = protocol::ErrorCode::Ok;
+    } else {
+        // cmd != 0: standard send_response path. The wire payload is the
+        // response data verbatim. A single 0x00 byte means "no data";
+        // longer payloads carry typed data (firmware_version_t, sn_info_t,
+        // ImuData, ...).
+        r.error_code = protocol::ErrorCode::Ok;
     }
 
-    // Success. The wire payload is the response data verbatim. Note: firmware
-    // sends a single 0x00 byte for "success but no data"; callers can treat
-    // that as a confirmation acknowledgement.
-    r.error_code = protocol::ErrorCode::Ok;
     try {
         winning_promise.set_value(std::move(r));
-    } catch (...) { /* ditto */ }
+    } catch (...) { /* promise already satisfied — ignore */ }
 }
 
 void Transport::handle_data_(const Frame& f) {

@@ -147,6 +147,7 @@ rr.send_blueprint(blueprint)
 counters = defaultdict(int)
 lock = threading.Lock()
 t_start = time.time()
+mono_start = time.monotonic()
 
 
 def _bump(stream: str) -> None:
@@ -154,11 +155,22 @@ def _bump(stream: str) -> None:
         counters[stream] += 1
 
 
-def _set_time(host_time: float) -> None:
-    # All callbacks share the same monotonic clock under the hood
-    # (steady_clock seconds since process start). We expose it as an
-    # explicit timeline so rerun can align cross-stream events.
-    rr.set_time(timeline="host", duration=host_time)
+def _now() -> float:
+    """Seconds since this script started, on a monotonic clock.
+
+    Used as the unified `host` timeline for everything we log to rerun
+    (callbacks, perf samples). We deliberately ignore the per-sample
+    s.host_time / f.host_time fields here because those carry the C++
+    steady_clock epoch (e.g. seconds since boot) which doesn't share a
+    zero point with anything Python sees, so plotting them on the same
+    rerun timeline as wall-clock-derived perf samples produces a visible
+    gap.
+    """
+    return time.monotonic() - mono_start
+
+
+def _set_time() -> None:
+    rr.set_time(timeline="host", duration=_now())
 
 
 def _bgr_to_rgb(img: np.ndarray) -> np.ndarray:
@@ -169,7 +181,7 @@ def _bgr_to_rgb(img: np.ndarray) -> np.ndarray:
 
 def on_imu(s) -> None:
     _bump("imu")
-    _set_time(s.host_time)
+    _set_time()
     a = s.accel_mps2; g = s.gyro_radps; m = s.mag_uT
     rr.log(f"/{side_str}/imu/accel/x", rr.Scalars(float(a[0])))
     rr.log(f"/{side_str}/imu/accel/y", rr.Scalars(float(a[1])))
@@ -185,7 +197,7 @@ def on_imu(s) -> None:
 
 def on_encoder(s) -> None:
     _bump("encoder")
-    _set_time(s.host_time)
+    _set_time()
     rr.log(f"/{side_str}/encoder/position", rr.Scalars(float(s.position_rad)))
     rr.log(f"/{side_str}/encoder/velocity", rr.Scalars(float(s.velocity_rad_s)))
 
@@ -193,7 +205,7 @@ def on_encoder(s) -> None:
 def make_tactile_handler(idx: int):
     def handler(f) -> None:
         _bump(f"tac{idx}")
-        _set_time(f.host_time)
+        _set_time()
         rr.log(f"/{side_str}/{idx}_tactile/raw",
                rr.Image(_bgr_to_rgb(f.raw), color_model="rgb"))
         if not args.no_rectify and f.rectified.size > 0:
@@ -204,7 +216,7 @@ def make_tactile_handler(idx: int):
 
 def on_wrist(f) -> None:
     _bump("wrist")
-    _set_time(f.host_time)
+    _set_time()
     rr.log(f"/{side_str}/wrist_cam",
            rr.Image(_bgr_to_rgb(f.image), color_model="rgb"))
 
@@ -241,8 +253,10 @@ try:
         deltas = {k: snap[k] - last_counts[k] for k in snap}
         last_counts = snap
 
-        # Per-stream observed fps -> rerun
-        rr.set_time(timeline="host", duration=now - t_start)
+        # Per-stream observed fps -> rerun. Use the same monotonic
+        # timeline as the callbacks (_now()) so perf points align with
+        # the data points instead of landing in a separate timeline gap.
+        _set_time()
         for k, n in deltas.items():
             fps = n / elapsed if elapsed > 0 else 0.0
             rr.log(f"/perf/fps/{k}", rr.Scalars(fps))
