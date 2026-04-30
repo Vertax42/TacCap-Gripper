@@ -62,6 +62,13 @@ taccap-gripper/
 └── CMakeLists.txt             # Top-level build orchestrator
 ```
 
+## Documentation
+
+- [Architecture overview](docs/ARCHITECTURE.md) — layered stack, module
+  map, data-flow diagrams, threading model, USB-topology discovery, and
+  the explicit boundary between this SDK and downstream consumers
+  (dataset recording / ROS 2 / lerobot adapters).
+
 ## License
 
 Apache-2.0. Copyright (c) 2026 XenseRobotics Co., Ltd.
