@@ -44,6 +44,22 @@ py::array make_vec3(const std::array<float, 3>& v) {
     return arr;
 }
 
+// Wrap a py::function in a shared_ptr whose deleter acquires the GIL.
+// Background: the per-component callback wrappers below capture the
+// shared_ptr into the C++ callback lambda. The last shared_ptr ref dies
+// on whatever thread runs the lambda's destructor — usually the worker
+// capture thread when stop() joins it. py::function's destructor decrefs
+// a Python object, which segfaults without the GIL. Centralising the
+// custom deleter here keeps every component honest.
+std::shared_ptr<py::function> make_gil_safe_callback(py::function pycb) {
+    return std::shared_ptr<py::function>(
+        new py::function(std::move(pycb)),
+        [](py::function* p) {
+            py::gil_scoped_acquire gil;
+            delete p;
+        });
+}
+
 // Wrap a cv::Mat (BGR8 expected) as a (H, W, 3) uint8 numpy array. This
 // makes a copy so the array is safe across frame boundaries.
 py::array mat_to_numpy(const cv::Mat& m) {
@@ -135,7 +151,7 @@ void bind_components(py::module_& m) {
             return self.read_once(std::chrono::milliseconds(timeout_ms));
         }, py::arg("timeout_ms") = 100)
         .def("on_data", [](IMU& self, py::function pycb) {
-            auto cb = std::make_shared<py::function>(std::move(pycb));
+            auto cb = make_gil_safe_callback(std::move(pycb));
             return self.on_data([cb](const ImuSample& s) {
                 py::gil_scoped_acquire acq;
                 try { (*cb)(s); }
@@ -153,7 +169,7 @@ void bind_components(py::module_& m) {
             return self.read_once(std::chrono::milliseconds(timeout_ms));
         }, py::arg("timeout_ms") = 100)
         .def("on_data", [](Encoder& self, py::function pycb) {
-            auto cb = std::make_shared<py::function>(std::move(pycb));
+            auto cb = make_gil_safe_callback(std::move(pycb));
             return self.on_data([cb](const EncoderSample& s) {
                 py::gil_scoped_acquire acq;
                 try { (*cb)(s); }
@@ -182,7 +198,7 @@ void bind_components(py::module_& m) {
             return py::cast(std::move(f));
         }, py::arg("timeout_ms") = 500)
         .def("start", [](Camera& self, py::function pycb) {
-            auto cb = std::make_shared<py::function>(std::move(pycb));
+            auto cb = make_gil_safe_callback(std::move(pycb));
             self.start([cb](const CameraFrame& f) {
                 py::gil_scoped_acquire acq;
                 try { (*cb)(f); }
@@ -207,7 +223,7 @@ void bind_components(py::module_& m) {
         }),
             py::arg("serial"), py::arg("rectify") = true)
         .def("start", [](TactileSensor& self, py::function pycb) {
-            auto cb = std::make_shared<py::function>(std::move(pycb));
+            auto cb = make_gil_safe_callback(std::move(pycb));
             self.start([cb](const TactileFrame& f) {
                 py::gil_scoped_acquire acq;
                 try { (*cb)(f); }
