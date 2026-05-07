@@ -3,6 +3,7 @@ find_package(pybind11 CONFIG REQUIRED)
 pybind11_add_module(_taccap_native MODULE
     bindings/module.cpp
     bindings/components.cpp
+    bindings/log.cpp
 )
 target_link_libraries(_taccap_native PRIVATE taccap_core)
 

@@ -22,6 +22,9 @@ from . import _taccap_native
 hello = _taccap_native.hello
 libxense_version = _taccap_native.libxense_version
 
+# ---- Logging (spdlog-backed, shared with C++ core) --------------------------
+log = _taccap_native.log
+
 # ---- Enums ------------------------------------------------------------------
 Address = _taccap_native.Address
 FrameType = _taccap_native.FrameType
@@ -81,6 +84,8 @@ __all__ = [
     "__version__",
     "hello",
     "libxense_version",
+    # Logging
+    "log",
     # Enums
     "Address",
     "FrameType",

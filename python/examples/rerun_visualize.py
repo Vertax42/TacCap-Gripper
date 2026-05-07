@@ -36,45 +36,70 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 import threading
+import time
 from collections import defaultdict
 
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
-
 from xense.taccap import (
     LeaderGripper,
     Side,
     find_one,
+    log,
 )
-
 
 # ---------------------------------------------------------------------------
 # Args
 # ---------------------------------------------------------------------------
 
-parser = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--duration", type=float, default=0.0,
-                    help="Run for N seconds, then exit. 0 = until Ctrl+C (default).")
-parser.add_argument("--imu-hz", type=int, default=100,
-                    help="Requested IMU stream rate in Hz (default 100).")
-parser.add_argument("--encoder-hz", type=int, default=100,
-                    help="Requested encoder stream rate in Hz (default 100).")
-parser.add_argument("--no-rectify", action="store_true",
-                    help="Skip on-sensor rectification of OG cameras (raw only).")
-parser.add_argument("--save", metavar="FILE", default=None,
-                    help="Save the rerun stream to a .rrd file instead of "
-                         "spawning a viewer. Useful on headless machines.")
-parser.add_argument("--connect", metavar="HOST:PORT", default=None,
-                    help="Connect to an already-running rerun viewer "
-                         "(rerun --serve / rerun --connect). Mutually "
-                         "exclusive with --save and the default --spawn.")
-parser.add_argument("--no-spawn", action="store_true",
-                    help="Don't spawn a viewer (logs go to no sink unless "
-                         "--save / --connect was set).")
+parser = argparse.ArgumentParser(
+    description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+)
+parser.add_argument(
+    "--duration",
+    type=float,
+    default=0.0,
+    help="Run for N seconds, then exit. 0 = until Ctrl+C (default).",
+)
+parser.add_argument(
+    "--imu-hz",
+    type=int,
+    default=100,
+    help="Requested IMU stream rate in Hz (default 100).",
+)
+parser.add_argument(
+    "--encoder-hz",
+    type=int,
+    default=100,
+    help="Requested encoder stream rate in Hz (default 100).",
+)
+parser.add_argument(
+    "--no-rectify",
+    action="store_true",
+    help="Skip on-sensor rectification of OG cameras (raw only).",
+)
+parser.add_argument(
+    "--save",
+    metavar="FILE",
+    default=None,
+    help="Save the rerun stream to a .rrd file instead of "
+    "spawning a viewer. Useful on headless machines.",
+)
+parser.add_argument(
+    "--connect",
+    metavar="HOST:PORT",
+    default=None,
+    help="Connect to an already-running rerun viewer "
+    "(rerun --serve / rerun --connect). Mutually "
+    "exclusive with --save and the default --spawn.",
+)
+parser.add_argument(
+    "--no-spawn",
+    action="store_true",
+    help="Don't spawn a viewer (logs go to no sink unless --save / --connect was set).",
+)
 args = parser.parse_args()
 
 
@@ -82,29 +107,32 @@ args = parser.parse_args()
 # Discovery + rerun init
 # ---------------------------------------------------------------------------
 
-print(f"[discovery] scanning ...")
+log.info("[discovery] scanning ...")
 eps = find_one()  # throws IoError if 0 or >1 grippers connected
 side_str = "left" if eps.side == Side.Left else "right"
-print(f"[discovery] side='{side_str}'  mcu={eps.mcu_serial}")
-print(f"[discovery] tactile_0 ({eps.tactile_left_serial})  "
-      f"tactile_1 ({eps.tactile_right_serial})")
+log.info(f"[discovery] side='{side_str}'  mcu={eps.mcu_serial}")
+log.info(
+    f"[discovery] tactile_0 ({eps.tactile_left_serial})  "
+    f"tactile_1 ({eps.tactile_right_serial})"
+)
 
 # Pick exactly one of: save / connect / spawn / nothing.
 if args.save:
     rr.init("TacCap-Gripper")
     rr.save(args.save)
-    print(f"[rerun] saving stream to {args.save}")
+    log.info(f"[rerun] saving stream to {args.save}")
 elif args.connect:
     host, _, port = args.connect.partition(":")
     rr.init("TacCap-Gripper")
     rr.connect_grpc(f"rerun+http://{host}:{port or '9876'}/proxy")
-    print(f"[rerun] connected to {host}:{port}")
+    log.info(f"[rerun] connected to {host}:{port}")
 elif args.no_spawn:
     rr.init("TacCap-Gripper")
-    print("[rerun] init only, no sink")
+    log.info("[rerun] init only, no sink")
 else:
     rr.init("TacCap-Gripper", spawn=True)
-    print("[rerun] spawned viewer")
+    log.info("[rerun] spawned viewer")
+
 
 # Layout: 2 columns
 #   left column  = the three video streams stacked vertically
@@ -112,24 +140,30 @@ else:
 def _video(name, origin):
     return rrb.Spatial2DView(name=name, origin=origin)
 
+
 def _ts(name, origin):
     return rrb.TimeSeriesView(name=name, origin=origin)
+
 
 PERF_STREAMS = ["imu", "encoder", "tac0", "tac1", "wrist"]
 
 blueprint = rrb.Blueprint(
     rrb.Horizontal(
         rrb.Vertical(
-            _video(f"{side_str}/wrist_cam",                f"/{side_str}/wrist_cam"),
-            _video(f"{side_str}/0_tactile (rectified)",    f"/{side_str}/0_tactile/rectified"),
-            _video(f"{side_str}/1_tactile (rectified)",    f"/{side_str}/1_tactile/rectified"),
+            _video(f"{side_str}/wrist_cam", f"/{side_str}/wrist_cam"),
+            _video(
+                f"{side_str}/0_tactile (rectified)", f"/{side_str}/0_tactile/rectified"
+            ),
+            _video(
+                f"{side_str}/1_tactile (rectified)", f"/{side_str}/1_tactile/rectified"
+            ),
             row_shares=[1, 1, 1],
         ),
         rrb.Vertical(
             _ts("encoder", f"/{side_str}/encoder"),
             _ts("imu / accel (m/s²)", f"/{side_str}/imu/accel"),
             _ts("imu / gyro (rad/s)", f"/{side_str}/imu/gyro"),
-            _ts("imu / mag (µT)",     f"/{side_str}/imu/mag"),
+            _ts("imu / mag (µT)", f"/{side_str}/imu/mag"),
             _ts("imu / temperature (°C)", f"/{side_str}/imu/temperature"),
             # Be explicit about which series to plot — rerun's automatic
             # origin-based discovery sometimes leaves siblings off the
@@ -199,16 +233,18 @@ def _bgr_to_rgb(img: np.ndarray) -> np.ndarray:
 def on_imu(s) -> None:
     _bump("imu")
     _set_time()
-    a = s.accel_mps2; g = s.gyro_radps; m = s.mag_uT
+    a = s.accel_mps2
+    g = s.gyro_radps
+    m = s.mag_uT
     rr.log(f"/{side_str}/imu/accel/x", rr.Scalars(float(a[0])))
     rr.log(f"/{side_str}/imu/accel/y", rr.Scalars(float(a[1])))
     rr.log(f"/{side_str}/imu/accel/z", rr.Scalars(float(a[2])))
-    rr.log(f"/{side_str}/imu/gyro/x",  rr.Scalars(float(g[0])))
-    rr.log(f"/{side_str}/imu/gyro/y",  rr.Scalars(float(g[1])))
-    rr.log(f"/{side_str}/imu/gyro/z",  rr.Scalars(float(g[2])))
-    rr.log(f"/{side_str}/imu/mag/x",   rr.Scalars(float(m[0])))
-    rr.log(f"/{side_str}/imu/mag/y",   rr.Scalars(float(m[1])))
-    rr.log(f"/{side_str}/imu/mag/z",   rr.Scalars(float(m[2])))
+    rr.log(f"/{side_str}/imu/gyro/x", rr.Scalars(float(g[0])))
+    rr.log(f"/{side_str}/imu/gyro/y", rr.Scalars(float(g[1])))
+    rr.log(f"/{side_str}/imu/gyro/z", rr.Scalars(float(g[2])))
+    rr.log(f"/{side_str}/imu/mag/x", rr.Scalars(float(m[0])))
+    rr.log(f"/{side_str}/imu/mag/y", rr.Scalars(float(m[1])))
+    rr.log(f"/{side_str}/imu/mag/z", rr.Scalars(float(m[2])))
     rr.log(f"/{side_str}/imu/temperature", rr.Scalars(float(s.temperature_c)))
 
 
@@ -223,26 +259,30 @@ def make_tactile_handler(idx: int):
     def handler(f) -> None:
         _bump(f"tac{idx}")
         _set_time()
-        rr.log(f"/{side_str}/{idx}_tactile/raw",
-               rr.Image(_bgr_to_rgb(f.raw), color_model="rgb"))
+        rr.log(
+            f"/{side_str}/{idx}_tactile/raw",
+            rr.Image(_bgr_to_rgb(f.raw), color_model="rgb"),
+        )
         if not args.no_rectify and f.rectified.size > 0:
-            rr.log(f"/{side_str}/{idx}_tactile/rectified",
-                   rr.Image(_bgr_to_rgb(f.rectified), color_model="rgb"))
+            rr.log(
+                f"/{side_str}/{idx}_tactile/rectified",
+                rr.Image(_bgr_to_rgb(f.rectified), color_model="rgb"),
+            )
+
     return handler
 
 
 def on_wrist(f) -> None:
     _bump("wrist")
     _set_time()
-    rr.log(f"/{side_str}/wrist_cam",
-           rr.Image(_bgr_to_rgb(f.image), color_model="rgb"))
+    rr.log(f"/{side_str}/wrist_cam", rr.Image(_bgr_to_rgb(f.image), color_model="rgb"))
 
 
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 
-print(f"[open] LeaderGripper.open() ...")
+log.info("[open] LeaderGripper.open() ...")
 g = LeaderGripper.open()
 
 # Wrap everything that touches background threads (subscribe + start +
@@ -253,17 +293,19 @@ g = LeaderGripper.open()
 #   `FATAL: exception not rethrown / Aborted (core dumped)`
 # from pybind11's GIL acquire path on a half-dead interpreter.
 try:
-    print(f"[subscribe] callbacks attached")
+    log.info("[subscribe] callbacks attached")
     g.imu.on_data(on_imu)
     g.encoder.on_data(on_encoder)
-    g.tactile_left.start(make_tactile_handler(0))   # 0 = odd-last-SN OG
+    g.tactile_left.start(make_tactile_handler(0))  # 0 = odd-last-SN OG
     g.tactile_right.start(make_tactile_handler(1))  # 1 = even-last-SN OG
     g.wrist_camera.start(on_wrist)
 
-    print(f"[stream] starting (imu={args.imu_hz}Hz, encoder={args.encoder_hz}Hz) ...")
+    log.info(f"[stream] starting (imu={args.imu_hz}Hz, encoder={args.encoder_hz}Hz) ...")
     g.start_streaming(imu_hz=args.imu_hz, encoder_hz=args.encoder_hz)
 
-    print(f"[run]    {'Ctrl+C to stop' if args.duration <= 0 else f'duration={args.duration}s'}")
+    log.info(
+        f"[run]    {'Ctrl+C to stop' if args.duration <= 0 else f'duration={args.duration}s'}"
+    )
 
     last_print = time.time()
     last_counts = defaultdict(int)
@@ -285,23 +327,29 @@ try:
             fps = n / elapsed if elapsed > 0 else 0.0
             rr.log(f"/perf/fps/{k}", rr.Scalars(fps))
 
-        # Optional terminal status line
+        # In-place TUI status line — kept on raw stdout so the carriage
+        # return keeps overwriting one line. spdlog appends a newline per
+        # entry, which would break that animation.
         line = "  ".join(f"{k}={snap[k]:5d}" for k in sorted(snap))
         sys.stdout.write(f"\r[stats] {line}     ")
         sys.stdout.flush()
 
         last_print = now
         if args.duration > 0 and (now - t_start) >= args.duration:
-            print(f"\n[done] reached duration={args.duration}s")
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            log.info(f"[done] reached duration={args.duration}s")
             break
 
 except KeyboardInterrupt:
-    print(f"\n[done] Ctrl+C")
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    log.info("[done] Ctrl+C")
 
 finally:
     # Always stop the worker threads, even if an exception bubbled up
     # before we reached the success path.
-    print(f"[stop] streaming + workers ...")
+    log.info("[stop] streaming + workers ...")
     for stop_fn in (
         lambda: g.tactile_left.stop(),
         lambda: g.tactile_right.stop(),
@@ -311,10 +359,10 @@ finally:
         try:
             stop_fn()
         except Exception as e:
-            print(f"  warn during stop: {type(e).__name__}: {e}")
+            log.warning(f"during stop: {type(e).__name__}: {e}")
 
 elapsed = time.time() - t_start
-print(f"\n[summary] {elapsed:.2f}s total")
+log.info(f"[summary] {elapsed:.2f}s total")
 with lock:
     for k, n in sorted(counters.items()):
-        print(f"  {k:10s} {n:6d} frames  ({n / elapsed:6.1f} fps)")
+        log.info(f"  {k:10s} {n:6d} frames  ({n / elapsed:6.1f} fps)")

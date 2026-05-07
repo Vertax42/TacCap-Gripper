@@ -55,6 +55,7 @@ py::bytes vec_to_bytes(const std::vector<uint8_t>& v) {
 
 namespace xense::taccap::python {
 void bind_components(py::module_& m);  // defined in components.cpp
+void bind_log(py::module_& m);         // defined in log.cpp
 }
 
 PYBIND11_MODULE(_taccap_native, m) {
@@ -358,6 +359,9 @@ PYBIND11_MODULE(_taccap_native, m) {
                  py::gil_scoped_release gil;
                  t.stop();
              });
+
+    // spdlog-backed logger shared with the C++ core.
+    xense::taccap::python::bind_log(m);
 
     // Component classes (IMU/Encoder/Camera/TactileSensor/LeaderGripper).
     xense::taccap::python::bind_components(m);
