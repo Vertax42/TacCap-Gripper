@@ -58,15 +58,18 @@ TransportStats = _taccap_native.TransportStats
 # ---- Components (typed wrappers around Transport + libxense lite) -----------
 ImuSample = _taccap_native.ImuSample
 EncoderSample = _taccap_native.EncoderSample
+MotorStatusSample = _taccap_native.MotorStatusSample
 CameraFrame = _taccap_native.CameraFrame
 TactileFrame = _taccap_native.TactileFrame
 IMU = _taccap_native.IMU
 Encoder = _taccap_native.Encoder
+Motor = _taccap_native.Motor
 Camera = _taccap_native.Camera
 TactileSensor = _taccap_native.TactileSensor
 
 # ---- Aggregate gripper + discovery ------------------------------------------
 LeaderGripper = _taccap_native.LeaderGripper
+FollowerGripper = _taccap_native.FollowerGripper
 GripperEndpoints = _taccap_native.GripperEndpoints
 Side = _taccap_native.Side
 scan_grippers = _taccap_native.scan_grippers
@@ -114,14 +117,17 @@ __all__ = [
     # Components
     "ImuSample",
     "EncoderSample",
+    "MotorStatusSample",
     "CameraFrame",
     "TactileFrame",
     "IMU",
     "Encoder",
+    "Motor",
     "Camera",
     "TactileSensor",
     # Aggregate + discovery
     "LeaderGripper",
+    "FollowerGripper",
     "GripperEndpoints",
     "Side",
     "scan_grippers",

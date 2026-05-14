@@ -16,6 +16,8 @@
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/camera.hpp>
 #include <taccap/components/tactile_sensor.hpp>
+#include <taccap/components/motor.hpp>
+#include <taccap/follower_gripper.hpp>
 #include <taccap/leader_gripper.hpp>
 #include <taccap/discovery.hpp>
 
@@ -162,6 +164,24 @@ void bind_components(py::module_& m) {
         }, py::arg("callback"))
         .def("off", &IMU::off, py::arg("subscription_id"));
 
+    // ---- MotorStatusSample ----------------------------------------------
+    py::class_<MotorStatusSample>(m, "MotorStatusSample")
+        .def_property_readonly("host_time", [](const MotorStatusSample& s) {
+            return tp_to_seconds(s.host_time);
+        })
+        .def_readonly("actual_pos",     &MotorStatusSample::actual_pos)
+        .def_readonly("actual_vel",     &MotorStatusSample::actual_vel)
+        .def_readonly("actual_torque",  &MotorStatusSample::actual_torque)
+        .def_readonly("motor_temp_c",   &MotorStatusSample::motor_temp_c)
+        .def_readonly("status",         &MotorStatusSample::status)
+        .def("__repr__", [](const MotorStatusSample& s) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "MotorStatusSample(pos=%.4frad, vel=%.4frad/s, torque=%.3fNm, temp=%.1fC, status=0x%04x)",
+                s.actual_pos, s.actual_vel, s.actual_torque, s.motor_temp_c, s.status);
+            return std::string(buf);
+        });
+
     // ---- Encoder --------------------------------------------------------
     py::class_<Encoder>(m, "Encoder")
         .def("read_once", [](Encoder& self, unsigned timeout_ms) {
@@ -179,6 +199,55 @@ void bind_components(py::module_& m) {
             });
         }, py::arg("callback"))
         .def("off", &Encoder::off, py::arg("subscription_id"));
+
+    // ---- Motor ----------------------------------------------------------
+    py::class_<Motor>(m, "Motor")
+        .def("enable",      [](Motor& self) { py::gil_scoped_release g; self.enable();      })
+        .def("disable",     [](Motor& self) { py::gil_scoped_release g; self.disable();     })
+        .def("clear_fault", [](Motor& self) { py::gil_scoped_release g; self.clear_fault(); })
+        .def("set_position", [](Motor& self, float pos, float max_vel, float max_torque) {
+                py::gil_scoped_release g;
+                self.set_position(pos, max_vel, max_torque);
+            },
+            py::arg("target_pos_rad"),
+            py::arg("max_vel_radps"),
+            py::arg("max_torque_nm"))
+        .def("set_velocity", [](Motor& self, float vel, float max_torque, float profile_acc) {
+                py::gil_scoped_release g;
+                self.set_velocity(vel, max_torque, profile_acc);
+            },
+            py::arg("target_vel_radps"),
+            py::arg("max_torque_nm"),
+            py::arg("profile_acc_radps2"))
+        .def("set_torque", [](Motor& self, float torque, float max_vel) {
+                py::gil_scoped_release g;
+                self.set_torque(torque, max_vel);
+            },
+            py::arg("target_torque_nm"),
+            py::arg("max_vel_radps"))
+        .def("set_impedance", [](Motor& self, float pos, float kp, float kd, float ff) {
+                py::gil_scoped_release g;
+                self.set_impedance(pos, kp, kd, ff);
+            },
+            py::arg("target_pos_rad"),
+            py::arg("kp_nm_per_rad"),
+            py::arg("kd_nm_s_per_rad"),
+            py::arg("feedforward_torque_nm"))
+        .def("read_status", [](Motor& self, unsigned timeout_ms) {
+            py::gil_scoped_release gil;
+            return self.read_status(std::chrono::milliseconds(timeout_ms));
+        }, py::arg("timeout_ms") = 100)
+        .def("on_status", [](Motor& self, py::function pycb) {
+            auto cb = std::make_shared<py::function>(std::move(pycb));
+            return self.on_status([cb](const MotorStatusSample& s) {
+                py::gil_scoped_acquire acq;
+                try { (*cb)(s); }
+                catch (py::error_already_set& e) {
+                    e.discard_as_unraisable("xense.taccap.Motor callback");
+                } catch (...) {}
+            });
+        }, py::arg("callback"))
+        .def("off", &Motor::off, py::arg("subscription_id"));
 
     // ---- Camera ---------------------------------------------------------
     py::class_<Camera>(m, "Camera")
@@ -315,6 +384,61 @@ void bind_components(py::module_& m) {
         .def_property_readonly("is_streaming",  &LeaderGripper::is_streaming)
         .def("__enter__", [](LeaderGripper& g) -> LeaderGripper& { return g; })
         .def("__exit__",  [](LeaderGripper& g, py::object, py::object, py::object) {
+            py::gil_scoped_release gil;
+            g.stop_streaming();
+        });
+
+    // ---- FollowerGripper ------------------------------------------------
+    py::class_<FollowerGripper>(m, "FollowerGripper")
+        .def(py::init([](const std::string& mcu, const std::string& wrist,
+                         const std::string& tac_l, const std::string& tac_r,
+                         uint32_t baud, unsigned ack_ms, unsigned retries,
+                         bool rectify) {
+                FollowerGripper::Config cfg;
+                cfg.mcu_device           = mcu;
+                cfg.wrist_video          = wrist;
+                cfg.tactile_left_serial  = tac_l;
+                cfg.tactile_right_serial = tac_r;
+                cfg.baudrate             = baud;
+                cfg.ack_timeout_ms       = ack_ms;
+                cfg.max_retries          = retries;
+                cfg.rectify_tactile      = rectify;
+                py::gil_scoped_release gil;
+                return std::make_unique<FollowerGripper>(cfg);
+             }),
+             py::arg("mcu_device"),
+             py::arg("wrist_video"),
+             py::arg("tactile_left_serial"),
+             py::arg("tactile_right_serial"),
+             py::arg("baudrate")            = 3'000'000u,
+             py::arg("ack_timeout_ms")      = 1000u,
+             py::arg("max_retries")         = 2u,
+             py::arg("rectify_tactile")     = true)
+        .def_static("open", []() {
+            py::gil_scoped_release gil;
+            return FollowerGripper::open();
+        })
+        .def("start_streaming", [](FollowerGripper& self,
+                                   unsigned imu_hz, unsigned enc_hz, unsigned motor_hz) {
+            py::gil_scoped_release gil;
+            self.start_streaming(imu_hz, enc_hz, motor_hz);
+        }, py::arg("imu_hz") = 100u,
+           py::arg("encoder_hz") = 100u,
+           py::arg("motor_hz") = 0u)
+        .def("stop_streaming", [](FollowerGripper& self) {
+            py::gil_scoped_release gil;
+            self.stop_streaming();
+        })
+        .def_property_readonly("imu",           [](FollowerGripper& g) -> IMU&            { return g.imu(); },           py::return_value_policy::reference_internal)
+        .def_property_readonly("encoder",       [](FollowerGripper& g) -> Encoder&        { return g.encoder(); },       py::return_value_policy::reference_internal)
+        .def_property_readonly("motor",         [](FollowerGripper& g) -> Motor&          { return g.motor(); },         py::return_value_policy::reference_internal)
+        .def_property_readonly("wrist_camera",  [](FollowerGripper& g) -> Camera&         { return g.wrist_camera(); },  py::return_value_policy::reference_internal)
+        .def_property_readonly("tactile_left",  [](FollowerGripper& g) -> TactileSensor&  { return g.tactile_left(); },  py::return_value_policy::reference_internal)
+        .def_property_readonly("tactile_right", [](FollowerGripper& g) -> TactileSensor&  { return g.tactile_right(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("transport",     [](FollowerGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
+        .def_property_readonly("is_streaming",  &FollowerGripper::is_streaming)
+        .def("__enter__", [](FollowerGripper& g) -> FollowerGripper& { return g; })
+        .def("__exit__",  [](FollowerGripper& g, py::object, py::object, py::object) {
             py::gil_scoped_release gil;
             g.stop_streaming();
         });
