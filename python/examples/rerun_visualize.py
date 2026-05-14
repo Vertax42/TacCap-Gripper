@@ -197,8 +197,11 @@ for s in PERF_STREAMS:
 # Per-stream sample counters for the FPS time-series.
 counters = defaultdict(int)
 lock = threading.Lock()
-t_start = time.time()
-mono_start = time.monotonic()
+# `t_start` / `mono_start` are reset to "right after start_streaming()" so
+# the summary FPS reflects steady-state streaming rate, not (open + start +
+# streaming) wall time. libxense + V4L2 init alone can eat several seconds.
+t_start = 0.0
+mono_start = 0.0
 
 
 def _bump(stream: str) -> None:
@@ -302,6 +305,11 @@ try:
 
     log.info(f"[stream] starting (imu={args.imu_hz}Hz, encoder={args.encoder_hz}Hz) ...")
     g.start_streaming(imu_hz=args.imu_hz, encoder_hz=args.encoder_hz)
+
+    # Anchor the perf clocks to "streaming actually started" so the FPS
+    # summary at the end isn't dragged down by ~4s of libxense/V4L2 init.
+    t_start = time.time()
+    mono_start = time.monotonic()
 
     log.info(
         f"[run]    {'Ctrl+C to stop' if args.duration <= 0 else f'duration={args.duration}s'}"
