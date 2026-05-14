@@ -7,10 +7,11 @@ name = "taccap-gripper"
 version = "0.0.1"
 description = "TacCap-Gripper multimodal tactile gripper SDK"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = "Apache-2.0"
 authors = [{ name = "XenseRobotics Co., Ltd." }]
 classifiers = [
+  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.12",
   "Operating System :: POSIX :: Linux",
 ]
