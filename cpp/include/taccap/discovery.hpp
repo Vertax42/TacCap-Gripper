@@ -58,14 +58,21 @@ struct WristCameraEndpoint {
 };
 
 // One complete gripper unit: MCU + wrist + 2 OG sensors.
-// `side` of the gripper is taken from the MCU board's serial.
+// `side` of the gripper is taken from the firmware-side SN (read at
+// discovery time via Cmd::GetSn). The CH343 USB-chip SN that lives in
+// `mcu_serial` is preserved for identification / debugging but does NOT
+// drive the Left/Right decision — the firmware SN is what xense-flare
+// uses too, and the CH343 chip SN is hardware-burned independently of
+// the board so they don't have to share parity.
 struct GripperEndpoints {
     Side        side;
     std::string mcu_device;
-    std::string mcu_serial;
+    std::string mcu_serial;               // CH343 chip SN, e.g. "5C2C247728"
+    std::string firmware_sn;              // STM32 flash SN read via Cmd::GetSn,
+                                          // e.g. "SN0000002" — drives `side`
     std::string wrist_video;
-    std::string tactile_left_serial;     // OG with odd last digit (within this gripper)
-    std::string tactile_right_serial;    // OG with even last digit
+    std::string tactile_left_serial;      // OG with odd last digit (within this gripper)
+    std::string tactile_right_serial;     // OG with even last digit
 };
 
 // Lower-level scan helpers (testable / inspectable).
@@ -80,8 +87,8 @@ std::vector<GripperEndpoints> scan_all();
 
 // Convenience accessors. Throw IoError if the requested gripper isn't found.
 GripperEndpoints find_one();    // exactly one gripper plugged in (any side)
-GripperEndpoints find_left();   // gripper whose MCU SN is odd
-GripperEndpoints find_right();  // gripper whose MCU SN is even
+GripperEndpoints find_left();   // gripper whose firmware SN ends in an odd digit
+GripperEndpoints find_right();  // gripper whose firmware SN ends in an even digit
 
 // Parse the last numeric digit out of a serial-like string. Returns Left
 // for odd / Right for even. If the string contains no digits, returns

@@ -1,12 +1,16 @@
 // Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
 
 #include <taccap/discovery.hpp>
+#include <taccap/bus/transport.hpp>
 #include <taccap/error.hpp>
+#include <taccap/protocol/codec.hpp>
+#include <taccap/protocol/commands.hpp>
 #include <taccap/vision.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -197,16 +201,63 @@ std::vector<GripperEndpoints> scan_all() {
     }
 
     // ---- 4) Build GripperEndpoints, one per hub that has at least an MCU.
-    // The MCU's chip SN parity decides the gripper's side. OG sensors are
-    // distributed to .tactile_left_serial / .tactile_right_serial by their
-    // own SN parity (xense-flare convention, see is_left_device()).
+    // The firmware-side SN (Cmd::GetSn) — NOT the CH343 chip SN — decides
+    // the gripper's side. OG sensors are distributed to .tactile_left_serial
+    // / .tactile_right_serial by their own SN parity (xense-flare convention,
+    // see is_left_device()).
+    //
+    // CH343 USB-chip SN is hardware-burned in the WCH chip and bears no
+    // relationship to the board build; the firmware SN is what's burned
+    // intentionally per-board, so it's the authoritative side identifier.
     std::vector<GripperEndpoints> out;
     for (auto& [hub, g] : groups) {
         if (!g.mcu) continue;   // hub without an MCU isn't a complete gripper
+
+        // Open a transient transport, read firmware SN, decide side.
+        // This is a one-shot startup cost — closed before LeaderGripper /
+        // FollowerGripper open their own Transport on the same device.
+        std::string fw_sn;
+        std::optional<Side> fw_side;
+        try {
+            bus::Transport::Config cfg{};
+            cfg.serial.device           = g.mcu->device;
+            cfg.serial.baudrate         = 3'000'000;
+            cfg.serial.read_timeout_ms  = 1;
+            cfg.serial.write_timeout_ms = 1000;
+            cfg.peer                    = protocol::Address::MCU;
+            cfg.ack_timeout             = std::chrono::milliseconds(1000);
+            cfg.max_retries             = 2;
+            bus::Transport t(cfg);
+            // If the firmware is still streaming from a previous host
+            // process (Ctrl+C / abort, or a sibling publisher we just
+            // killed), the rx pipe is full of DATA frames and the GetSn
+            // ACK gets buried until they drain. Send a best-effort
+            // StopStream first to quiesce the firmware before the real
+            // request — same pattern as LeaderGripper::start_streaming.
+            try {
+                t.send_cmd(protocol::Cmd::StopStream, {},
+                           std::chrono::milliseconds(500));
+            } catch (...) { /* expected when fw is already idle */ }
+
+            auto ack = t.send_cmd(protocol::Cmd::GetSn, {},
+                                  std::chrono::milliseconds(1000));
+            if (!ack.is_nack && !ack.data.empty()) {
+                fw_sn = protocol::decode_sn(ack.data.data(), ack.data.size());
+                fw_side = side_from_serial(fw_sn);
+            }
+        } catch (...) {
+            // Transport open failed (port already in use by another
+            // process, baud rate unsupported, etc.) — fall back to the
+            // CH343 chip SN parity so discovery still produces a result,
+            // even if the side is unreliable. Caller can still match by
+            // mcu_serial / firmware_sn after we report what we have.
+        }
+
         GripperEndpoints e{};
-        e.side       = g.mcu->side;
-        e.mcu_device = g.mcu->device;
-        e.mcu_serial = g.mcu->serial_number;
+        e.side        = fw_side.value_or(g.mcu->side);
+        e.mcu_device  = g.mcu->device;
+        e.mcu_serial  = g.mcu->serial_number;
+        e.firmware_sn = std::move(fw_sn);
         if (g.wrist) e.wrist_video = g.wrist->device;
         for (const auto& og : g.ogs) {
             (og.side == Side::Left ? e.tactile_left_serial
@@ -235,7 +286,8 @@ GripperEndpoints find_left() {
         if (g.side == Side::Left) return g;
     }
     throw IoError("discovery::find_left: no left-side gripper detected "
-                  "(MCU board SN must end in an odd digit)", ENODEV);
+                  "(firmware SN must end in an odd digit; CH343 chip SN "
+                  "parity is no longer the authoritative source)", ENODEV);
 }
 
 GripperEndpoints find_right() {
@@ -243,7 +295,8 @@ GripperEndpoints find_right() {
         if (g.side == Side::Right) return g;
     }
     throw IoError("discovery::find_right: no right-side gripper detected "
-                  "(MCU board SN must end in an even digit)", ENODEV);
+                  "(firmware SN must end in an even digit; CH343 chip SN "
+                  "parity is no longer the authoritative source)", ENODEV);
 }
 
 }  // namespace xense::taccap::discovery

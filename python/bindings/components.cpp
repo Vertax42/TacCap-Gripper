@@ -320,6 +320,7 @@ void bind_components(py::module_& m) {
         .def_readonly("side",                 &discovery::GripperEndpoints::side)
         .def_readonly("mcu_device",           &discovery::GripperEndpoints::mcu_device)
         .def_readonly("mcu_serial",           &discovery::GripperEndpoints::mcu_serial)
+        .def_readonly("firmware_sn",          &discovery::GripperEndpoints::firmware_sn)
         .def_readonly("wrist_video",          &discovery::GripperEndpoints::wrist_video)
         .def_readonly("tactile_left_serial",  &discovery::GripperEndpoints::tactile_left_serial)
         .def_readonly("tactile_right_serial", &discovery::GripperEndpoints::tactile_right_serial)
@@ -327,7 +328,8 @@ void bind_components(py::module_& m) {
             return std::string("GripperEndpoints(side=") +
                    discovery::to_string(e.side) +
                    ", mcu=" + e.mcu_device +
-                   " sn=" + e.mcu_serial +
+                   " ch343_sn=" + e.mcu_serial +
+                   " fw_sn=" + e.firmware_sn +
                    ", wrist=" + e.wrist_video +
                    ", tactile_l=" + e.tactile_left_serial +
                    ", tactile_r=" + e.tactile_right_serial + ")";
