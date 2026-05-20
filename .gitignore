@@ -25,5 +25,14 @@ compile_commands.json
 .DS_Store
 Thumbs.db
 
-# Project — embedded debugging code lives outside this repo
+# Project — reference clones of the upstream firmware + PC GUI repos.
+# Tracked in their own git histories (gitlab.../xense/tc-gu-01[-pc].git),
+# NOT as submodules — this SDK only depends on the wire protocol they
+# define, not on their build artefacts. Clone-on-demand for development;
+# see README.md "Firmware / PC GUI reference repos".
+/third_party/firmware/
+
+# Legacy: manual copy that used to live here; reorganised into
+# third_party/firmware/ (May 2026). Kept ignored in case anyone still
+# has the old path lying around in a clean checkout.
 Embedded Software/

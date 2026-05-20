@@ -234,12 +234,47 @@ taccap-gripper/
 │   ├── examples/              # Python examples (rerun_visualize.py)
 │   └── xense/taccap/          # Python package (PEP 420 namespace under `xense`)
 ├── third_party/
-│   └── libxensesdk/           # Submodule, lite mode (no ML deps)
+│   ├── libxensesdk/           # Submodule, lite mode (no ML deps)
+│   └── firmware/              # Clone-on-demand reference repos (gitignored)
+│       ├── tc-gu-01/          #   STM32 firmware that runs on the gripper
+│       └── tc-gu-01-pc/       #   PyQt debug GUI (operator-side)
 ├── docs/                      # Architecture & API docs
 ├── environment.yml            # mamba env (Python 3.12, conda-forge only)
 ├── pyproject.toml             # scikit-build-core wheel config
 └── CMakeLists.txt             # Top-level build orchestrator
 ```
+
+## Firmware / PC GUI reference repos
+
+The wire protocol this SDK speaks is defined by the firmware that runs
+on the gripper's STM32H562 MCU. The protocol PDF + Python prototype
+(in PyQt) live in two upstream repos on the company GitLab that we
+**read but don't ship** — they have separate release cadences and
+build toolchains and shouldn't be linked into this SDK's git history.
+
+```
+# Optional but recommended for any work that touches the wire format:
+mkdir -p third_party/firmware
+cd third_party/firmware
+git clone -b master git@192.168.110.140:xense/tc-gu-01.git      # STM32 firmware
+git clone -b master git@192.168.110.140:xense/tc-gu-01-pc.git   # PyQt GUI
+```
+
+Both paths are listed in `.gitignore` — they live next to the SDK for
+easy `grep` / IDE discovery but never appear in `git status`.
+
+What's where:
+- `tc-gu-01/App/protocol/protocol_cmd.h` + `protocol_data.h` — canonical
+  command enum + POD payload layouts. The SDK's
+  `cpp/include/taccap/protocol/{commands.hpp,payloads.hpp}` mirror these
+  1:1 with `static_assert(sizeof(...) == ...)` size checks.
+- `tc-gu-01/App/tasks/task_data_stream.c` + `task_imu.c` +
+  `task_encoder.c` — explains why IMU/encoder unique-data rate caps at
+  ~60 Hz even when you request 100 (see the SDK's stream-dup note in
+  the Claude memory).
+- `tc-gu-01-pc/core/protocol.py` + `core/serial_worker.py` — Python
+  reference implementation of the same wire protocol; useful as a
+  cross-check when debugging the C++ codec.
 
 ## Documentation
 
