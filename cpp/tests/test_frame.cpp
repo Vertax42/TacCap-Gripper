@@ -1,5 +1,6 @@
 // Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
 
+#include <cstring>
 #include <gtest/gtest.h>
 #include <taccap/bus/frame.hpp>
 #include <taccap/error.hpp>
@@ -167,7 +168,30 @@ TEST(FrameParser, HandlesByteAtATimeFeed) {
 }
 
 TEST(FrameParser, ResyncsAcrossGarbagePlusValidFrame) {
-    std::vector<uint8_t> garbage = {0xDE, 0xAD, 0xBE, 0xEF, 0xAA, 0x42, 0x55};
+    // Garbage layout (positions relative to the false-positive HEAD at
+    // offset 4): HEAD@+0, ADDR@+1, SEQ@+2, TYPE@+3, CMD@+4, LEN-LO@+5,
+    // LEN-HI@+6. Bytes 5 and 6 after the false HEAD are 0xFF/0xFF →
+    // parsed length 0xFFFF, well past MAX_PAYLOAD_LEN, so the parser
+    // rejects the false start and resyncs one byte at a time until it
+    // finds the real frame's HEAD.
+    //
+    // The original garbage `{0xDE,0xAD,0xBE,0xEF,0xAA,0x42,0x55}` was
+    // 7 bytes — too short to fill the false header, so the parser read
+    // LEN from the start of the real frame (wire[2:4] = 0x0305 = 773),
+    // which was rejected under the V1.2 MAX_PAYLOAD_LEN=502 but is
+    // plausible under V1.3+'s 2294 cap, leaving the parser stuck
+    // waiting for never-arriving "frame body" bytes. See the comment
+    // on MAX_FRAME_LEN in frame.hpp.
+    std::vector<uint8_t> garbage = {
+        0xDE, 0xAD, 0xBE, 0xEF,            // junk
+        /* false HEAD @+0 */ 0xAA,
+        /* false ADDR @+1 */ 0x42,
+        /* false SEQ  @+2 */ 0x55,
+        /* false TYPE @+3 */ 0x99,
+        /* false CMD  @+4 */ 0x88,
+        /* LEN-LO     @+5 */ 0xFF,
+        /* LEN-HI     @+6 */ 0xFF,
+    };
     auto wire = tb::pack_frame(tp::Address::PC, 5,
                                tp::FrameType::DATA, tp::Cmd::GetImu,
                                random_payload(28, 5));
@@ -183,6 +207,31 @@ TEST(FrameParser, ResyncsAcrossGarbagePlusValidFrame) {
     ASSERT_TRUE(p.try_pop(f));
     EXPECT_EQ(f.cmd, tp::Cmd::GetImu);
     EXPECT_EQ(f.payload.size(), 28u);
+}
+
+// Regression guard for the V1.3 frame-cap bump: confirm a >1 KB OTA
+// write-block-sized frame still pack/parse round-trips.
+TEST(FrameParser, OtaWriteBlockSizedFrameRoundtrips) {
+    // 6-byte OtaWriteBlock header + 1024-byte block = 1030-byte payload,
+    // well past the V1.2 cap of 502 and within the V1.3 cap of 2294.
+    std::vector<uint8_t> payload(1030);
+    for (size_t i = 0; i < payload.size(); ++i) {
+        payload[i] = static_cast<uint8_t>(i * 13 + 7);
+    }
+    auto wire = tb::pack_frame(tp::Address::PC, 42,
+                               tp::FrameType::CMD_NEED_ACK,
+                               tp::Cmd::OtaWriteBlock,
+                               payload);
+
+    tb::FrameParser p;
+    p.feed(wire);
+    ASSERT_EQ(p.pending(), 1u);
+
+    tb::Frame f;
+    ASSERT_TRUE(p.try_pop(f));
+    EXPECT_EQ(f.cmd, tp::Cmd::OtaWriteBlock);
+    ASSERT_EQ(f.payload.size(), payload.size());
+    EXPECT_EQ(std::memcmp(f.payload.data(), payload.data(), payload.size()), 0);
 }
 
 TEST(FrameParser, DropsBadCrcFrameButContinues) {

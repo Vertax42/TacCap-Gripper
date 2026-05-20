@@ -11,10 +11,7 @@
 #include <taccap/protocol/payloads.hpp>
 #include <taccap/error.hpp>
 
-#include <pty.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/select.h>
+#include "pty_helper.hpp"
 
 #include <chrono>
 #include <cstring>
@@ -24,128 +21,8 @@
 namespace tb = xense::taccap::bus;
 namespace tp = xense::taccap::protocol;
 
-namespace {
-
-// PTY-backed bidirectional pipe. The host SerialBus opens the slave end;
-// the test acts as the fake firmware on the master end.
-class Pty {
-public:
-    Pty() {
-        char slave_path[128] = {0};
-        if (::openpty(&master_, &slave_, slave_path, nullptr, nullptr) != 0) {
-            ADD_FAILURE() << "openpty failed: " << std::strerror(errno);
-            master_ = slave_ = -1;
-            return;
-        }
-        slave_path_ = slave_path;
-        // Master is poll-able; non-blocking helps test cleanup.
-        ::fcntl(master_, F_SETFL, ::fcntl(master_, F_GETFL, 0) | O_NONBLOCK);
-    }
-    ~Pty() {
-        if (master_ >= 0) ::close(master_);
-        if (slave_  >= 0) ::close(slave_);
-    }
-    Pty(const Pty&)            = delete;
-    Pty& operator=(const Pty&) = delete;
-
-    int master() const { return master_; }
-    const std::string& slave_path() const { return slave_path_; }
-
-    // Block until at least one full frame is available on the master end,
-    // or `timeout_ms` elapses. Returns parsed frame on success.
-    std::optional<tb::Frame> expect_frame(int timeout_ms = 1000) {
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::milliseconds(timeout_ms);
-        uint8_t buf[256];
-        for (;;) {
-            tb::Frame out;
-            if (parser_.try_pop(out)) return out;
-
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= deadline) return std::nullopt;
-            const auto remain = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    deadline - now).count();
-
-            fd_set rfds;
-            FD_ZERO(&rfds);
-            FD_SET(master_, &rfds);
-            timeval tv{};
-            tv.tv_sec  = remain / 1000;
-            tv.tv_usec = (remain % 1000) * 1000;
-            const int r = ::select(master_ + 1, &rfds, nullptr, nullptr, &tv);
-            if (r <= 0) continue;   // timeout or EINTR
-
-            const ssize_t n = ::read(master_, buf, sizeof(buf));
-            if (n > 0) parser_.feed(buf, static_cast<std::size_t>(n));
-        }
-    }
-
-    // Mirrors the firmware's two response paths (protocol_handler.c).
-    //
-    // success_with_data: protocol_send_response(seq, cmd, ERR_OK, payload, n).
-    void send_response(uint8_t seq, tp::Cmd cmd,
-                       std::vector<uint8_t> data) {
-        // Firmware path: payload is data only (no err prefix). Empty data
-        // becomes a single ERR_OK byte (mimics protocol_send_response with
-        // payload_len == 0).
-        if (data.empty()) data.push_back(static_cast<uint8_t>(tp::ErrorCode::Ok));
-        write_frame(tp::Address::MCU, seq, tp::FrameType::ACK, cmd, data);
-    }
-
-    // failure: protocol_send_ack(seq, err) — frame.cmd = 0, payload = [err].
-    void send_nack(uint8_t seq, tp::ErrorCode err) {
-        std::vector<uint8_t> body{static_cast<uint8_t>(err)};
-        write_frame(tp::Address::MCU, seq,
-                    tp::FrameType::ACK,
-                    static_cast<tp::Cmd>(0),  // NACK uses cmd=0
-                    body);
-    }
-
-    // Convenience: success ACK with no extra data (just the ERR_OK byte).
-    void send_ack_ok(uint8_t seq, tp::Cmd echoed_cmd) {
-        send_response(seq, echoed_cmd, {});
-    }
-
-    void send_data(uint8_t seq, tp::Cmd cmd,
-                   const std::vector<uint8_t>& payload) {
-        write_frame(tp::Address::MCU, seq, tp::FrameType::DATA, cmd, payload);
-    }
-
-    void send_raw(const std::vector<uint8_t>& bytes) {
-        const ssize_t n = ::write(master_, bytes.data(), bytes.size());
-        ASSERT_EQ(static_cast<std::size_t>(n), bytes.size());
-    }
-
-private:
-    void write_frame(tp::Address addr, uint8_t seq, tp::FrameType type,
-                     tp::Cmd cmd, const std::vector<uint8_t>& payload) {
-        auto wire = tb::pack_frame(addr, seq, type, cmd, payload);
-        const ssize_t n = ::write(master_, wire.data(), wire.size());
-        ASSERT_EQ(static_cast<std::size_t>(n), wire.size())
-            << "PTY write short: " << std::strerror(errno);
-    }
-
-    int             master_ = -1;
-    int             slave_  = -1;
-    std::string     slave_path_;
-    tb::FrameParser parser_;
-};
-
-// Build a Transport bound to the slave end. Use a 9600 baud (still
-// works on PTY) to avoid setting B3000000 on a pty (some kernels reject it).
-tb::Transport::Config base_config(const std::string& dev) {
-    tb::Transport::Config c;
-    c.serial.device          = dev;
-    c.serial.baudrate        = 9600;     // PTY ignores baud, but B9600 is universal
-    c.serial.read_timeout_ms = 1;
-    c.peer                   = tp::Address::MCU;
-    c.ack_timeout            = std::chrono::milliseconds(50);
-    c.max_retries            = 2;
-    c.retry_interval         = std::chrono::milliseconds(5);
-    return c;
-}
-
-}  // namespace
+using taccap_test::Pty;
+using taccap_test::base_config;
 
 TEST(Transport, SendCmdReceivesAck) {
     Pty pty;

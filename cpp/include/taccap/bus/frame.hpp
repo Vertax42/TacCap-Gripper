@@ -25,8 +25,14 @@ constexpr std::size_t FRAME_HEADER_LEN = 7;   // HEAD + ADDR + SEQ + TYPE + CMD 
 constexpr std::size_t FRAME_TAIL_LEN   = 3;   // CRC(2) + TAIL(1)
 constexpr std::size_t MIN_FRAME_LEN    = FRAME_HEADER_LEN + FRAME_TAIL_LEN;  // 10
 
-// Firmware caps every wire frame at 512 bytes total, so payload max is 502.
-constexpr std::size_t MAX_FRAME_LEN    = 512;
+// MAX_FRAME_LEN bounds the largest wire-format frame the SDK will
+// pack or accept. Set to match firmware (`tc-gu-01/App/protocol/
+// protocol_frame.h #define FRAME_MAX_LEN 2304`), sized for V1.3 OTA
+// write blocks: payload = 6-byte OtaWriteBlockHeader + up to
+// OTA_BLOCK_SIZE=1024 bytes of firmware data = 1030 payload bytes,
+// plus 7-byte header + 3-byte tail = 1040 unstuffed; worst-case
+// byte-stuffing roughly doubles that, so 2304 leaves headroom.
+constexpr std::size_t MAX_FRAME_LEN    = 2304;
 constexpr std::size_t MAX_PAYLOAD_LEN  = MAX_FRAME_LEN - MIN_FRAME_LEN;
 
 // CRC-16/MODBUS (init 0xFFFF, poly 0xA001 with reflected input/output).
