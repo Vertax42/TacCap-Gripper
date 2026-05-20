@@ -187,11 +187,43 @@ void FrameParser::drain_() {
         if (r.status == ParseStatus::Success) {
             ready_.push_back(std::move(r.frame));
             cursor += r.consumed;
-        } else if (r.status == ParseStatus::Resync) {
-            cursor += (r.consumed > 0 ? r.consumed : 1);
-        } else {  // NeedMoreData
-            break;
+            continue;
         }
+        if (r.status == ParseStatus::Resync) {
+            cursor += (r.consumed > 0 ? r.consumed : 1);
+            continue;
+        }
+        // NeedMoreData at cursor. Before giving up, see if any LATER 0xAA
+        // in the buffer can be parsed as a complete frame. This rescues
+        // us from "false HEAD with plausible LEN" stalls: pack_frame does
+        // not byte-stuff today, so a 0xAA in noise/garbage can sit at the
+        // front of the buffer claiming a body length that never arrives,
+        // while the real frame's HEAD is already further in. Walk past
+        // every 0xAA after `cursor` and attempt a parse; if any succeeds
+        // (CRC + TAIL valid), commit it and drop the bytes before its
+        // HEAD as garbage.
+        bool recovered = false;
+        std::size_t alt = cursor + 1;
+        while (alt < rx_.size()) {
+            if (rx_[alt] != FRAME_HEAD) { ++alt; continue; }
+            ParseOutcome r2 = try_parse_frame(rx_.data() + alt,
+                                              rx_.size() - alt);
+            if (r2.status == ParseStatus::Success) {
+                ready_.push_back(std::move(r2.frame));
+                cursor = alt + r2.consumed;
+                recovered = true;
+                break;
+            }
+            if (r2.status == ParseStatus::Resync) {
+                alt += (r2.consumed > 0 ? r2.consumed : 1);
+                continue;
+            }
+            // r2 = NeedMoreData at alt. Try the next 0xAA.
+            ++alt;
+        }
+        if (recovered) continue;
+        // No later HEAD can be completed yet; honestly wait for more bytes.
+        break;
     }
 
     // Drop everything we consumed from the front of the buffer. We use a

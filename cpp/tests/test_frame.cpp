@@ -168,30 +168,10 @@ TEST(FrameParser, HandlesByteAtATimeFeed) {
 }
 
 TEST(FrameParser, ResyncsAcrossGarbagePlusValidFrame) {
-    // Garbage layout (positions relative to the false-positive HEAD at
-    // offset 4): HEAD@+0, ADDR@+1, SEQ@+2, TYPE@+3, CMD@+4, LEN-LO@+5,
-    // LEN-HI@+6. Bytes 5 and 6 after the false HEAD are 0xFF/0xFF →
-    // parsed length 0xFFFF, well past MAX_PAYLOAD_LEN, so the parser
-    // rejects the false start and resyncs one byte at a time until it
-    // finds the real frame's HEAD.
-    //
-    // The original garbage `{0xDE,0xAD,0xBE,0xEF,0xAA,0x42,0x55}` was
-    // 7 bytes — too short to fill the false header, so the parser read
-    // LEN from the start of the real frame (wire[2:4] = 0x0305 = 773),
-    // which was rejected under the V1.2 MAX_PAYLOAD_LEN=502 but is
-    // plausible under V1.3+'s 2294 cap, leaving the parser stuck
-    // waiting for never-arriving "frame body" bytes. See the comment
-    // on MAX_FRAME_LEN in frame.hpp.
-    std::vector<uint8_t> garbage = {
-        0xDE, 0xAD, 0xBE, 0xEF,            // junk
-        /* false HEAD @+0 */ 0xAA,
-        /* false ADDR @+1 */ 0x42,
-        /* false SEQ  @+2 */ 0x55,
-        /* false TYPE @+3 */ 0x99,
-        /* false CMD  @+4 */ 0x88,
-        /* LEN-LO     @+5 */ 0xFF,
-        /* LEN-HI     @+6 */ 0xFF,
-    };
+    // Mix of pre-frame junk (incl. a false HEAD whose LEN field parses
+    // as a plausible 773 bytes — would stall the parser indefinitely
+    // before the V1.6 rewind fix in FrameParser::drain_).
+    std::vector<uint8_t> garbage = {0xDE, 0xAD, 0xBE, 0xEF, 0xAA, 0x42, 0x55};
     auto wire = tb::pack_frame(tp::Address::PC, 5,
                                tp::FrameType::DATA, tp::Cmd::GetImu,
                                random_payload(28, 5));
@@ -207,6 +187,62 @@ TEST(FrameParser, ResyncsAcrossGarbagePlusValidFrame) {
     ASSERT_TRUE(p.try_pop(f));
     EXPECT_EQ(f.cmd, tp::Cmd::GetImu);
     EXPECT_EQ(f.payload.size(), 28u);
+}
+
+// Multiple false HEADs back-to-back, all with plausible (but bogus)
+// length fields, followed by a real frame at the end. Exercises the
+// rewind path repeatedly within a single drain_() call.
+TEST(FrameParser, ResyncsAcrossMultipleFalseHeads) {
+    auto wire = tb::pack_frame(tp::Address::PC, 9,
+                               tp::FrameType::DATA, tp::Cmd::GetEncoder,
+                               random_payload(16, 17));
+    std::vector<uint8_t> stream;
+    // 5 false HEADs each followed by a "plausible" 7-byte fake header
+    // → length = (varied), tail check / CRC check will both miss → parser
+    // walks past each.
+    for (uint8_t i = 0; i < 5; ++i) {
+        stream.insert(stream.end(),
+            {0xAA, /*addr*/ static_cast<uint8_t>(0x10 + i),
+                   /*seq */ i,
+                   /*type*/ 0xFF,
+                   /*cmd */ 0xEE,
+                   /*lenL*/ static_cast<uint8_t>(0x20 + i),
+                   /*lenH*/ 0x00});
+    }
+    stream.insert(stream.end(), wire.begin(), wire.end());
+
+    tb::FrameParser p;
+    p.feed(stream);
+    EXPECT_EQ(p.pending(), 1u);
+
+    tb::Frame f;
+    ASSERT_TRUE(p.try_pop(f));
+    EXPECT_EQ(f.cmd, tp::Cmd::GetEncoder);
+    EXPECT_EQ(f.payload.size(), 16u);
+}
+
+// Pathological: 0xAA somewhere inside a real frame's payload (legitimate
+// since pack_frame doesn't byte-stuff). Parser must still pick the
+// outer frame, NOT lock onto the inner 0xAA.
+TEST(FrameParser, IgnoresHeadByteInsideValidPayload) {
+    std::vector<uint8_t> payload(40);
+    for (size_t i = 0; i < payload.size(); ++i) payload[i] = static_cast<uint8_t>(i);
+    payload[15] = 0xAA;
+    payload[16] = 0x05;   // would parse as a small LEN if HEAD wins
+    payload[17] = 0x00;
+    auto wire = tb::pack_frame(tp::Address::PC, 1,
+                               tp::FrameType::DATA, tp::Cmd::GetImu,
+                               payload);
+
+    tb::FrameParser p;
+    p.feed(wire);
+    ASSERT_EQ(p.pending(), 1u);
+
+    tb::Frame f;
+    ASSERT_TRUE(p.try_pop(f));
+    EXPECT_EQ(f.cmd, tp::Cmd::GetImu);
+    ASSERT_EQ(f.payload.size(), payload.size());
+    EXPECT_EQ(f.payload[15], 0xAA);  // 0xAA preserved inside payload
 }
 
 // Regression guard for the V1.3 frame-cap bump: confirm a >1 KB OTA
