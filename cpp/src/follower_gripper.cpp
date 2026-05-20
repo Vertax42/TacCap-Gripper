@@ -2,9 +2,11 @@
 
 #include <taccap/follower_gripper.hpp>
 #include <taccap/error.hpp>
+#include <taccap/log.hpp>
 #include <taccap/protocol/codec.hpp>
 #include <taccap/protocol/payloads.hpp>
 
+#include <chrono>
 #include <cstring>
 
 namespace xense::taccap {
@@ -41,6 +43,45 @@ FollowerGripper::FollowerGripper(const Config& cfg)
       encoder_(t_),
       motor_(t_),
       wrist_(make_wrist_config(cfg)) {
+    // Mirror LeaderGripper: drain leftover DATA, then probe firmware
+    // version + SN once at construction time so the log shows what the
+    // host is talking to.
+    try {
+        t_.send_cmd(protocol::Cmd::StopStream, {},
+                    std::chrono::milliseconds(500));
+    } catch (...) { /* fw already idle */ }
+
+    std::string fw_version_str = "<unknown>";
+    std::string fw_sn_str      = "<unknown>";
+    try {
+        auto ack = t_.send_cmd(protocol::Cmd::GetVersion, {},
+                               std::chrono::milliseconds(500));
+        if (!ack.is_nack &&
+            ack.data.size() == sizeof(protocol::FirmwareVersion)) {
+            auto v = protocol::decode_version(ack.data.data(),
+                                              ack.data.size());
+            fw_version_str = std::to_string(v.major) + "." +
+                             std::to_string(v.minor) + "." +
+                             std::to_string(v.patch) + "." +
+                             std::to_string(v.build);
+        }
+    } catch (...) {}
+    try {
+        auto ack = t_.send_cmd(protocol::Cmd::GetSn, {},
+                               std::chrono::milliseconds(500));
+        if (!ack.is_nack && !ack.data.empty()) {
+            fw_sn_str = protocol::decode_sn(ack.data.data(),
+                                            ack.data.size());
+        }
+    } catch (...) {}
+
+    logger()->info(
+        "FollowerGripper opened: device={} firmware={} sn={} "
+        "tactile_left={} tactile_right={} wrist={}",
+        cfg_.mcu_device, fw_version_str, fw_sn_str,
+        cfg_.tactile_left_serial, cfg_.tactile_right_serial,
+        cfg_.wrist_video);
+
     if (!cfg_.tactile_left_serial.empty()) {
         tac_l_ = std::make_unique<TactileSensor>(
             TactileSensor::Config{cfg_.tactile_left_serial, cfg_.rectify_tactile});
