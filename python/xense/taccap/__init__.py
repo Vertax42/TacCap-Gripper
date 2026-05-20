@@ -72,6 +72,7 @@ Camera = _taccap_native.Camera
 TactileSensor = _taccap_native.TactileSensor
 OtaSession = _taccap_native.OtaSession
 OtaTargetVersion = _taccap_native.OtaTargetVersion
+OtaStatus = _taccap_native.OtaStatus
 KeyState = _taccap_native.KeyState
 crc32_iso_hdlc = _taccap_native.crc32_iso_hdlc
 

@@ -242,6 +242,21 @@ void bind_components(py::module_& m) {
         .def("off", &SensorErrors::off, py::arg("subscription_id"));
 
     // ---- OtaSession (V1.3) ---------------------------------------------
+    // OtaStatus is the wire payload returned by Cmd::OtaGetStatus; bound
+    // here so `OtaSession.get_status()` can hand it back to Python.
+    py::class_<xense::taccap::protocol::OtaStatus>(m, "OtaStatus")
+        .def_readonly("state",         &xense::taccap::protocol::OtaStatus::state)
+        .def_readonly("error_code",    &xense::taccap::protocol::OtaStatus::error_code)
+        .def_readonly("bytes_written", &xense::taccap::protocol::OtaStatus::bytes_written)
+        .def_readonly("progress_ppt",  &xense::taccap::protocol::OtaStatus::progress_ppt)
+        .def("__repr__", [](const xense::taccap::protocol::OtaStatus& s) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf),
+                "OtaStatus(state=%u, err=0x%02X, bytes=%u, ppt=%u)",
+                s.state, s.error_code, s.bytes_written, s.progress_ppt);
+            return std::string(buf);
+        });
+
     py::class_<OtaSession::TargetVersion>(m, "OtaTargetVersion")
         .def(py::init<>())
         .def(py::init<uint8_t, uint8_t, uint8_t, uint8_t>(),
