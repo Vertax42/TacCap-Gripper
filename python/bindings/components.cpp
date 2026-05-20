@@ -15,11 +15,14 @@
 #include <taccap/components/imu.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/camera.hpp>
+#include <taccap/components/key.hpp>
+#include <taccap/components/sensor_errors.hpp>
 #include <taccap/components/tactile_sensor.hpp>
 #include <taccap/components/motor.hpp>
 #include <taccap/follower_gripper.hpp>
 #include <taccap/leader_gripper.hpp>
 #include <taccap/discovery.hpp>
+#include <taccap/ota.hpp>
 
 #include <chrono>
 #include <memory>
@@ -162,7 +165,157 @@ void bind_components(py::module_& m) {
                 } catch (...) {}
             });
         }, py::arg("callback"))
-        .def("off", &IMU::off, py::arg("subscription_id"));
+        .def("off", &IMU::off, py::arg("subscription_id"))
+        .def("set_mag_calibration", [](IMU& self,
+                                       std::array<float, 3> hard,
+                                       std::array<float, 9> soft,
+                                       unsigned timeout_ms) {
+            py::gil_scoped_release gil;
+            self.set_mag_calibration(hard, soft,
+                                     std::chrono::milliseconds(timeout_ms));
+        },
+            py::arg("hard_iron"),
+            py::arg("soft_iron_row_major"),
+            py::arg("timeout_ms") = 500u);
+
+    // ---- KeySample + Key (V1.4) ----------------------------------------
+    py::class_<KeySample>(m, "KeySample")
+        .def_property_readonly("host_time", [](const KeySample& s) {
+            return tp_to_seconds(s.host_time);
+        })
+        .def_readonly("key_id",    &KeySample::key_id)
+        .def_readonly("key_state", &KeySample::key_state)
+        .def("__repr__", [](const KeySample& s) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf),
+                "KeySample(key_id=%u, key_state=%u)", s.key_id, s.key_state);
+            return std::string(buf);
+        });
+    py::class_<Key>(m, "Key")
+        .def("on_event", [](Key& self, py::function pycb) {
+            auto cb = make_gil_safe_callback(std::move(pycb));
+            return self.on_event([cb](const KeySample& s) {
+                py::gil_scoped_acquire acq;
+                try { (*cb)(s); }
+                catch (py::error_already_set& e) {
+                    e.discard_as_unraisable("xense.taccap.Key callback");
+                } catch (...) {}
+            });
+        }, py::arg("callback"))
+        .def("off", &Key::off, py::arg("subscription_id"));
+    // KeyState constants for ergonomic comparison from Python.
+    py::module_ key_state_mod = m.def_submodule("KeyState",
+        "TC-GU-01 button state constants (V1.4).");
+    key_state_mod.attr("SingleClickDown") = py::int_(xense::taccap::protocol::KeyState::SingleClickDown);
+    key_state_mod.attr("SingleClickUp")   = py::int_(xense::taccap::protocol::KeyState::SingleClickUp);
+    key_state_mod.attr("DoubleClick")     = py::int_(xense::taccap::protocol::KeyState::DoubleClick);
+    key_state_mod.attr("LongPressDown")   = py::int_(xense::taccap::protocol::KeyState::LongPressDown);
+    key_state_mod.attr("LongPressUp")     = py::int_(xense::taccap::protocol::KeyState::LongPressUp);
+
+    // ---- SensorErrorSample + SensorErrors (V1.6) -----------------------
+    py::class_<SensorErrorSample>(m, "SensorErrorSample")
+        .def_property_readonly("host_time", [](const SensorErrorSample& s) {
+            return tp_to_seconds(s.host_time);
+        })
+        .def_readonly("sensor_id",        &SensorErrorSample::sensor_id)
+        .def_readonly("error_code",       &SensorErrorSample::error_code)
+        .def_readonly("error_count",      &SensorErrorSample::error_count)
+        .def_readonly("mcu_timestamp_ms", &SensorErrorSample::mcu_timestamp_ms)
+        .def("__repr__", [](const SensorErrorSample& s) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf),
+                "SensorErrorSample(sensor=%u, code=0x%02x, count=%u, ts_ms=%u)",
+                s.sensor_id, s.error_code, s.error_count, s.mcu_timestamp_ms);
+            return std::string(buf);
+        });
+    py::class_<SensorErrors>(m, "SensorErrors")
+        .def("on_report", [](SensorErrors& self, py::function pycb) {
+            auto cb = make_gil_safe_callback(std::move(pycb));
+            return self.on_report([cb](const SensorErrorSample& s) {
+                py::gil_scoped_acquire acq;
+                try { (*cb)(s); }
+                catch (py::error_already_set& e) {
+                    e.discard_as_unraisable("xense.taccap.SensorErrors callback");
+                } catch (...) {}
+            });
+        }, py::arg("callback"))
+        .def("off", &SensorErrors::off, py::arg("subscription_id"));
+
+    // ---- OtaSession (V1.3) ---------------------------------------------
+    py::class_<OtaSession::TargetVersion>(m, "OtaTargetVersion")
+        .def(py::init<>())
+        .def(py::init<uint8_t, uint8_t, uint8_t, uint8_t>(),
+             py::arg("major"), py::arg("minor"), py::arg("patch"), py::arg("build"))
+        .def_readwrite("major", &OtaSession::TargetVersion::major)
+        .def_readwrite("minor", &OtaSession::TargetVersion::minor)
+        .def_readwrite("patch", &OtaSession::TargetVersion::patch)
+        .def_readwrite("build", &OtaSession::TargetVersion::build);
+
+    py::class_<OtaSession>(m, "OtaSession")
+        .def("update_from_file", [](OtaSession& self,
+                                    const std::string& path,
+                                    const OtaSession::TargetVersion& v,
+                                    py::object on_progress) {
+            OtaSession::ProgressCallback cb;
+            if (!on_progress.is_none()) {
+                auto pycb = make_gil_safe_callback(py::function(on_progress));
+                cb = [pycb](uint32_t wr, uint32_t tot) {
+                    py::gil_scoped_acquire acq;
+                    try { (*pycb)(wr, tot); }
+                    catch (py::error_already_set& e) {
+                        e.discard_as_unraisable("OtaSession progress");
+                    } catch (...) {}
+                };
+            }
+            py::gil_scoped_release gil;
+            self.update_from_file(path, v, std::move(cb));
+        },
+            py::arg("firmware_path"),
+            py::arg("target_version"),
+            py::arg("on_progress") = py::none())
+        .def("update_from_bytes", [](OtaSession& self,
+                                     py::bytes blob,
+                                     const OtaSession::TargetVersion& v,
+                                     py::object on_progress) {
+            // Materialise the bytes view; copy into std::vector once.
+            std::string buf = blob;
+            std::vector<uint8_t> fw(buf.begin(), buf.end());
+            OtaSession::ProgressCallback cb;
+            if (!on_progress.is_none()) {
+                auto pycb = make_gil_safe_callback(py::function(on_progress));
+                cb = [pycb](uint32_t wr, uint32_t tot) {
+                    py::gil_scoped_acquire acq;
+                    try { (*pycb)(wr, tot); }
+                    catch (py::error_already_set& e) {
+                        e.discard_as_unraisable("OtaSession progress");
+                    } catch (...) {}
+                };
+            }
+            py::gil_scoped_release gil;
+            self.update_from_bytes(fw, v, std::move(cb));
+        },
+            py::arg("firmware_bytes"),
+            py::arg("target_version"),
+            py::arg("on_progress") = py::none())
+        .def("get_status", [](OtaSession& self, unsigned timeout_ms) {
+            py::gil_scoped_release gil;
+            return self.get_status(std::chrono::milliseconds(timeout_ms));
+        }, py::arg("timeout_ms") = 500u)
+        .def("abort", [](OtaSession& self) {
+            py::gil_scoped_release gil;
+            self.abort();
+        });
+
+    m.def("crc32_iso_hdlc", [](py::buffer b) {
+        py::buffer_info info = b.request();
+        if (info.itemsize != 1) {
+            throw py::value_error("crc32_iso_hdlc: needs a bytes-like buffer");
+        }
+        return xense::taccap::crc32_iso_hdlc(
+            static_cast<const uint8_t*>(info.ptr),
+            static_cast<size_t>(info.size));
+    }, py::arg("data"),
+       "Compute CRC32 with the same parameters as zlib.crc32 / firmware.");
 
     // ---- MotorStatusSample ----------------------------------------------
     py::class_<MotorStatusSample>(m, "MotorStatusSample")
@@ -382,6 +535,9 @@ void bind_components(py::module_& m) {
         .def_property_readonly("wrist_camera",  [](LeaderGripper& g) -> Camera&         { return g.wrist_camera(); },  py::return_value_policy::reference_internal)
         .def_property_readonly("tactile_left",  [](LeaderGripper& g) -> TactileSensor&  { return g.tactile_left(); },  py::return_value_policy::reference_internal)
         .def_property_readonly("tactile_right", [](LeaderGripper& g) -> TactileSensor&  { return g.tactile_right(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("key",           [](LeaderGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
+        .def_property_readonly("sensor_errors", [](LeaderGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("ota",           [](LeaderGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](LeaderGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
         .def_property_readonly("is_streaming",  &LeaderGripper::is_streaming)
         .def("__enter__", [](LeaderGripper& g) -> LeaderGripper& { return g; })
@@ -437,6 +593,9 @@ void bind_components(py::module_& m) {
         .def_property_readonly("wrist_camera",  [](FollowerGripper& g) -> Camera&         { return g.wrist_camera(); },  py::return_value_policy::reference_internal)
         .def_property_readonly("tactile_left",  [](FollowerGripper& g) -> TactileSensor&  { return g.tactile_left(); },  py::return_value_policy::reference_internal)
         .def_property_readonly("tactile_right", [](FollowerGripper& g) -> TactileSensor&  { return g.tactile_right(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("key",           [](FollowerGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
+        .def_property_readonly("sensor_errors", [](FollowerGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("ota",           [](FollowerGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](FollowerGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
         .def_property_readonly("is_streaming",  &FollowerGripper::is_streaming)
         .def("__enter__", [](FollowerGripper& g) -> FollowerGripper& { return g; })

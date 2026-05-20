@@ -31,8 +31,11 @@
 #include <taccap/components/camera.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/imu.hpp>
+#include <taccap/components/key.hpp>
+#include <taccap/components/sensor_errors.hpp>
 #include <taccap/components/tactile_sensor.hpp>
 #include <taccap/discovery.hpp>
+#include <taccap/ota.hpp>
 
 #include <memory>
 #include <string>
@@ -70,12 +73,15 @@ public:
     static std::unique_ptr<LeaderGripper> open();
 
     // Component accessors.
-    IMU&            imu()           noexcept { return imu_; }
-    Encoder&        encoder()       noexcept { return encoder_; }
-    Camera&         wrist_camera()  noexcept { return wrist_; }
-    TactileSensor&  tactile_left()  noexcept { return *tac_l_; }
-    TactileSensor&  tactile_right() noexcept { return *tac_r_; }
-    bus::Transport& transport()     noexcept { return t_; }
+    IMU&            imu()            noexcept { return imu_; }
+    Encoder&        encoder()        noexcept { return encoder_; }
+    Camera&         wrist_camera()   noexcept { return wrist_; }
+    TactileSensor&  tactile_left()   noexcept { return *tac_l_; }
+    TactileSensor&  tactile_right()  noexcept { return *tac_r_; }
+    Key&            key()            noexcept { return key_; }            // V1.4
+    SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
+    OtaSession&     ota()            noexcept { return ota_; }            // V1.3
+    bus::Transport& transport()      noexcept { return t_; }
 
     // Streaming lifecycle.
     void start_streaming(unsigned imu_hz = 100, unsigned encoder_hz = 100);
@@ -89,6 +95,9 @@ private:
     bus::Transport                  t_;
     IMU                             imu_;
     Encoder                         encoder_;
+    Key                             key_;       // V1.4
+    SensorErrors                    errors_;    // V1.6
+    OtaSession                      ota_;       // V1.3
     Camera                          wrist_;
     std::unique_ptr<TactileSensor>  tac_l_;
     std::unique_ptr<TactileSensor>  tac_r_;

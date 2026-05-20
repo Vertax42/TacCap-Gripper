@@ -41,6 +41,9 @@ LeaderGripper::LeaderGripper(const Config& cfg)
       t_(make_transport_config(cfg)),
       imu_(t_),
       encoder_(t_),
+      key_(t_),
+      errors_(t_),
+      ota_(t_),
       wrist_(make_wrist_config(cfg)) {
     // Read firmware version + SN once at construction time so the log
     // shows what the host is actually talking to. A best-effort

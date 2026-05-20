@@ -32,9 +32,12 @@
 #include <taccap/components/camera.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/imu.hpp>
+#include <taccap/components/key.hpp>
 #include <taccap/components/motor.hpp>
+#include <taccap/components/sensor_errors.hpp>
 #include <taccap/components/tactile_sensor.hpp>
 #include <taccap/discovery.hpp>
+#include <taccap/ota.hpp>
 
 #include <memory>
 #include <string>
@@ -69,13 +72,16 @@ public:
     static std::unique_ptr<FollowerGripper> open();
 
     // Component accessors.
-    IMU&            imu()           noexcept { return imu_; }
-    Encoder&        encoder()       noexcept { return encoder_; }
-    Camera&         wrist_camera()  noexcept { return wrist_; }
-    TactileSensor&  tactile_left()  noexcept { return *tac_l_; }
-    TactileSensor&  tactile_right() noexcept { return *tac_r_; }
-    Motor&          motor()         noexcept { return motor_; }
-    bus::Transport& transport()     noexcept { return t_; }
+    IMU&            imu()            noexcept { return imu_; }
+    Encoder&        encoder()        noexcept { return encoder_; }
+    Camera&         wrist_camera()   noexcept { return wrist_; }
+    TactileSensor&  tactile_left()   noexcept { return *tac_l_; }
+    TactileSensor&  tactile_right()  noexcept { return *tac_r_; }
+    Motor&          motor()          noexcept { return motor_; }
+    Key&            key()            noexcept { return key_; }            // V1.4
+    SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
+    OtaSession&     ota()            noexcept { return ota_; }            // V1.3
+    bus::Transport& transport()      noexcept { return t_; }
 
     // Streaming lifecycle. motor_hz=0 means "don't stream motor status",
     // matching the leader streaming surface; non-zero adds MotorStatus to
@@ -94,6 +100,9 @@ private:
     IMU                             imu_;
     Encoder                         encoder_;
     Motor                           motor_;
+    Key                             key_;       // V1.4
+    SensorErrors                    errors_;    // V1.6
+    OtaSession                      ota_;       // V1.3
     Camera                          wrist_;
     std::unique_ptr<TactileSensor>  tac_l_;
     std::unique_ptr<TactileSensor>  tac_r_;

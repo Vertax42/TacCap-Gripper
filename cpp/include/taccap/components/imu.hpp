@@ -55,6 +55,15 @@ public:
     SubId on_data(Callback cb);
     void  off(SubId id);
 
+    // V1.4 — write magnetometer hard-iron offsets + soft-iron correction
+    // matrix to firmware (Cmd::SetImuMagCal, 0x26). `hard_iron` is the
+    // 3-axis bias in µT; `soft_iron` is the 3×3 correction matrix in
+    // ROW-major order (same layout the firmware stores after MotionCal).
+    // Throws on NACK / timeout. Wire layout pinned by tests.
+    void set_mag_calibration(const std::array<float, 3>& hard_iron,
+                             const std::array<float, 9>& soft_iron_row_major,
+                             std::chrono::milliseconds timeout = std::chrono::milliseconds{500});
+
     // Decode a wire-format ImuData payload into an ImuSample. Public so
     // tests (and curious users) can exercise the unit conversion.
     static ImuSample decode(const std::uint8_t* payload, std::size_t len);

@@ -77,4 +77,25 @@ IMU::SubId IMU::on_data(Callback cb) {
 
 void IMU::off(SubId id) { t_.unsubscribe(id); }
 
+void IMU::set_mag_calibration(const std::array<float, 3>& hard_iron,
+                              const std::array<float, 9>& soft_iron_row_major,
+                              std::chrono::milliseconds timeout) {
+    protocol::ImuMagCal cal{};
+    cal.hard_iron[0] = hard_iron[0];
+    cal.hard_iron[1] = hard_iron[1];
+    cal.hard_iron[2] = hard_iron[2];
+    // soft_iron_row_major[r*3 + c] -> cal.soft_iron[r][c]
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            cal.soft_iron[r][c] = soft_iron_row_major[r * 3 + c];
+        }
+    }
+    auto ack = t_.send_cmd(protocol::Cmd::SetImuMagCal,
+                           protocol::encode(cal), timeout);
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("IMU::set_mag_calibration NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+}
+
 }  // namespace xense::taccap

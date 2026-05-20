@@ -59,13 +59,21 @@ TransportStats = _taccap_native.TransportStats
 ImuSample = _taccap_native.ImuSample
 EncoderSample = _taccap_native.EncoderSample
 MotorStatusSample = _taccap_native.MotorStatusSample
+KeySample = _taccap_native.KeySample
+SensorErrorSample = _taccap_native.SensorErrorSample
 CameraFrame = _taccap_native.CameraFrame
 TactileFrame = _taccap_native.TactileFrame
 IMU = _taccap_native.IMU
 Encoder = _taccap_native.Encoder
 Motor = _taccap_native.Motor
+Key = _taccap_native.Key
+SensorErrors = _taccap_native.SensorErrors
 Camera = _taccap_native.Camera
 TactileSensor = _taccap_native.TactileSensor
+OtaSession = _taccap_native.OtaSession
+OtaTargetVersion = _taccap_native.OtaTargetVersion
+KeyState = _taccap_native.KeyState
+crc32_iso_hdlc = _taccap_native.crc32_iso_hdlc
 
 # ---- Aggregate gripper + discovery ------------------------------------------
 LeaderGripper = _taccap_native.LeaderGripper

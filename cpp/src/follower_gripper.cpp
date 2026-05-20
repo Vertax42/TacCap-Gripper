@@ -42,6 +42,9 @@ FollowerGripper::FollowerGripper(const Config& cfg)
       imu_(t_),
       encoder_(t_),
       motor_(t_),
+      key_(t_),
+      errors_(t_),
+      ota_(t_),
       wrist_(make_wrist_config(cfg)) {
     // Mirror LeaderGripper: drain leftover DATA, then probe firmware
     // version + SN once at construction time so the log shows what the

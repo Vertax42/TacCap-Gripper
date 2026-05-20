@@ -9,6 +9,7 @@ add_executable(taccap_unit_tests
     test_stuff.cpp
     test_transport.cpp
     test_components.cpp
+    test_upper_v16.cpp
 )
 
 target_link_libraries(taccap_unit_tests
