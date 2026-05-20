@@ -38,12 +38,19 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::GetEskin1:           return "GetEskin1";
         case Cmd::GetEskin2:           return "GetEskin2";
         case Cmd::GetAllSensors:       return "GetAllSensors";
+        case Cmd::KeyStatus:           return "KeyStatus";
 
         case Cmd::StartStream:         return "StartStream";
         case Cmd::StopStream:          return "StopStream";
         case Cmd::SetStreamRate:       return "SetStreamRate";
         case Cmd::SetStreamMode:       return "SetStreamMode";
         case Cmd::SetEncoderZero:      return "SetEncoderZero";
+        case Cmd::SetImuCal:           return "SetImuCal";
+        case Cmd::SetImuMagCal:        return "SetImuMagCal";
+        case Cmd::SetCalResult:        return "SetCalResult";
+        case Cmd::SetAllCalResult:     return "SetAllCalResult";
+        case Cmd::GetCalResult:        return "GetCalResult";
+        case Cmd::SensorErrorReport:   return "SensorErrorReport";
 
         case Cmd::MotorEnable:         return "MotorEnable";
         case Cmd::MotorDisable:        return "MotorDisable";
@@ -60,6 +67,13 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::GetEncoderConfig:    return "GetEncoderConfig";
         case Cmd::SetEskinConfig:      return "SetEskinConfig";
         case Cmd::GetEskinConfig:      return "GetEskinConfig";
+
+        case Cmd::OtaStart:            return "OtaStart";
+        case Cmd::OtaWriteBlock:       return "OtaWriteBlock";
+        case Cmd::OtaVerify:           return "OtaVerify";
+        case Cmd::OtaApply:            return "OtaApply";
+        case Cmd::OtaAbort:            return "OtaAbort";
+        case Cmd::OtaGetStatus:        return "OtaGetStatus";
     }
     return "Cmd?";
 }
@@ -76,6 +90,12 @@ const char* to_string(ErrorCode e) noexcept {
         case ErrorCode::SensorOffline:  return "SensorOffline";
         case ErrorCode::SysBusy:        return "SysBusy";
         case ErrorCode::SeqMismatch:    return "SeqMismatch";
+        case ErrorCode::OtaBusy:        return "OtaBusy";
+        case ErrorCode::OtaNotStarted:  return "OtaNotStarted";
+        case ErrorCode::OtaOffsetErr:   return "OtaOffsetErr";
+        case ErrorCode::OtaFlashErr:    return "OtaFlashErr";
+        case ErrorCode::OtaVerifyFail:  return "OtaVerifyFail";
+        case ErrorCode::OtaSizeExceed:  return "OtaSizeExceed";
     }
     return "ErrorCode?";
 }

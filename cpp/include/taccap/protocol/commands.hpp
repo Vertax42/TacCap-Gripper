@@ -2,10 +2,13 @@
 //
 // TC-GU-01 protocol enumerations. Wire values mirror the firmware's
 // authoritative definitions in
-//   Embedded Software/tc-gu-01/App/protocol/{protocol_cmd.h,protocol_frame.h}
+//   third_party/firmware/tc-gu-01/App/protocol/{protocol_cmd.h,protocol_frame.h}
+//   (clone-on-demand, see README "Firmware / PC GUI reference repos").
 //
 // When in doubt, the firmware source is canonical. The PROTOCOL.md document
 // and any host-side Python implementation are secondary.
+//
+// Tracked firmware protocol version: **V1.6** (2026-05-19).
 
 #pragma once
 
@@ -31,10 +34,6 @@ enum class FrameType : uint8_t {
 };
 
 // Application command byte. Mirrors firmware protocol_cmd.h exactly.
-//
-// Note: PROTOCOL.md V1.2 lists MOTOR_SET_ZERO=0x33 but the firmware does NOT
-// implement it yet, so it is intentionally absent here. Add it when the
-// firmware lands.
 enum class Cmd : uint8_t {
     // System (0x00–0x0F)
     Heartbeat       = 0x01,
@@ -51,15 +50,20 @@ enum class Cmd : uint8_t {
     GetEskin1       = 0x12,
     GetEskin2       = 0x13,
     GetAllSensors   = 0x14,
+    KeyStatus       = 0x15,    // V1.4 — device-side button, payload=key_status_payload_t
 
-    // Stream control (0x20–0x2F)
+    // Stream control + calibration (0x20–0x2F)
     StartStream         = 0x20,
     StopStream          = 0x21,
     SetStreamRate       = 0x22,
     SetStreamMode       = 0x23,
     SetEncoderZero      = 0x24,
-    // 0x25 = SetImuCalibration in earlier docs; firmware leaves room here
-    // but does not currently expose the command.
+    SetImuCal           = 0x25,    // accel/gyro calibration (firmware-side params)
+    SetImuMagCal        = 0x26,    // V1.4 — magnetometer hard/soft iron, imu_mag_cal_t (48B)
+    SetCalResult        = 0x27,    // V1.5 — write one sensor's cal-success flag, cal_set_payload_t
+    SetAllCalResult     = 0x28,    // V1.5 — bulk write cal mask, cal_set_all_payload_t
+    GetCalResult        = 0x29,    // V1.5 — read cal-success mask, cal_get_response_t
+    SensorErrorReport   = 0x2A,    // V1.6 — DATA-stream-only, sensor_error_report_t (8B)
 
     // Motor (0x30–0x4F)
     MotorEnable         = 0x30,
@@ -78,6 +82,14 @@ enum class Cmd : uint8_t {
     GetEncoderConfig    = 0x63,
     SetEskinConfig      = 0x64,
     GetEskinConfig      = 0x65,
+
+    // OTA upgrade (0x70–0x7F) — added V1.3
+    OtaStart            = 0x70,    // ota_start_t (12B)
+    OtaWriteBlock       = 0x71,    // ota_write_block_t (6 + len, len ≤ OTA_BLOCK_SIZE)
+    OtaVerify           = 0x72,
+    OtaApply            = 0x73,
+    OtaAbort            = 0x74,
+    OtaGetStatus        = 0x75,    // response: ota_status_t (8B)
 };
 
 // Error code byte returned in ACK/NACK frames. Mirrors firmware ERR_*.
@@ -92,6 +104,13 @@ enum class ErrorCode : uint8_t {
     SensorOffline   = 0x20,
     SysBusy         = 0x30,
     SeqMismatch     = 0x40,
+    // OTA error band (V1.3+) — only returned by Cmd::Ota* NACKs.
+    OtaBusy         = 0x50,
+    OtaNotStarted   = 0x51,
+    OtaOffsetErr    = 0x52,
+    OtaFlashErr     = 0x53,
+    OtaVerifyFail   = 0x54,
+    OtaSizeExceed   = 0x55,
 };
 
 // to_string helpers (returns a stable C string; never null).

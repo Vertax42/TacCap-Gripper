@@ -33,6 +33,28 @@ std::vector<uint8_t> encode(const StreamConfig& v)        { return encode_pod(v)
 std::vector<uint8_t> encode(const ImuConfig& v)           { return encode_pod(v); }
 std::vector<uint8_t> encode(const EncoderConfig& v)       { return encode_pod(v); }
 std::vector<uint8_t> encode(const EskinConfig& v)         { return encode_pod(v); }
+// V1.4+
+std::vector<uint8_t> encode(const ImuMagCal& v)           { return encode_pod(v); }
+std::vector<uint8_t> encode(const CalSetPayload& v)       { return encode_pod(v); }
+std::vector<uint8_t> encode(const CalSetAllPayload& v)    { return encode_pod(v); }
+// V1.3 OTA
+std::vector<uint8_t> encode(const OtaStart& v)            { return encode_pod(v); }
+
+std::vector<uint8_t> encode_ota_write_block(uint32_t offset,
+                                            const uint8_t* data,
+                                            uint16_t length) {
+    // Variable-length: 6-byte header (offset + length) followed by `length`
+    // bytes of raw firmware data. Mirror firmware ota_write_block_t.
+    std::vector<uint8_t> out(sizeof(OtaWriteBlockHeader) + length);
+    OtaWriteBlockHeader hdr{};
+    hdr.offset = offset;
+    hdr.length = length;
+    std::memcpy(out.data(), &hdr, sizeof(hdr));
+    if (length > 0 && data != nullptr) {
+        std::memcpy(out.data() + sizeof(hdr), data, length);
+    }
+    return out;
+}
 
 std::vector<uint8_t> encode_sn(const std::string& sn) {
     std::vector<uint8_t> out(sizeof(SnInfo), 0);
@@ -89,6 +111,29 @@ StreamConfig decode_stream_config(const uint8_t* data, std::size_t len) {
 }
 AckPayload decode_ack(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<AckPayload>(data, len, "AckPayload");
+}
+
+// V1.4+
+KeyStatusPayload decode_key_status(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<KeyStatusPayload>(data, len, "KeyStatusPayload");
+}
+ImuMagCal decode_imu_mag_cal(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<ImuMagCal>(data, len, "ImuMagCal");
+}
+
+// V1.5+
+CalGetResponse decode_cal_get(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<CalGetResponse>(data, len, "CalGetResponse");
+}
+
+// V1.6+
+SensorErrorReport decode_sensor_error(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<SensorErrorReport>(data, len, "SensorErrorReport");
+}
+
+// V1.3 OTA
+OtaStatus decode_ota_status(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<OtaStatus>(data, len, "OtaStatus");
 }
 
 EskinFrame decode_eskin(const uint8_t* data, std::size_t len) {

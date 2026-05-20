@@ -45,6 +45,18 @@ std::vector<uint8_t> encode(const EncoderConfig&);
 std::vector<uint8_t> encode(const EskinConfig&);
 std::vector<uint8_t> encode_sn(const std::string& sn);   // 17-byte NUL-padded
 
+// V1.4+ — calibration / key
+std::vector<uint8_t> encode(const ImuMagCal&);
+std::vector<uint8_t> encode(const CalSetPayload&);
+std::vector<uint8_t> encode(const CalSetAllPayload&);
+
+// V1.3+ — OTA. write_block has a variable-length tail so we take the
+// data pointer + length explicitly rather than wrap them in a struct.
+std::vector<uint8_t> encode(const OtaStart&);
+std::vector<uint8_t> encode_ota_write_block(uint32_t offset,
+                                            const uint8_t* data,
+                                            uint16_t length);
+
 // ---- Specific payload decoders (throw ProtocolError on size mismatch) -----
 
 FirmwareVersion    decode_version(const uint8_t* data, std::size_t len);
@@ -59,6 +71,15 @@ EskinConfig        decode_eskin_config(const uint8_t* data, std::size_t len);
 MotorStatus        decode_motor_status(const uint8_t* data, std::size_t len);
 StreamConfig       decode_stream_config(const uint8_t* data, std::size_t len);
 AckPayload         decode_ack(const uint8_t* data, std::size_t len);
+// V1.4+
+KeyStatusPayload   decode_key_status(const uint8_t* data, std::size_t len);
+ImuMagCal          decode_imu_mag_cal(const uint8_t* data, std::size_t len);
+// V1.5+
+CalGetResponse     decode_cal_get(const uint8_t* data, std::size_t len);
+// V1.6+
+SensorErrorReport  decode_sensor_error(const uint8_t* data, std::size_t len);
+// V1.3 OTA
+OtaStatus          decode_ota_status(const uint8_t* data, std::size_t len);
 
 // EskinFrame collapses the wire layout (header + variable-length body) into
 // one easy-to-use object. Cell data is stored in either values_u16 (when

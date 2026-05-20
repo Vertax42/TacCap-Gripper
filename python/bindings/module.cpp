@@ -104,11 +104,18 @@ PYBIND11_MODULE(_taccap_native, m) {
         .value("GetEskin1",          tp::Cmd::GetEskin1)
         .value("GetEskin2",          tp::Cmd::GetEskin2)
         .value("GetAllSensors",      tp::Cmd::GetAllSensors)
+        .value("KeyStatus",          tp::Cmd::KeyStatus)
         .value("StartStream",        tp::Cmd::StartStream)
         .value("StopStream",         tp::Cmd::StopStream)
         .value("SetStreamRate",      tp::Cmd::SetStreamRate)
         .value("SetStreamMode",      tp::Cmd::SetStreamMode)
         .value("SetEncoderZero",     tp::Cmd::SetEncoderZero)
+        .value("SetImuCal",          tp::Cmd::SetImuCal)
+        .value("SetImuMagCal",       tp::Cmd::SetImuMagCal)
+        .value("SetCalResult",       tp::Cmd::SetCalResult)
+        .value("SetAllCalResult",    tp::Cmd::SetAllCalResult)
+        .value("GetCalResult",       tp::Cmd::GetCalResult)
+        .value("SensorErrorReport",  tp::Cmd::SensorErrorReport)
         .value("MotorEnable",        tp::Cmd::MotorEnable)
         .value("MotorDisable",       tp::Cmd::MotorDisable)
         .value("MotorClearFault",    tp::Cmd::MotorClearFault)
@@ -122,7 +129,13 @@ PYBIND11_MODULE(_taccap_native, m) {
         .value("SetEncoderConfig",   tp::Cmd::SetEncoderConfig)
         .value("GetEncoderConfig",   tp::Cmd::GetEncoderConfig)
         .value("SetEskinConfig",     tp::Cmd::SetEskinConfig)
-        .value("GetEskinConfig",     tp::Cmd::GetEskinConfig);
+        .value("GetEskinConfig",     tp::Cmd::GetEskinConfig)
+        .value("OtaStart",           tp::Cmd::OtaStart)
+        .value("OtaWriteBlock",      tp::Cmd::OtaWriteBlock)
+        .value("OtaVerify",          tp::Cmd::OtaVerify)
+        .value("OtaApply",           tp::Cmd::OtaApply)
+        .value("OtaAbort",           tp::Cmd::OtaAbort)
+        .value("OtaGetStatus",       tp::Cmd::OtaGetStatus);
 
     py::enum_<tp::ErrorCode>(m, "ErrorCode")
         .value("Ok",             tp::ErrorCode::Ok)
@@ -134,7 +147,13 @@ PYBIND11_MODULE(_taccap_native, m) {
         .value("MotorFault",     tp::ErrorCode::MotorFault)
         .value("SensorOffline",  tp::ErrorCode::SensorOffline)
         .value("SysBusy",        tp::ErrorCode::SysBusy)
-        .value("SeqMismatch",    tp::ErrorCode::SeqMismatch);
+        .value("SeqMismatch",    tp::ErrorCode::SeqMismatch)
+        .value("OtaBusy",        tp::ErrorCode::OtaBusy)
+        .value("OtaNotStarted",  tp::ErrorCode::OtaNotStarted)
+        .value("OtaOffsetErr",   tp::ErrorCode::OtaOffsetErr)
+        .value("OtaFlashErr",    tp::ErrorCode::OtaFlashErr)
+        .value("OtaVerifyFail",  tp::ErrorCode::OtaVerifyFail)
+        .value("OtaSizeExceed",  tp::ErrorCode::OtaSizeExceed);
 
     // Module-level frame constants
     m.attr("FRAME_HEAD")      = py::int_(tb::FRAME_HEAD);
