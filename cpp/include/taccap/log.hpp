@@ -135,12 +135,19 @@ inline std::shared_ptr<spdlog::sinks::sink> try_make_file_sink() {
 
 }  // namespace detail
 
+// Initialise the named spdlog logger if it isn't registered yet, then
+// return it. Looking up by name on every call (instead of caching in a
+// function-local static) is intentional: with -fvisibility-inlines-hidden
+// each .so that includes this header gets its OWN copy of the inline-
+// function static, and writes from the call_once lambda in one .so are
+// invisible to the outer function in the same .so (the symbol resolves
+// to a different storage location once the lambda is emitted as a
+// separately-linked function). The spdlog registry already holds the
+// canonical instance, so we lean on it instead of duplicating state.
 inline std::shared_ptr<spdlog::logger> logger() {
-    static std::shared_ptr<spdlog::logger> cached;
     static std::once_flag flag;
     std::call_once(flag, [] {
-        cached = spdlog::get("xense.taccap");
-        if (cached) return;  // Already registered by another TU / Python.
+        if (spdlog::get("xense.taccap")) return;
 
         auto console_sink =
             std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
@@ -152,23 +159,19 @@ inline std::shared_ptr<spdlog::logger> logger() {
         if (auto file_sink = detail::try_make_file_sink()) {
             sinks.push_back(file_sink);
         }
-        cached = std::make_shared<spdlog::logger>(
+        auto created = std::make_shared<spdlog::logger>(
             "xense.taccap", sinks.begin(), sinks.end());
-        // Logger-level DEBUG so the file sink sees everything; console
-        // filters via its own sink level (default INFO).
-        cached->set_level(spdlog::level::debug);
-        cached->flush_on(spdlog::level::warn);
-
+        created->set_level(spdlog::level::debug);
+        created->flush_on(spdlog::level::warn);
         try {
-            spdlog::register_logger(cached);
+            spdlog::register_logger(created);
         } catch (const spdlog::spdlog_ex&) {
-            // Lost the race; pick up whatever ended up registered. The
-            // sink holder may now be stale (points to our unused sink),
-            // but that's harmless for read-only set_console_* calls.
-            cached = spdlog::get("xense.taccap");
+            // Lost the race with another TU; the registry has whoever
+            // got there first — that's fine, our `created` will simply
+            // be dropped when this lambda returns.
         }
     });
-    return cached;
+    return spdlog::get("xense.taccap");
 }
 
 // Console-sink controls. The console sink takes the user-facing level
