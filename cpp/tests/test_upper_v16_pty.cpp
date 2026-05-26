@@ -13,6 +13,7 @@
 
 #include "pty_helper.hpp"
 
+#include <taccap/components/encoder.hpp>
 #include <taccap/components/key.hpp>
 #include <taccap/components/sensor_errors.hpp>
 #include <taccap/components/imu.hpp>
@@ -269,6 +270,135 @@ TEST(ImuMagCalEnd2End, NackThrows) {
     std::array<float, 9> soft = {1, 0, 0,  0, 1, 0,  0, 0, 1};
     EXPECT_THROW(imu.set_mag_calibration(hard, soft), tx::ProtocolError);
     fw.join();
+}
+
+// ============================================================
+// Encoder::set_zero: cmd 0x24, empty payload, ACK-only
+// ============================================================
+
+TEST(EncoderSetZeroEnd2End, WireBytesAndAck) {
+    Pty pty;
+    tb::Transport host(base_config(pty.slave_path()));
+    tx::Encoder enc(host);
+
+    std::optional<tb::Frame> received;
+    std::thread fw([&]() {
+        received = pty.expect_frame();
+        if (received) pty.send_ack_ok(received->seq, tp::Cmd::SetEncoderZero);
+    });
+
+    enc.set_zero();   // throws on NACK / timeout
+    fw.join();
+
+    ASSERT_TRUE(received.has_value());
+    EXPECT_EQ(received->cmd, tp::Cmd::SetEncoderZero);
+    EXPECT_EQ(received->type, tp::FrameType::CMD_NEED_ACK);
+    EXPECT_TRUE(received->payload.empty())
+        << "SetEncoderZero is documented as zero-payload";
+}
+
+TEST(EncoderSetZeroEnd2End, NackThrows) {
+    Pty pty;
+    tb::Transport host(base_config(pty.slave_path()));
+    tx::Encoder enc(host);
+
+    std::thread fw([&]() {
+        auto f = pty.expect_frame();
+        if (f) pty.send_nack(f->seq, tp::ErrorCode::SensorOffline);
+    });
+
+    EXPECT_THROW(enc.set_zero(), tx::ProtocolError);
+    fw.join();
+}
+
+// ============================================================
+// Encoder normalization: clamp position to [0, +inf), preserve velocity
+// ============================================================
+
+namespace {
+
+// Encode an EncoderData POD to wire bytes (firmware just memcpy's the
+// struct into the ACK payload, no special encoding).
+std::vector<uint8_t> encode_encoder_payload(float pos_rad, float vel_radps,
+                                            uint32_t timestamp_us = 12345,
+                                            uint16_t seq = 7) {
+    tp::EncoderData raw{};
+    raw.timestamp_us   = timestamp_us;
+    raw.position_rad   = pos_rad;
+    raw.velocity_rad_s = vel_radps;
+    raw.status         = 0;
+    raw.seq            = seq;
+    std::vector<uint8_t> bytes(sizeof(raw));
+    std::memcpy(bytes.data(), &raw, sizeof(raw));
+    return bytes;
+}
+
+// Drive one ReadOnce round-trip; returns the sample the SDK produced
+// after normalisation.
+tx::EncoderSample read_once_with_payload(float pos_rad, float vel_radps) {
+    Pty pty;
+    tb::Transport host(base_config(pty.slave_path()));
+    tx::Encoder enc(host);
+
+    std::thread fw([&]() {
+        auto f = pty.expect_frame();
+        if (!f) return;
+        EXPECT_EQ(f->cmd, tp::Cmd::GetEncoder);
+        pty.send_response(f->seq, tp::Cmd::GetEncoder,
+                          encode_encoder_payload(pos_rad, vel_radps));
+    });
+
+    auto s = enc.read_once();
+    fw.join();
+    return s;
+}
+
+}  // namespace
+
+TEST(EncoderNormalizeEnd2End, SmallNegativeClampedToZeroSilently) {
+    // Within the "expected post-zero jitter" band — clamped, no warn.
+    auto s = read_once_with_payload(/*pos*/ -0.05f, /*vel*/ 0.0f);
+    EXPECT_FLOAT_EQ(s.position_rad,     0.0f);
+    EXPECT_FLOAT_EQ(s.raw.position_rad, -0.05f)
+        << "raw must preserve firmware-side value";
+}
+
+TEST(EncoderNormalizeEnd2End, LargeNegativeStillClampedToZero) {
+    // Past the warn threshold — clamped AND would warn (we don't sniff
+    // the log here; the rate-limited warning is exercised in calibrate
+    // smoke runs).
+    auto s = read_once_with_payload(/*pos*/ -0.5f, /*vel*/ 0.0f);
+    EXPECT_FLOAT_EQ(s.position_rad,     0.0f);
+    EXPECT_FLOAT_EQ(s.raw.position_rad, -0.5f);
+}
+
+TEST(EncoderNormalizeEnd2End, PositivePositionUntouched) {
+    auto s = read_once_with_payload(/*pos*/ 1.23f, /*vel*/ 0.0f);
+    EXPECT_FLOAT_EQ(s.position_rad,     1.23f);
+    EXPECT_FLOAT_EQ(s.raw.position_rad, 1.23f);
+}
+
+TEST(EncoderNormalizeEnd2End, ZeroExactlyUntouched) {
+    // Boundary: pos == 0 must not flip sign or trip the warn path.
+    auto s = read_once_with_payload(/*pos*/ 0.0f, /*vel*/ 0.0f);
+    EXPECT_FLOAT_EQ(s.position_rad,     0.0f);
+    EXPECT_FLOAT_EQ(s.raw.position_rad, 0.0f);
+}
+
+TEST(EncoderNormalizeEnd2End, VelocitySignPreserved) {
+    // velocity_rad_s carries direction (closing vs opening); clamping
+    // it would destroy that signal.
+    auto s = read_once_with_payload(/*pos*/ 0.5f, /*vel*/ -2.0f);
+    EXPECT_FLOAT_EQ(s.velocity_rad_s,     -2.0f);
+    EXPECT_FLOAT_EQ(s.raw.velocity_rad_s, -2.0f);
+}
+
+TEST(EncoderNormalizeEnd2End, NegativePositionDoesNotZeroVelocity) {
+    // Clamping the position must not bleed over into the velocity even
+    // when both are negative.
+    auto s = read_once_with_payload(/*pos*/ -0.3f, /*vel*/ -1.5f);
+    EXPECT_FLOAT_EQ(s.position_rad,   0.0f);
+    EXPECT_FLOAT_EQ(s.velocity_rad_s, -1.5f);
 }
 
 // ============================================================

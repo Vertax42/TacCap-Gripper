@@ -121,15 +121,23 @@ void bind_components(py::module_& m) {
             return tp_to_seconds(s.host_time);
         })
         .def_readonly("mcu_timestamp_us", &EncoderSample::mcu_timestamp_us)
+        // position_rad is the user-facing reading after SDK-side
+        // normalisation: clamped to >= 0 to absorb small post-zero
+        // drift. raw_position_rad exposes the unclamped firmware value
+        // so calibration / diagnostic tooling can still see the drift.
         .def_readonly("position_rad",     &EncoderSample::position_rad)
         .def_readonly("velocity_rad_s",   &EncoderSample::velocity_rad_s)
+        .def_property_readonly("raw_position_rad",
+                               [](const EncoderSample& s) { return s.raw.position_rad; })
+        .def_property_readonly("raw_velocity_rad_s",
+                               [](const EncoderSample& s) { return s.raw.velocity_rad_s; })
         .def_readonly("status",           &EncoderSample::status)
         .def_readonly("seq",              &EncoderSample::seq)
         .def("__repr__", [](const EncoderSample& s) {
-            char buf[120];
+            char buf[160];
             std::snprintf(buf, sizeof(buf),
-                "EncoderSample(seq=%u, pos=%.4frad, vel=%.4frad/s)",
-                s.seq, s.position_rad, s.velocity_rad_s);
+                "EncoderSample(seq=%u, pos=%.4frad (raw=%.4f), vel=%.4frad/s)",
+                s.seq, s.position_rad, s.raw.position_rad, s.velocity_rad_s);
             return std::string(buf);
         });
 
@@ -366,7 +374,15 @@ void bind_components(py::module_& m) {
                 } catch (...) {}
             });
         }, py::arg("callback"))
-        .def("off", &Encoder::off, py::arg("subscription_id"));
+        .def("off", &Encoder::off, py::arg("subscription_id"))
+        .def("set_zero", [](Encoder& self, unsigned timeout_ms) {
+            py::gil_scoped_release gil;
+            self.set_zero(std::chrono::milliseconds(timeout_ms));
+        },
+            py::arg("timeout_ms") = 500u,
+            "Latch the current encoder reading as the new zero position. "
+            "The gripper must already be held at the desired zero pose "
+            "(e.g. fully closed) before calling. Raises on NACK / timeout.");
 
     // ---- Motor ----------------------------------------------------------
     py::class_<Motor>(m, "Motor")
