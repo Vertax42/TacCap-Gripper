@@ -7,8 +7,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-27
+
+First usable release. Everything below landed on `main` since the
+v0.0.1 bootstrap (c9e8267) — protocol, transport, components, both
+gripper aggregates, Python bindings, six example scripts, logging,
+encoder calibration ergonomics, and a dual-gripper + Pico-tracker
+visualiser.
+
 ### Added
-- Initial repository skeleton: CMake + scikit-build-core + pybind11 namespace
-  alias for `xense::taccap::` / `xense.taccap`.
+
+**Protocol layer**
+- TC-GU-01 wire protocol mirror in C++17 — Cmd enum, FrameType, ErrorCode,
+  POD payload structs (IMU / Encoder / KeyStatus / SensorError / OTA /
+  IMU MagCal / EncoderConfig). 1:1 with firmware `protocol_cmd.h` /
+  `protocol_data.h`, pinned by `static_assert(sizeof(...) == N)`.
+- V1.6 mirror — OTA session commands, KeyStatus DATA, IMU MagCal,
+  per-sensor calibration result flags, SensorError reports.
+
+**Bus / transport**
+- Async `bus::Transport` over termios serial with ACK matching, retry,
+  and per-command DATA subscriber dispatch (single reader thread).
+- Frame parser with HEAD/TAIL detection + CRC16 verification, including
+  recovery from false-positive HEAD bytes mid-stream.
+
+**Components**
+- `IMU`, `Encoder`, `Camera`, `TactileSensor` (V4L2 + libxense XU
+  rectify), `Motor` (follower-only, FDCAN-via-MCU).
+- `LeaderGripper` / `FollowerGripper` aggregates with `read_once` +
+  `on_data` callback patterns on every component.
+- `IMU::set_mag_calibration(hard, soft)` — write hard-iron + soft-iron
+  matrix to firmware (Cmd::SetImuMagCal, 48-byte payload).
+- `Encoder::set_zero(timeout=500ms)` — latch current encoder reading
+  as the new zero position (Cmd::SetEncoderZero). Throws on NACK /
+  timeout.
+- `Encoder::normalize()` post-process — clamp `position_rad` to ≥ 0
+  to absorb post-calibration drift; rate-limited warning (1 / s per
+  instance) when raw drift exceeds -0.1 rad. Raw firmware value
+  preserved in `raw.position_rad`.
+- `OtaSession` — full V1.3 OTA state machine, including the high-level
+  `update_from_bytes()` orchestrator (start / write_block / verify /
+  apply / status polling).
+- `Key` + `SensorErrors` DATA subscribers (V1.4 / V1.6 streams).
+
+**Discovery**
+- `scan_grippers()` enumerates all plugged grippers; `find_left()` /
+  `find_right()` / `find_one()` typed lookups.
+- Bilateral discovery via USB hub-path grouping so two grippers sharing
+  a hub are reliably split into left/right endpoints.
+- Side detection reads firmware-burned SN via `Cmd::GetSn` (not the
+  CH343 USB chip SN) — survives MCU swaps without relabeling sides.
+
+**Python bindings (pybind11)**
+- `xense.taccap` package exposing all components, `LeaderGripper` /
+  `FollowerGripper`, `GripperEndpoints`, `Side`, `Cmd` enum,
+  `EncoderSample.raw_position_rad` / `raw_velocity_rad_s` for
+  pre-clamp diagnostics.
+- `xense.taccap.log` submodule — `set_level` / `set_pattern` /
+  `info` / `debug` / `warn` / `error` etc., shares the underlying
+  C++ spdlog instance (one logger program-wide).
+- Python 3.10 + 3.12 build paths (system py3.10 for ROS 2 Humble,
+  conda py3.12 for primary dev).
+- GIL-safe shared-ptr deleter for callbacks held across worker threads.
+
+**Logging**
+- Single-instance `xense::taccap::logger()` (header-only, spdlog
+  registry-backed) shared between C++ and Python.
+- Two sinks attached by default: stderr (colour) with user-controllable
+  level, file (per-session) always DEBUG.
+- File sink writes `session_YYYYMMDD_HHMMSS.log` under `$TACCAP_LOG_DIR`
+  (default `~/.taccaplogs/`). At most `kMaxSessionLogs` (= 10) sessions
+  retained; oldest mtime pruned at process start. File-sink failures
+  degrade gracefully — console keeps working.
+- Constants `SPDLOG_PATTERN` / `FILE_LOG_PATTERN` define the canonical
+  console + archive formats.
+
+**Examples**
+- `python/examples/rerun_visualize.py` — single-gripper rerun-sdk
+  multimodal viewer (wrist + 2× tactile raw/rect + IMU/encoder time
+  series + observed FPS panel).
+- `python/examples/v4l2_probe.py`, `v4l2_sweep.py` — manual V4L2
+  bringup probes; useful when firmware SN isn't burned yet.
+- `python/examples/ota_update.py` — firmware OTA CLI with progress +
+  status verification.
+- `python/examples/calibrate.py` — per-SN encoder zero calibration
+  with raw/cooked side-by-side display, full-open angle sanity check,
+  live readout.
+- `python/examples/rerun_dual_with_tracker.py` — dual-leader viewer
+  augmented with Pico4 motion-tracker 6-DoF poses. JPEG-compressed
+  image streams + tight rerun flush knobs for low-latency teleop.
+
+### Changed
+
+- ACK wire format corrected — `cmd=0` is NACK; ACK frame's payload
+  carries the cmd's return data, not a status struct.
+- `cmd=0` ACK with `err=Ok` now treated as success (firmware quirk on
+  some no-payload commands).
+- Firmware reference repos (`tc-gu-01`, `tc-gu-01-pc`) relocated to
+  `third_party/firmware/` and made clone-on-demand (gitignored, never
+  submodules — they have separate release cadences).
+- `LeaderGripper` constructor pre-stops any in-flight firmware stream
+  before opening + bumps the ACK timeout to absorb the post-reset
+  warm-up window.
+- `LeaderGripper` ctor logs firmware version + SN — visible in every
+  session log without needing extra scaffolding.
+
+### Fixed
+
+- `bus::Transport` parser rewinds past a false-positive HEAD byte
+  when downstream framing reports NeedMoreData, preventing stuck
+  frames on noisy serial.
+- `Encoder` / `IMU` / `Camera` callbacks: GIL-safe `shared_ptr<py::function>`
+  deleter so worker threads can release callbacks without UB.
+- Logger: replaced the per-TU static cache (which produced split
+  storage across `_taccap_native.so` and `libtaccap_core.so` under
+  `-fvisibility-inlines-hidden`) with stateless `spdlog::get()`
+  lookups — fixes a SIGSEGV in `LeaderGripper` construction.
+- `rerun_visualize.py` summary FPS anchored to streaming-start instead
+  of process-start so ~4 s of libxense/V4L2 init doesn't drag the
+  reported rate.
+
+### Tests
+
+- gtest suite covers protocol codec round-trip, frame parser edge
+  cases, transport ACK/NACK paths over PTY, all component decoders,
+  V1.3-V1.6 end-to-end (Key / SensorErrors / IMU MagCal / OTA), CRC32
+  boundary cases against reference zlib vectors, encoder set_zero
+  wire format + NACK, encoder normalize clamp + warn behaviour.
+- 126 tests pass; PTY-driven fake-firmware harness in
+  `cpp/tests/pty_helper.hpp` for transport-level coverage.
+
+### Docs
+
+- `README.md` — Python + C++ install flows, hardware smoke test,
+  example index, calibration walkthrough, logging behaviour.
+- `docs/ARCHITECTURE.md` — layered stack, module map, data-flow
+  diagrams, threading model, USB-topology discovery, boundary
+  between this SDK and downstream consumers (dataset recording /
+  ROS 2 / lerobot adapters).
+- `CLAUDE.md` — house-rules file for AI-assisted maintenance.
+
+## [0.0.1] - 2026-04-29
+
+### Added
+- Initial repository skeleton: CMake + scikit-build-core + pybind11
+  with the `xense::taccap::` / `xense.taccap` namespace alias.
 - libxensesdk vendored as a git submodule pinned at commit `7d4687e`,
   configured in lite mode (no ML backends).

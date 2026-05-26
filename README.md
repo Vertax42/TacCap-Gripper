@@ -22,8 +22,30 @@ Both adapters consume this SDK; they do not reimplement device access.
 
 ## Status
 
-Bootstrap scaffold (v0.0.1) — only build/scaffold validated. Real components
-land incrementally on `feat/*` branches.
+**v0.1.0 — first usable release.** Hardware-tested on bilateral TacCap
+gripper setups (left + right simultaneously, ~280 MB/s outbound).
+What's in:
+
+- TC-GU-01 wire protocol up to firmware V1.6 (OTA, MagCal, KeyStatus,
+  sensor errors), async transport with ACK matching, per-cmd DATA
+  subscribers
+- All sensor components: IMU @ 100 Hz, encoder @ 100 Hz, two
+  visuotactile cameras + rectify @ 30 Hz, wrist UVC @ 30 Hz
+- `LeaderGripper` / `FollowerGripper` aggregates, zero-config single
+  + bilateral discovery (`scan_grippers` / `find_left` / `find_right`)
+- Side detection from firmware-burned SN, hub-path grouping for
+  bilateral setups
+- Python bindings on 3.10 + 3.12 (system py3.10 for ROS 2 Humble,
+  conda py3.12 for primary dev)
+- Single-instance spdlog logger shared with C++; per-session file
+  log under `~/.taccaplogs/`
+- Encoder zero calibration (`Encoder::set_zero`) with raw +
+  auto-clamped position exposure for negative drift
+- OTA firmware updates via `OtaSession`
+- Six example scripts including dual-gripper + Pico4-tracker
+  rerun visualisation
+
+Full per-commit changelog in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -202,10 +224,14 @@ git submodule foreach --recursive 'git clean -xdf'
 
 ## Quick start
 
+### Single gripper
+
 ```python
 import xense.taccap as t
 
-# Auto-discover one connected gripper (left or right) by USB topology
+# Auto-discover the one connected gripper (left or right) by USB topology.
+# Throws IoError if 0 or >1 grippers are plugged in — use the explicit
+# constructor (below) for bilateral setups.
 gripper = t.LeaderGripper.open()
 gripper.start_streaming(imu_hz=100, encoder_hz=100)
 
@@ -218,7 +244,126 @@ imu_sub = gripper.imu.on_data(lambda s: print(s))
 gripper.stop_streaming()
 ```
 
-See `python/examples/rerun_visualize.py` for a full multimodal viewer.
+### Bilateral (left + right in one process)
+
+```python
+from xense.taccap import LeaderGripper, scan_grippers, Side
+
+# scan_grippers() returns all endpoints in one USB sweep — no re-probe
+# race when you ask for both sides.
+endpoints = scan_grippers()
+left  = next(e for e in endpoints if e.side == Side.Left)
+right = next(e for e in endpoints if e.side == Side.Right)
+
+# Alternatively: t.find_left() / t.find_right() are typed wrappers
+# that throw if the requested side isn't visible.
+
+def _open(eps):
+    return LeaderGripper(eps.mcu_device, eps.wrist_video,
+                         eps.tactile_left_serial, eps.tactile_right_serial)
+
+g_left, g_right = _open(left), _open(right)
+g_left.start_streaming(imu_hz=100, encoder_hz=100)
+g_right.start_streaming(imu_hz=100, encoder_hz=100)
+# ... attach callbacks, stop_streaming() on exit ...
+```
+
+### Encoder zero calibration
+
+```python
+# Hold the gripper at the desired zero pose (usually fully closed) first.
+g_right.encoder.set_zero()                      # throws ProtocolError on NACK
+s = g_right.encoder.read_once()
+print(s.position_rad, s.raw_position_rad)       # cooked (clamped >= 0) vs raw
+```
+
+See `python/examples/calibrate.py` for the full interactive walkthrough
+(side selection by SN, pre/post drift display, full-open angle sanity
+check, live readout).
+
+## Examples
+
+All scripts live under `python/examples/`. Enable C++ examples with
+`-DTACCAP_BUILD_EXAMPLES=ON` (they're off by default).
+
+| Script | What it does |
+|---|---|
+| `rerun_visualize.py` | Single-gripper multimodal rerun viewer — wrist + 2× tactile (raw + rect) + IMU/encoder time-series + observed FPS panel. |
+| `rerun_dual_with_tracker.py` | Dual-gripper + Pico4 motion-tracker 6-DoF poses in one viewer. Requires [`xensevr_pc_service_sdk`](https://github.com/Vertax42/Xense-Pico-Teleop-Interface) and the XenseVR PC Service running. Streaming-friendly: JPEG-compressed image streams, tight rerun flush. Use `--left-tracker-sn` / `--right-tracker-sn` to map tracker SNs to sides; add `--with-raw` to also log raw tactile. |
+| `calibrate.py` | Per-SN encoder zero calibration CLI. Shows raw + cooked side-by-side, latches zero, sanity-checks max-open angle, then enters a live readout. See [Calibration](#calibration). |
+| `ota_update.py` | Firmware OTA flashing CLI with progress + post-flash status probe. **Risky — wrong artefact bricks the MCU.** |
+| `v4l2_probe.py`, `v4l2_sweep.py` | Manual V4L2 bringup probes. Used when firmware SN isn't burned yet or the SDK discovery path is broken. |
+| `taccap_hello` (C++) | Smoke test for the C++ install path — prints the SDK + libxense versions and constructs a `Context`. |
+| `leader_demo` (C++) | Reports streaming rates for a single leader gripper over 5 seconds. |
+
+## Calibration
+
+Mechanical slop and small post-zero drift can make the encoder report
+~0.05–0.10 rad when the gripper is held "fully closed". The SDK
+absorbs this two ways:
+
+- **Auto-clamp**: `Encoder::read_once()` and `on_data` callbacks return
+  `position_rad >= 0`. Negative raw drift becomes `0.0` to keep
+  downstream consumers' math sane. The unclamped value is preserved
+  in `raw.position_rad` (C++) / `raw_position_rad` (Python) for
+  diagnostics.
+- **Drift warning**: if the raw negative drift exceeds **-0.1 rad** the
+  logger emits a rate-limited warning (1 / s per `Encoder` instance)
+  pointing at calibration or mechanical issues.
+
+To actually re-zero the gripper, run `calibrate.py` against the SN
+you want to fix:
+
+```bash
+python python/examples/calibrate.py SN000002      # right gripper
+```
+
+The script:
+
+1. Resolves the firmware SN to the right `mcu_device` / cameras /
+   tactile sensors.
+2. Prints the current encoder reading (both `raw` and clamped) so the
+   existing drift is visible.
+3. Prompts "hold the gripper **FULLY CLOSED**, press [Enter]".
+4. Sends `Cmd::SetEncoderZero`, re-reads, validates that the new raw
+   reading is within tolerance (default ± 0.01 rad).
+5. Optional `Step 2/2` — probe the mechanical full-open angle and
+   compare against the expected envelope (default 1.7 rad ≈ 97°,
+   tunable with `--expected-max-open-rad`).
+6. Live 10 Hz readout (`raw | cooked`) until Ctrl+C.
+
+The firmware latches whatever raw count it sees the moment it
+processes the command, so the gripper must already be at the target
+pose before pressing Enter.
+
+## Logging
+
+The SDK uses **one singleton logger** named `"xense.taccap"` —
+registered with spdlog, shared by every C++ TU and the Python
+binding. Don't construct your own `std::make_shared<spdlog::logger>`
+elsewhere, and don't reach for `std::cout` / `print` / `printf`
+for diagnostic output — they bypass the file sink.
+
+- **C++**: `#include <taccap/log.hpp>`, then `xense::taccap::logger()->info(...)`.
+- **Python**: `from xense.taccap import log; log.info(...)` /
+  `log.set_level("debug")` / `log.set_pattern(...)`. `set_level` and
+  `set_pattern` affect the **console sink only** — the file sink keeps
+  its archive format for grep stability.
+
+Two sinks attached by default:
+
+| Sink | Level | Pattern |
+|---|---|---|
+| stderr (colour) | user-controllable, default `INFO` | `[%D %T.%e] [%n] [%^%l%$] %v` |
+| file (per-session) | always `DEBUG` | `[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v` |
+
+File-sink behaviour:
+
+- Directory: `$TACCAP_LOG_DIR` if set, else `~/.taccaplogs/`.
+- Filename: `session_YYYYMMDD_HHMMSS.log` — one new file per process start.
+- At most **10** session logs retained; oldest mtime pruned at startup.
+- File-sink creation failures (disk full / permission denied) are not
+  fatal — the console sink keeps working.
 
 ## Layout
 
