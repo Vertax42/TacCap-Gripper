@@ -296,6 +296,34 @@ All scripts live under `python/examples/`. Enable C++ examples with
 | `taccap_hello` (C++) | Smoke test for the C++ install path — prints the SDK + libxense versions and constructs a `Context`. |
 | `leader_demo` (C++) | Reports streaming rates for a single leader gripper over 5 seconds. |
 
+### Bench-specific tracker ↔ gripper binding (this checkout)
+
+`rerun_dual_with_tracker.py` needs explicit `--left-tracker-sn` /
+`--right-tracker-sn` because the Pico4 trackers are physically glued to a
+specific gripper — software can't re-derive which is which. The mapping
+on **this bench** (verified 2026-05-27 by shaking each gripper and
+watching the matching ellipsoid move in the rerun 3D view) is:
+
+| Side  | Gripper firmware SN | Gripper CH343 SN | Pico4 tracker SN     |
+|-------|---------------------|------------------|----------------------|
+| LEFT  | `SN000001`          | `5C2C247734`     | `PC2310MLK7080553G`  |
+| RIGHT | `SN000002`          | `5C2C247736`     | `PC2310MLL1091974G`  |
+
+So the canonical invocation here is:
+
+```bash
+python python/examples/rerun_dual_with_tracker.py \
+    --left-tracker-sn  PC2310MLK7080553G \
+    --right-tracker-sn PC2310MLL1091974G
+```
+
+> **Heads-up for forks / other benches.** These SNs identify *our*
+> hardware, not yours. If you clone this repo onto a different setup,
+> replace them with whatever `xensevr_pc_service_sdk` reports for your
+> trackers, then re-verify by shaking one gripper at a time. Also note:
+> the C SDK's "device found" log line may list a third SN — that's the
+> Pico headset itself, not a tracker.
+
 ## Calibration
 
 Mechanical slop and small post-zero drift can make the encoder report
