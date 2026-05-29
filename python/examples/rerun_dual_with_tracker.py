@@ -37,6 +37,7 @@ Prerequisites:
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import sys
 import threading
@@ -45,10 +46,13 @@ from collections import defaultdict, deque
 from typing import Optional
 
 # These flush knobs are read by the rerun SDK at rr.init() time, so we
-# must seed them before any other rerun import / call. Defaults are
-# tuned for *low latency* streaming (small batch, short tick) at the
-# cost of more gRPC system calls — that's the right tradeoff for
-# real-time gripper viz where staleness matters more than throughput.
+# must seed them before any other rerun import / call. Small batch +
+# short tick = low latency at the cost of more gRPC packets. We tried
+# the opposite (64 KB / 30 ms) once: the larger batch held small
+# Transform3D updates behind the bigger tactile/wrist JPEG batches,
+# making the 3D ellipsoid look choppy. Keep this low-latency profile
+# and instead decouple the xrt poller from rr.log via TrackerCache
+# below — that's what actually keeps the world view smooth.
 os.environ.setdefault("RERUN_FLUSH_NUM_BYTES", "4096")
 os.environ.setdefault("RERUN_FLUSH_TICK_SECS", "0.01")
 
@@ -81,6 +85,14 @@ TRACKER_TRAIL_MAX = 90
 # raw on these sensors and gives ~6-8× wire-size reduction vs BGR8.
 JPEG_QUALITY = 90
 _JPEG_ENCODE_PARAMS = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+# Visualiser tick rate: the consumer thread reads TrackerCache and calls
+# rr.log at this rate, independent of how fast the producer pumps xrt.
+# 60 Hz matches typical displays without burning gRPC bandwidth.
+TRACKER_VIS_HZ = 60
+# Trail re-log is the heaviest rr.log call in the visualiser (up to
+# TRACKER_TRAIL_MAX points × 3 floats); decimating it independently from
+# the per-tick Transform3D keeps the ellipsoid pose updates light.
+TRAIL_LOG_HZ = 30
 GRIPPER_STREAMS = ["imu", "encoder", "tac0", "tac1", "wrist"]
 # One observed-fps stream per side. Counters bumped in the poller, scalar
 # emitted from the 1 Hz status loop (same path as gripper streams) so the
@@ -205,39 +217,75 @@ def make_wrist_handler(side: str, counters: StreamCounters, set_time):
     return h
 
 
-# ---------------------- Tracker poller ------------------------------------- #
+# ---------------------- Tracker producer / cache / consumer ---------------- #
+
+
+class TrackerCache:
+    """Producer→consumer slot for the latest tracker pose per side.
+
+    The xrt poller writes here every time fresh data arrives; the
+    visualiser thread reads at its own cadence. Decoupling them means a
+    brief gRPC stall in rr.log can't backpressure the xrt drain — the
+    poller keeps pumping into this cache and the viewer just sees one
+    update collapsed to "latest" when it next ticks.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # side → pose7 tuple (x,y,z,qx,qy,qz,qw). Persists across reads
+        # so a late consumer always has *some* pose to render.
+        self._latest: dict[str, tuple] = {}
+        # Sides updated since the last drain_new(); consumer skips
+        # sides not in this set so we don't re-log identical poses.
+        self._dirty: set[str] = set()
+        # Per-side breadcrumb buffer; producer appends, consumer reads
+        # the full deque under the lock when it's time to redraw.
+        self._trails: dict[str, deque] = {
+            s: deque(maxlen=TRACKER_TRAIL_MAX) for s in ("left", "right")
+        }
+
+    def put(self, side: str, pose7: tuple) -> None:
+        with self._lock:
+            self._latest[side] = pose7
+            self._dirty.add(side)
+            self._trails[side].append([pose7[0], pose7[1], pose7[2]])
+
+    def drain_new(self) -> dict[str, tuple]:
+        """Return {side: pose7} for sides updated since the previous call,
+        clearing the dirty set. {} means "no new samples this tick".
+        """
+        with self._lock:
+            out = {s: self._latest[s] for s in self._dirty}
+            self._dirty.clear()
+            return out
+
+    def trail_snapshot(self, side: str) -> list:
+        with self._lock:
+            return list(self._trails[side])
 
 
 class TrackerPoller(threading.Thread):
-    """Background thread that polls Pico tracker poses and logs them
-    under /world/{side}_gripper. Lifecycle is independent of the gripper
-    SDK callbacks so a hung Pico Service can't stall sensor streams.
+    """Producer thread: drains the xrt SDK at its native rate and writes
+    every fresh sample to TrackerCache. Never calls rr.log — that's the
+    visualiser's job. Lifecycle is independent of the gripper SDK
+    callbacks so a hung Pico Service can't stall sensor streams.
     """
 
     def __init__(
         self,
         sn_to_side: dict[str, str],
+        cache: TrackerCache,
         counters: StreamCounters,
-        set_time,
         poll_hz: float,
     ) -> None:
         super().__init__(daemon=True, name="pico-tracker-poller")
         self._sn_to_side = sn_to_side
+        self._cache = cache
         self._counters = counters
-        self._set_time = set_time
         self._period = 1.0 / max(1e-3, poll_hz)
         self._stop_evt = threading.Event()
-        # Per-side trail of recent positions for the 3D view.
-        self._trails: dict[str, deque] = {
-            s: deque(maxlen=TRACKER_TRAIL_MAX) for s in ("left", "right")
-        }
         # Log "tracker SN X not seen" at most once per ~5s instead of spamming.
         self._missing_warned_at: dict[str, float] = {}
-        # Static-per-side bits (mesh, label, axes) are logged the first
-        # time each side appears, then live in the parent Transform3D's
-        # local frame — every subsequent tick only updates the transform
-        # itself. Cuts per-tick rr.log() calls from ~7 to ~2 per side.
-        self._static_logged: set[str] = set()
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -277,7 +325,6 @@ class TrackerPoller(threading.Thread):
             log.warning(f"[pico] tracker pose query failed: {e}")
             return
 
-        self._set_time()
         seen: set[str] = set()
         for i in range(n):
             sn_raw = sns[i] if i < len(sns) else None
@@ -289,7 +336,11 @@ class TrackerPoller(threading.Thread):
             if side is None:
                 continue
             p = poses[i]
-            self._log_pose(side, sn, p)
+            pose7 = (
+                float(p[0]), float(p[1]), float(p[2]),
+                float(p[3]), float(p[4]), float(p[5]), float(p[6]),
+            )
+            self._cache.put(side, pose7)
             self._counters.bump(side, "tracker")
 
         # Warn if a configured SN is missing for the first time / again
@@ -304,55 +355,98 @@ class TrackerPoller(threading.Thread):
                             "not currently visible to PC Service")
                 self._missing_warned_at[sn] = now
 
-    def _log_pose(self, side: str, sn: str, pose) -> None:
-        x, y, z = float(pose[0]), float(pose[1]), float(pose[2])
-        qx, qy, qz, qw = (float(pose[3]), float(pose[4]),
-                          float(pose[5]), float(pose[6]))
+
+class TrackerVisualiser(threading.Thread):
+    """Consumer thread: reads TrackerCache at TRACKER_VIS_HZ and pushes
+    rr.log calls for the 3D view. Decoupled from the xrt drain so a
+    transient gRPC flush stall blocks only this thread, never the
+    producer or the gripper SDK callbacks.
+    """
+
+    def __init__(
+        self,
+        cache: TrackerCache,
+        side_to_sn: dict[str, str],
+        set_time,
+        vis_hz: float,
+    ) -> None:
+        super().__init__(daemon=True, name="tracker-visualiser")
+        self._cache = cache
+        self._side_to_sn = side_to_sn
+        self._set_time = set_time
+        self._period = 1.0 / max(1e-3, vis_hz)
+        self._stop_evt = threading.Event()
+        # Static-per-side bits (mesh, label, axes) are logged the first
+        # time each side appears, then live in the parent Transform3D's
+        # local frame — every subsequent tick only updates the transform.
+        self._static_logged: set[str] = set()
+        # Trail re-log rate-limit (decoupled from per-tick transform).
+        self._trail_log_period = 1.0 / max(1.0, TRAIL_LOG_HZ)
+        self._last_trail_log_at: dict[str, float] = {}
+
+    def stop(self) -> None:
+        self._stop_evt.set()
+
+    def run(self) -> None:
+        while not self._stop_evt.wait(self._period):
+            self._tick()
+
+    def _tick(self) -> None:
+        new = self._cache.drain_new()
+        if not new:
+            return
+        self._set_time()
+        for side, pose7 in new.items():
+            self._log_static_once(side)
+            self._log_pose(side, pose7)
+            self._maybe_log_trail(side)
+
+    def _log_static_once(self, side: str) -> None:
+        if side in self._static_logged:
+            return
         ent = f"world/{side}_gripper"
         color = (255, 80, 80, 220) if side == "left" else (80, 160, 255, 220)
+        axes_len = 0.10
+        sn_label = self._side_to_sn.get(side, "?")
+        rr.log(f"{ent}/mesh", rr.Ellipsoids3D(
+            centers=[[0.0, 0.0, 0.0]],
+            half_sizes=[[0.035, 0.035, 0.02]],
+            colors=[color],
+        ))
+        rr.log(f"{ent}/axes", rr.Arrows3D(
+            origins=[[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+            vectors=[[axes_len, 0, 0],
+                     [0, axes_len, 0],
+                     [0, 0, axes_len]],
+            colors=[[255, 80, 80], [80, 255, 80], [80, 80, 255]],
+            radii=0.005,
+        ))
+        rr.log(f"{ent}/label", rr.Points3D(
+            [[0, 0.10, 0]],
+            labels=[f"{side.upper()} ({sn_label})"],
+            colors=[color[:3]],
+            radii=0.004,
+        ))
+        self._static_logged.add(side)
 
-        # One-shot per side: mesh + body-frame axes + label all live in
-        # the LOCAL frame of the parent Transform3D, so subsequent ticks
-        # only need to update the transform — the children inherit pose
-        # for free. Logging these every tick was the main reason the
-        # viewer felt sluggish (~7 rr.log calls × 2 sides × poll_hz).
-        if side not in self._static_logged:
-            axes_len = 0.10
-            rr.log(f"{ent}/mesh", rr.Ellipsoids3D(
-                centers=[[0.0, 0.0, 0.0]],
-                half_sizes=[[0.035, 0.035, 0.02]],
-                colors=[color],
-            ))
-            rr.log(f"{ent}/axes", rr.Arrows3D(
-                origins=[[0, 0, 0], [0, 0, 0], [0, 0, 0]],
-                vectors=[[axes_len, 0, 0],
-                         [0, axes_len, 0],
-                         [0, 0, axes_len]],
-                colors=[[255, 80, 80], [80, 255, 80], [80, 80, 255]],
-                radii=0.005,
-            ))
-            rr.log(f"{ent}/label", rr.Points3D(
-                [[0, 0.10, 0]],
-                labels=[f"{side.upper()} ({sn})"],
-                colors=[color[:3]],
-                radii=0.004,
-            ))
-            self._static_logged.add(side)
-
-        # Pose update — the only thing strictly required per tick.
-        rr.log(ent, rr.Transform3D(
+    def _log_pose(self, side: str, pose7: tuple) -> None:
+        x, y, z, qx, qy, qz, qw = pose7
+        rr.log(f"world/{side}_gripper", rr.Transform3D(
             translation=[x, y, z],
             quaternion=rr.Quaternion(xyzw=[qx, qy, qz, qw]),
         ))
 
-        # Position trail as Points3D (single batched log) in world
-        # frame — way cheaper than rebuilding a 90-segment LineStrips3D
-        # every tick. We lose the gradient-alpha effect but keep the
-        # spatial trail visible.
-        trail = self._trails[side]
-        trail.append([x, y, z])
+    def _maybe_log_trail(self, side: str) -> None:
+        now = time.monotonic()
+        if now - self._last_trail_log_at.get(side, 0.0) < self._trail_log_period:
+            return
+        trail = self._cache.trail_snapshot(side)
+        if not trail:
+            return
+        color = (255, 80, 80) if side == "left" else (80, 160, 255)
         rr.log(f"world/trails/{side}",
-               rr.Points3D(list(trail), colors=[color[:3]], radii=0.004))
+               rr.Points3D(trail, colors=[color], radii=0.004))
+        self._last_trail_log_at[side] = now
 
 
 # ---------------------- Rerun blueprint ------------------------------------ #
@@ -500,13 +594,19 @@ def main() -> int:
     def set_time() -> None:
         rr.set_time(timeline="host", duration=time.monotonic() - mono_start)
 
-    # ---- Tracker poller ----
+    # ---- Tracker producer + consumer ----
     poller: Optional[TrackerPoller] = None
+    viz: Optional[TrackerVisualiser] = None
     if use_tracker:
-        poller = TrackerPoller(sn_to_side, counters, set_time,
+        side_to_sn = {v: k for k, v in sn_to_side.items()}
+        cache = TrackerCache()
+        poller = TrackerPoller(sn_to_side, cache, counters,
                                args.tracker_poll_hz)
+        viz = TrackerVisualiser(cache, side_to_sn, set_time, TRACKER_VIS_HZ)
         poller.start()
-        log.info(f"[pico] tracker poller started — "
+        viz.start()
+        log.info(f"[pico] tracker poller ({args.tracker_poll_hz:.0f} Hz) + "
+                 f"visualiser ({TRACKER_VIS_HZ} Hz) started — "
                  f"mapping {sn_to_side}")
 
     # ---- Subscribe callbacks ----
@@ -524,6 +624,12 @@ def main() -> int:
         gL.start_streaming(imu_hz=args.imu_hz, encoder_hz=args.encoder_hz)
         gR.start_streaming(imu_hz=args.imu_hz, encoder_hz=args.encoder_hz)
         mono_start = time.monotonic()
+        # Promote everything allocated during startup to the permanent
+        # gen-2 set so long sessions don't pay a full-heap GC sweep every
+        # few seconds — that sweep used to manifest as the 3D ellipsoid
+        # freezing for ~100 ms while other panels (lots of historical
+        # points) hid the pause visually.
+        gc.freeze()
         log.info("[run] streaming; SIGINT/SIGTERM to stop")
 
         # ---- Status loop ----
@@ -559,6 +665,11 @@ def main() -> int:
 
     finally:
         log.info("[stop] stopping both sides ...")
+        # Visualiser first: stops rr.log calls so poller's last samples
+        # don't fight a shutting-down rerun stream.
+        if viz is not None:
+            viz.stop()
+            viz.join(timeout=2.0)
         if poller is not None:
             poller.stop()
             poller.join(timeout=2.0)
