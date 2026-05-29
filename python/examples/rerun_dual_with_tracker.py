@@ -82,7 +82,12 @@ TRACKER_TRAIL_MAX = 90
 JPEG_QUALITY = 90
 _JPEG_ENCODE_PARAMS = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
 GRIPPER_STREAMS = ["imu", "encoder", "tac0", "tac1", "wrist"]
-TRACKER_STREAMS = ["tracker_x", "tracker_y", "tracker_z"]
+# One observed-fps stream per side. Counters bumped in the poller, scalar
+# emitted from the 1 Hz status loop (same path as gripper streams) so the
+# "observed fps" panel stays semantically clean — the previous
+# tracker_x/y/z entries were *positions*, not FPS, and mixing them into
+# the same panel produced nonsense traces.
+TRACKER_STREAMS = ["tracker"]
 
 # ---------------------- CLI ------------------------------------------------ #
 
@@ -349,11 +354,6 @@ class TrackerPoller(threading.Thread):
         rr.log(f"world/trails/{side}",
                rr.Points3D(list(trail), colors=[color[:3]], radii=0.004))
 
-        # Scalar xyz so the time-series panel still has data.
-        rr.log(f"/perf/{side}/tracker_x", rr.Scalars(x))
-        rr.log(f"/perf/{side}/tracker_y", rr.Scalars(y))
-        rr.log(f"/perf/{side}/tracker_z", rr.Scalars(z))
-
 
 # ---------------------- Rerun blueprint ------------------------------------ #
 
@@ -538,9 +538,10 @@ def main() -> int:
             for (side, stream), n in snap.items():
                 delta = n - last_snap[(side, stream)]
                 fps = delta / elapsed if elapsed > 0 else 0.0
-                # Only emit gripper streams here; tracker scalars are
-                # logged from the poller at its native rate.
-                if stream in GRIPPER_STREAMS:
+                # Both gripper streams and the tracker fps land here so
+                # the "observed fps" panel sees one consistent 1 Hz feed
+                # per channel (poller no longer emits per-axis scalars).
+                if stream in GRIPPER_STREAMS or stream in TRACKER_STREAMS:
                     rr.log(f"/perf/{side}/{stream}", rr.Scalars(fps))
             last_snap = snap
             last_t = now
