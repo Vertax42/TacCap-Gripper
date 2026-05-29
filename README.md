@@ -300,21 +300,37 @@ All scripts live under `python/examples/`. Enable C++ examples with
 
 `rerun_dual_with_tracker.py` needs explicit `--left-tracker-sn` /
 `--right-tracker-sn` because the Pico4 trackers are physically glued to a
-specific gripper — software can't re-derive which is which. The mapping
-on **this bench** (verified 2026-05-27 by shaking each gripper and
-watching the matching ellipsoid move in the rerun 3D view) is:
+specific gripper — software can't re-derive which is which. We maintain
+two bilateral pairs on **this bench**; figure out which one is plugged in
+(`scan_grippers` reports the firmware SNs) and use the matching row.
+
+**Pair A** — verified 2026-05-27 by shaking each gripper and watching the
+matching ellipsoid move in the rerun 3D view:
 
 | Side  | Gripper firmware SN | Gripper CH343 SN | Pico4 tracker SN     |
 |-------|---------------------|------------------|----------------------|
 | LEFT  | `SN000001`          | `5C2C247734`     | `PC2310MLK7080553G`  |
 | RIGHT | `SN000002`          | `5C2C247736`     | `PC2310MLL1091974G`  |
 
-So the canonical invocation here is:
+**Pair B** — verified 2026-05-29 by the same shake-test:
+
+| Side  | Gripper firmware SN | Gripper CH343 SN | Pico4 tracker SN     |
+|-------|---------------------|------------------|----------------------|
+| LEFT  | `SN000003`          | `5C2C246526`     | `PC2310MLL3200579G`  |
+| RIGHT | `SN000004`          | `5C2C246523`     | `PC2310MLL3200496G`  |
+
+Canonical invocations:
 
 ```bash
+# Pair A
 python python/examples/rerun_dual_with_tracker.py \
     --left-tracker-sn  PC2310MLK7080553G \
     --right-tracker-sn PC2310MLL1091974G
+
+# Pair B
+python python/examples/rerun_dual_with_tracker.py \
+    --left-tracker-sn  PC2310MLL3200579G \
+    --right-tracker-sn PC2310MLL3200496G
 ```
 
 > **Heads-up for forks / other benches.** These SNs identify *our*
