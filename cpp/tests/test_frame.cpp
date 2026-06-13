@@ -37,7 +37,9 @@ TEST(Frame, PackParseRoundtripEmptyPayload) {
     auto wire = tb::pack_frame(tp::Address::PC, 7,
                                tp::FrameType::CMD_NEED_ACK,
                                tp::Cmd::GetVersion);
-    EXPECT_EQ(wire.size(), tb::MIN_FRAME_LEN);
+    // V1.8 byte stuffing may grow the frame past MIN_FRAME_LEN if the body
+    // (incl. CRC) contains 0xAA/0x55/0x7D.
+    EXPECT_GE(wire.size(), tb::MIN_FRAME_LEN);
     EXPECT_EQ(wire.front(), tb::FRAME_HEAD);
     EXPECT_EQ(wire.back(),  tb::FRAME_TAIL);
 
@@ -55,7 +57,8 @@ TEST(Frame, PackParseRoundtripVariousSizes) {
         auto wire = tb::pack_frame(tp::Address::MCU, 42,
                                    tp::FrameType::DATA, tp::Cmd::GetImu,
                                    payload);
-        ASSERT_EQ(wire.size(), tb::MIN_FRAME_LEN + n);
+        // >= because byte stuffing can only grow the wire frame.
+        ASSERT_GE(wire.size(), tb::MIN_FRAME_LEN + n);
 
         auto out = tb::try_parse_frame(wire.data(), wire.size());
         ASSERT_EQ(out.status, tb::ParseStatus::Success) << "size=" << n;
@@ -221,9 +224,10 @@ TEST(FrameParser, ResyncsAcrossMultipleFalseHeads) {
     EXPECT_EQ(f.payload.size(), 16u);
 }
 
-// Pathological: 0xAA somewhere inside a real frame's payload (legitimate
-// since pack_frame doesn't byte-stuff). Parser must still pick the
-// outer frame, NOT lock onto the inner 0xAA.
+// A 0xAA (HEAD) byte inside the payload: V1.8 stuffing escapes it on the
+// wire (so it never appears raw inside a frame), and it must round-trip back
+// to 0xAA after unstuffing. Confirms the parser keys on the real frame and
+// the payload survives stuffing.
 TEST(FrameParser, IgnoresHeadByteInsideValidPayload) {
     std::vector<uint8_t> payload(40);
     for (size_t i = 0; i < payload.size(); ++i) payload[i] = static_cast<uint8_t>(i);

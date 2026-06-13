@@ -62,92 +62,118 @@ std::vector<uint8_t> pack_frame(
             " > " + std::to_string(MAX_PAYLOAD_LEN) + ")");
     }
 
-    std::vector<uint8_t> out;
-    out.reserve(MIN_FRAME_LEN + payload_len);
-
-    out.push_back(FRAME_HEAD);
-    out.push_back(static_cast<uint8_t>(addr));
-    out.push_back(seq);
-    out.push_back(static_cast<uint8_t>(type));
-    out.push_back(static_cast<uint8_t>(cmd));
-    out.push_back(static_cast<uint8_t>(payload_len & 0xFF));
-    out.push_back(static_cast<uint8_t>((payload_len >> 8) & 0xFF));
-
+    // Build the *unescaped* frame first: HEAD | ADDR | SEQ | TYPE | CMD |
+    // LEN(2) | PAYLOAD | CRC(2). The CRC is computed over HEAD..PAYLOAD
+    // (firmware convention) BEFORE byte-stuffing — protocol V1.8.
+    std::vector<uint8_t> u;
+    u.reserve(FRAME_HEADER_LEN + payload_len + 2);
+    u.push_back(FRAME_HEAD);
+    u.push_back(static_cast<uint8_t>(addr));
+    u.push_back(seq);
+    u.push_back(static_cast<uint8_t>(type));
+    u.push_back(static_cast<uint8_t>(cmd));
+    u.push_back(static_cast<uint8_t>(payload_len & 0xFF));
+    u.push_back(static_cast<uint8_t>((payload_len >> 8) & 0xFF));
     if (payload && payload_len) {
-        out.insert(out.end(), payload, payload + payload_len);
+        u.insert(u.end(), payload, payload + payload_len);
     }
+    const uint16_t crc = crc16_modbus(u.data(), u.size());  // over HEAD..PAYLOAD
+    u.push_back(static_cast<uint8_t>(crc & 0xFF));
+    u.push_back(static_cast<uint8_t>((crc >> 8) & 0xFF));
 
-    const uint16_t crc = crc16_modbus(out.data(), out.size());
-    out.push_back(static_cast<uint8_t>(crc & 0xFF));
-    out.push_back(static_cast<uint8_t>((crc >> 8) & 0xFF));
+    // Wire frame (V1.8 global escaping): HEAD | stuff(ADDR..CRC) | TAIL.
+    // HEAD/TAIL stay raw so they remain unambiguous frame delimiters; every
+    // 0xAA/0x55/0x7D in the body is escaped to ESC,(byte^0x20).
+    const std::vector<uint8_t> body = stuff_data(u.data() + 1, u.size() - 1);
+    std::vector<uint8_t> out;
+    out.reserve(2 + body.size());
+    out.push_back(FRAME_HEAD);
+    out.insert(out.end(), body.begin(), body.end());
     out.push_back(FRAME_TAIL);
-
     return out;
 }
 
 ParseOutcome try_parse_frame(const uint8_t* data, std::size_t len) {
+    // Wire format (protocol V1.8): HEAD | stuff(ADDR..CRC) | TAIL. Byte
+    // stuffing escapes every 0xAA/0x55/0x7D in the body, so a *raw* HEAD only
+    // appears at a frame start and a *raw* TAIL only at a frame end — the
+    // frame is delimited by the first raw TAIL after HEAD, and the body must
+    // be unstuffed before LEN/CRC make sense.
     ParseOutcome r{};
     if (data == nullptr || len == 0) {
         r.status = ParseStatus::NeedMoreData;
         return r;
     }
     if (data[0] != FRAME_HEAD) {
-        // Not a frame start; caller should drop bytes until they hit 0xAA.
         r.status = ParseStatus::Resync;
-        // Find the next plausible start so the caller can skip ahead in one shot.
         std::size_t skip = 1;
         while (skip < len && data[skip] != FRAME_HEAD) ++skip;
         r.consumed = skip;
         return r;
     }
-    if (len < MIN_FRAME_LEN) {
+
+    // Locate the terminating raw TAIL.
+    std::size_t tail = 1;
+    while (tail < len && data[tail] != FRAME_TAIL) ++tail;
+    if (tail >= len) {
+        // No terminator yet. If the run already exceeds a max-size frame,
+        // this HEAD can't begin a valid frame — drop it and resync.
+        if (len > MAX_FRAME_LEN) {
+            r.status = ParseStatus::Resync;
+            r.consumed = 1;
+            return r;
+        }
         r.status = ParseStatus::NeedMoreData;
+        return r;
+    }
+
+    // Unstuff the body between HEAD and TAIL -> ADDR | SEQ | TYPE | CMD |
+    // LEN(2) | PAYLOAD | CRC(2).
+    const std::vector<uint8_t> body = unstuff_data(data + 1, tail - 1);
+
+    // Minimum unescaped body = ADDR+SEQ+TYPE+CMD+LEN(2)+CRC(2) = 8 bytes.
+    constexpr std::size_t BODY_MIN = 8;
+    if (body.size() < BODY_MIN) {
+        r.status = ParseStatus::Resync;
+        r.consumed = 1;
         return r;
     }
 
     const std::size_t payload_len =
-        static_cast<std::size_t>(data[5]) |
-        (static_cast<std::size_t>(data[6]) << 8);
+        static_cast<std::size_t>(body[4]) |
+        (static_cast<std::size_t>(body[5]) << 8);
 
-    if (payload_len > MAX_PAYLOAD_LEN) {
-        // Length field is impossible — cannot be a valid frame starting here.
+    // LEN must agree with the actual unstuffed body length.
+    if (payload_len > MAX_PAYLOAD_LEN || body.size() != BODY_MIN + payload_len) {
         r.status = ParseStatus::Resync;
         r.consumed = 1;
         return r;
     }
 
-    const std::size_t frame_len = MIN_FRAME_LEN + payload_len;
-    if (len < frame_len) {
-        r.status = ParseStatus::NeedMoreData;
-        return r;
-    }
-
-    if (data[frame_len - 1] != FRAME_TAIL) {
-        r.status = ParseStatus::Resync;
-        r.consumed = 1;
-        return r;
-    }
-
-    const std::size_t crc_input_len = FRAME_HEADER_LEN + payload_len;
-    const uint16_t crc_calc = crc16_modbus(data, crc_input_len);
+    // CRC is over HEAD..PAYLOAD on the *unescaped* bytes. Reconstruct that
+    // region as HEAD followed by the unstuffed ADDR..PAYLOAD.
+    const std::size_t crc_body = 6 + payload_len;   // ADDR..PAYLOAD within body
+    std::vector<uint8_t> crc_region;
+    crc_region.reserve(1 + crc_body);
+    crc_region.push_back(FRAME_HEAD);
+    crc_region.insert(crc_region.end(), body.begin(), body.begin() + crc_body);
+    const uint16_t crc_calc = crc16_modbus(crc_region.data(), crc_region.size());
     const uint16_t crc_recv =
-        static_cast<uint16_t>(data[crc_input_len]) |
-        (static_cast<uint16_t>(data[crc_input_len + 1]) << 8);
-
+        static_cast<uint16_t>(body[crc_body]) |
+        (static_cast<uint16_t>(body[crc_body + 1]) << 8);
     if (crc_calc != crc_recv) {
         r.status = ParseStatus::Resync;
         r.consumed = 1;
         return r;
     }
 
-    r.status         = ParseStatus::Success;
-    r.consumed       = frame_len;
-    r.frame.addr     = static_cast<protocol::Address>(data[1]);
-    r.frame.seq      = data[2];
-    r.frame.type     = static_cast<protocol::FrameType>(data[3]);
-    r.frame.cmd      = static_cast<protocol::Cmd>(data[4]);
-    r.frame.payload.assign(data + FRAME_HEADER_LEN,
-                           data + FRAME_HEADER_LEN + payload_len);
+    r.status        = ParseStatus::Success;
+    r.consumed      = tail + 1;   // HEAD + stuffed body + TAIL on the wire
+    r.frame.addr    = static_cast<protocol::Address>(body[0]);
+    r.frame.seq     = body[1];
+    r.frame.type    = static_cast<protocol::FrameType>(body[2]);
+    r.frame.cmd     = static_cast<protocol::Cmd>(body[3]);
+    r.frame.payload.assign(body.begin() + 6, body.begin() + 6 + payload_len);
     return r;
 }
 
@@ -194,14 +220,13 @@ void FrameParser::drain_() {
             continue;
         }
         // NeedMoreData at cursor. Before giving up, see if any LATER 0xAA
-        // in the buffer can be parsed as a complete frame. This rescues
-        // us from "false HEAD with plausible LEN" stalls: pack_frame does
-        // not byte-stuff today, so a 0xAA in noise/garbage can sit at the
-        // front of the buffer claiming a body length that never arrives,
-        // while the real frame's HEAD is already further in. Walk past
-        // every 0xAA after `cursor` and attempt a parse; if any succeeds
-        // (CRC + TAIL valid), commit it and drop the bytes before its
-        // HEAD as garbage.
+        // in the buffer can be parsed as a complete frame. With V1.8 byte
+        // stuffing a raw 0xAA is only ever a real HEAD, but line noise (or a
+        // partial/garbage frame) can still leave a stray 0xAA at the front
+        // with no terminator while a real frame's HEAD sits further in. Walk
+        // past every 0xAA after `cursor` and attempt a parse; if any succeeds
+        // (TAIL found, body unstuffs, CRC valid), commit it and drop the
+        // bytes before its HEAD as garbage.
         bool recovered = false;
         std::size_t alt = cursor + 1;
         while (alt < rx_.size()) {

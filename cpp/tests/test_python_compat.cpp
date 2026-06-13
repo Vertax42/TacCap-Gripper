@@ -1,10 +1,14 @@
 // Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
 //
 // Cross-implementation compatibility test. The byte sequences below were
-// produced by GUI Python (Embedded Software/Operator Interface (GUI)/core/
-// protocol.py); we expect our C++ parser to interpret them identically.
-// Any divergence here means our wire format has drifted away from the
-// firmware's authoritative behaviour.
+// produced by the GUI Python tool (third_party/firmware/tc-gu-01-pc/core/
+// protocol.py, protocol V1.8); we expect our C++ packer/parser to match them
+// byte-for-byte. Any divergence here means our wire format has drifted away
+// from the firmware's authoritative behaviour.
+//
+// Note: V1.8 byte-stuffs the body (ADDR..CRC). The first three frames below
+// happen to contain no 0xAA/0x55/0x7D in their bodies, so stuffing is a no-op
+// for them; MatchesPythonGuiEscapedPayload exercises the escaping path.
 
 #include <gtest/gtest.h>
 #include <taccap/bus/frame.hpp>
@@ -94,4 +98,37 @@ TEST(PythonCompat, FrameByteForByteAgainstHandPackedReference) {
                               tp::FrameType::CMD_NEED_ACK,
                               tp::Cmd::GetSn);
     EXPECT_EQ(cpp, ref);
+}
+
+// V1.8 byte-stuffing parity. A payload carrying every special byte
+// (0xAA, 0x55, 0x7D) must be escaped on the wire exactly as the GUI does.
+// Reference bytes captured from:
+//   p = protocol.pack_frame(0x02, 0x10, 0x03, 0x12, bytes([0xAA,0x55,0x7D,0x00,0xFF]))
+//   protocol.escape_frame_content(p)
+TEST(PythonCompat, MatchesPythonGuiEscapedPayload) {
+    const std::vector<uint8_t> payload = {0xAA, 0x55, 0x7D, 0x00, 0xFF};
+
+    // Exactly what the V1.8 GUI emits: HEAD | ADDR SEQ TYPE CMD LEN |
+    // 7D 8A (←AA) 7D 75 (←55) 7D 5D (←7D) 00 FF | CRC | TAIL.
+    const std::vector<uint8_t> gui_wire = {
+        0xAA, 0x02, 0x10, 0x03, 0x12, 0x05, 0x00,
+        0x7D, 0x8A, 0x7D, 0x75, 0x7D, 0x5D, 0x00, 0xFF,
+        0xED, 0x5F, 0x55,
+    };
+
+    // Our packer must produce the same stuffed bytes.
+    auto cpp_wire = tb::pack_frame(tp::Address::MCU, 0x10,
+                                   tp::FrameType::DATA, tp::Cmd::GetEskin1,
+                                   payload);
+    EXPECT_EQ(cpp_wire, gui_wire);
+
+    // ... and our parser must unstuff it back to the original payload.
+    auto out = tb::try_parse_frame(gui_wire.data(), gui_wire.size());
+    ASSERT_EQ(out.status, tb::ParseStatus::Success);
+    EXPECT_EQ(out.consumed, gui_wire.size());
+    EXPECT_EQ(out.frame.cmd,  tp::Cmd::GetEskin1);
+    EXPECT_EQ(out.frame.seq,  0x10);
+    EXPECT_EQ(out.frame.type, tp::FrameType::DATA);
+    EXPECT_EQ(out.frame.addr, tp::Address::MCU);
+    EXPECT_EQ(out.frame.payload, payload);
 }

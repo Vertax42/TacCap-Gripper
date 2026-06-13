@@ -39,10 +39,10 @@ constexpr std::size_t MAX_PAYLOAD_LEN  = MAX_FRAME_LEN - MIN_FRAME_LEN;
 // Matches firmware protocol_calc_crc().
 uint16_t crc16_modbus(const uint8_t* data, std::size_t len) noexcept;
 
-// Optional byte stuffing (escape FRAME_HEAD / FRAME_TAIL / FRAME_ESCAPE inside
-// payload as ESC, byte^0x20). Firmware ships these helpers but does NOT call
-// them in pack/unpack today, so we mirror them only — pack_frame/try_parse_frame
-// below intentionally bypass stuffing.
+// Byte stuffing: escape FRAME_HEAD / FRAME_TAIL / FRAME_ESCAPE as
+// ESC,(byte^0x20). Protocol V1.8 applies this globally to the body between
+// HEAD and TAIL, so pack_frame stuffs and try_parse_frame unstuffs (the
+// firmware and PC tool do the same). HEAD/TAIL themselves stay raw.
 std::vector<uint8_t> stuff_data(const uint8_t* in, std::size_t len);
 std::vector<uint8_t> unstuff_data(const uint8_t* in, std::size_t len);
 
