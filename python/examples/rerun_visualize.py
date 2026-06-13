@@ -3,33 +3,36 @@
 """
 TacCap-Gripper async multimodal visualiser using rerun-sdk.
 
-Discovers the plugged-in gripper, streams everything the SDK can produce,
+Discovers the plugged-in gripper, streams its MCU telemetry (IMU + encoder)
 and pushes it into a rerun viewer organised by side ('left' or 'right').
 
+The wrist camera and OG visuotactile sensors are owned by an external camera
+service now — the SDK no longer discovers or starts them. To visualise them
+too, pass their device IDs explicitly; they are then opened directly via the
+standalone Camera / TactileSensor classes (not through the gripper):
+
+    --wrist <device>          e.g. /dev/video2 or /dev/v4l/by-id/...-video-index0
+    --tactile-left <serial>   OG serial -> /{side}/0_tactile
+    --tactile-right <serial>  OG serial -> /{side}/1_tactile
+
 Streams:
-    /{side}/wrist_cam                       UVC wrist (~30 Hz, BGR8)
-    /{side}/0_tactile/raw                   OG visuotactile #0 raw
-    /{side}/0_tactile/rectified             OG visuotactile #0 rectified
-    /{side}/1_tactile/raw                   OG visuotactile #1 raw
-    /{side}/1_tactile/rectified             OG visuotactile #1 rectified
     /{side}/encoder/position                rad
     /{side}/encoder/velocity                rad/s
     /{side}/imu/accel/{x,y,z}               m/s²
     /{side}/imu/gyro/{x,y,z}                rad/s
     /{side}/imu/mag/{x,y,z}                 µT
     /{side}/imu/temperature                 °C
+    /{side}/wrist_cam                       UVC wrist (opt-in, ~30 Hz, BGR8)
+    /{side}/0_tactile/raw + /rectified      OG visuotactile #0 (opt-in)
+    /{side}/1_tactile/raw + /rectified      OG visuotactile #1 (opt-in)
     /perf/fps/{stream}                      per-stream observed rate
-
-Index:
-    - 0_tactile is the OG sensor whose serial ends in an odd digit
-    - 1_tactile is the OG sensor whose serial ends in an even digit
-    (i.e. 0 = "left within this gripper", 1 = "right within this gripper",
-     mirroring the LeaderGripper.tactile_left / tactile_right accessors.)
 
 Usage:
     python python/examples/rerun_visualize.py
     python python/examples/rerun_visualize.py --duration 30
     python python/examples/rerun_visualize.py --imu-hz 100 --encoder-hz 100
+    python python/examples/rerun_visualize.py \\
+        --wrist /dev/video2 --tactile-left OG000477 --tactile-right OG000478
 """
 
 from __future__ import annotations
@@ -44,8 +47,10 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 from xense.taccap import (
+    Camera,
     LeaderGripper,
     Side,
+    TactileSensor,
     find_one,
     log,
 )
@@ -76,6 +81,25 @@ parser.add_argument(
     help="Requested encoder stream rate in Hz (default 100).",
 )
 parser.add_argument(
+    "--wrist",
+    metavar="DEVICE",
+    default=None,
+    help="Open the wrist UVC camera at this /dev path and visualise it. "
+    "Off by default (owned by the external camera service).",
+)
+parser.add_argument(
+    "--tactile-left",
+    metavar="SERIAL",
+    default=None,
+    help="Open the OG sensor with this serial as 0_tactile. Off by default.",
+)
+parser.add_argument(
+    "--tactile-right",
+    metavar="SERIAL",
+    default=None,
+    help="Open the OG sensor with this serial as 1_tactile. Off by default.",
+)
+parser.add_argument(
     "--no-rectify",
     action="store_true",
     help="Skip on-sensor rectification of OG cameras (raw only).",
@@ -102,6 +126,14 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+# Which opt-in camera streams are enabled this run.
+TAC_IDXS = []
+if args.tactile_left:
+    TAC_IDXS.append(0)
+if args.tactile_right:
+    TAC_IDXS.append(1)
+WRIST_ENABLED = bool(args.wrist)
+
 
 # ---------------------------------------------------------------------------
 # Discovery + rerun init
@@ -111,10 +143,6 @@ log.info("[discovery] scanning ...")
 eps = find_one()  # throws IoError if 0 or >1 grippers connected
 side_str = "left" if eps.side == Side.Left else "right"
 log.info(f"[discovery] side='{side_str}'  mcu={eps.mcu_serial}")
-log.info(
-    f"[discovery] tactile_0 ({eps.tactile_left_serial})  "
-    f"tactile_1 ({eps.tactile_right_serial})"
-)
 
 # Pick exactly one of: save / connect / spawn / nothing.
 if args.save:
@@ -134,9 +162,8 @@ else:
     log.info("[rerun] spawned viewer")
 
 
-# Layout: 2 columns
-#   left column  = the three video streams stacked vertically
-#   right column = encoder + IMU time-series stacked vertically
+# Layout: video streams (if any opt-in cameras) on the left, encoder + IMU
+# time-series on the right.
 def _video(name, origin):
     return rrb.Spatial2DView(name=name, origin=origin)
 
@@ -145,39 +172,50 @@ def _ts(name, origin):
     return rrb.TimeSeriesView(name=name, origin=origin)
 
 
-PERF_STREAMS = ["imu", "encoder", "tac0", "tac1", "wrist"]
+PERF_STREAMS = (
+    ["imu", "encoder"]
+    + [f"tac{i}" for i in TAC_IDXS]
+    + (["wrist"] if WRIST_ENABLED else [])
+)
+
+ts_column = rrb.Vertical(
+    _ts("encoder", f"/{side_str}/encoder"),
+    _ts("imu / accel (m/s²)", f"/{side_str}/imu/accel"),
+    _ts("imu / gyro (rad/s)", f"/{side_str}/imu/gyro"),
+    _ts("imu / mag (µT)", f"/{side_str}/imu/mag"),
+    _ts("imu / temperature (°C)", f"/{side_str}/imu/temperature"),
+    # Be explicit about which series to plot — rerun's automatic
+    # origin-based discovery sometimes leaves siblings off the
+    # legend, especially when their entities show up after the
+    # blueprint is sent.
+    rrb.TimeSeriesView(
+        name="observed fps",
+        origin="/perf/fps",
+        contents=[f"+ $origin/{s}" for s in PERF_STREAMS],
+    ),
+    row_shares=[2, 2, 2, 2, 1, 1],
+)
+
+# Only build a video column when at least one opt-in camera is enabled.
+video_views = []
+if WRIST_ENABLED:
+    video_views.append(_video(f"{side_str}/wrist_cam", f"/{side_str}/wrist_cam"))
+for i in TAC_IDXS:
+    video_views.append(
+        _video(f"{side_str}/{i}_tactile (rectified)", f"/{side_str}/{i}_tactile/rectified")
+    )
+
+if video_views:
+    root = rrb.Horizontal(
+        rrb.Vertical(*video_views, row_shares=[1] * len(video_views)),
+        ts_column,
+        column_shares=[3, 2],
+    )
+else:
+    root = ts_column
 
 blueprint = rrb.Blueprint(
-    rrb.Horizontal(
-        rrb.Vertical(
-            _video(f"{side_str}/wrist_cam", f"/{side_str}/wrist_cam"),
-            _video(
-                f"{side_str}/0_tactile (rectified)", f"/{side_str}/0_tactile/rectified"
-            ),
-            _video(
-                f"{side_str}/1_tactile (rectified)", f"/{side_str}/1_tactile/rectified"
-            ),
-            row_shares=[1, 1, 1],
-        ),
-        rrb.Vertical(
-            _ts("encoder", f"/{side_str}/encoder"),
-            _ts("imu / accel (m/s²)", f"/{side_str}/imu/accel"),
-            _ts("imu / gyro (rad/s)", f"/{side_str}/imu/gyro"),
-            _ts("imu / mag (µT)", f"/{side_str}/imu/mag"),
-            _ts("imu / temperature (°C)", f"/{side_str}/imu/temperature"),
-            # Be explicit about which series to plot — rerun's automatic
-            # origin-based discovery sometimes leaves siblings off the
-            # legend, especially when their entities show up after the
-            # blueprint is sent.
-            rrb.TimeSeriesView(
-                name="observed fps",
-                origin="/perf/fps",
-                contents=[f"+ $origin/{s}" for s in PERF_STREAMS],
-            ),
-            row_shares=[2, 2, 2, 2, 1, 1],
-        ),
-        column_shares=[3, 2],
-    ),
+    root,
     rrb.BlueprintPanel(state="collapsed"),
     rrb.TimePanel(state="collapsed"),
 )
@@ -285,8 +323,17 @@ def on_wrist(f) -> None:
 # Run
 # ---------------------------------------------------------------------------
 
-log.info("[open] LeaderGripper.open() ...")
+log.info("[open] LeaderGripper.open() (MCU-only) ...")
 g = LeaderGripper.open()
+
+# Opt-in cameras/tactile: opened directly here (not by the gripper) only when
+# the user passed device IDs on the CLI.
+tactiles = []  # list of (idx, TactileSensor)
+if args.tactile_left:
+    tactiles.append((0, TactileSensor(args.tactile_left, rectify=not args.no_rectify)))
+if args.tactile_right:
+    tactiles.append((1, TactileSensor(args.tactile_right, rectify=not args.no_rectify)))
+wrist_cam = Camera(args.wrist) if WRIST_ENABLED else None
 
 # Wrap everything that touches background threads (subscribe + start +
 # main loop) in try/finally. If start_streaming or any callback throws,
@@ -299,9 +346,10 @@ try:
     log.info("[subscribe] callbacks attached")
     g.imu.on_data(on_imu)
     g.encoder.on_data(on_encoder)
-    g.tactile_left.start(make_tactile_handler(0))  # 0 = odd-last-SN OG
-    g.tactile_right.start(make_tactile_handler(1))  # 1 = even-last-SN OG
-    g.wrist_camera.start(on_wrist)
+    for idx, ts in tactiles:
+        ts.start(make_tactile_handler(idx))  # idx 0 = --tactile-left, 1 = --tactile-right
+    if wrist_cam is not None:
+        wrist_cam.start(on_wrist)
 
     log.info(f"[stream] starting (imu={args.imu_hz}Hz, encoder={args.encoder_hz}Hz) ...")
     g.start_streaming(imu_hz=args.imu_hz, encoder_hz=args.encoder_hz)
@@ -358,12 +406,11 @@ finally:
     # Always stop the worker threads, even if an exception bubbled up
     # before we reached the success path.
     log.info("[stop] streaming + workers ...")
-    for stop_fn in (
-        lambda: g.tactile_left.stop(),
-        lambda: g.tactile_right.stop(),
-        lambda: g.wrist_camera.stop(),
-        lambda: g.stop_streaming() if g.is_streaming else None,
-    ):
+    stop_fns = [lambda ts=ts: ts.stop() for _, ts in tactiles]
+    if wrist_cam is not None:
+        stop_fns.append(lambda: wrist_cam.stop())
+    stop_fns.append(lambda: g.stop_streaming() if g.is_streaming else None)
+    for stop_fn in stop_fns:
         try:
             stop_fn()
         except Exception as e:

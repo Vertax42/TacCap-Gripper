@@ -87,12 +87,8 @@ def _resolve_sn(sn: str):
 
 
 def _open_gripper(eps) -> LeaderGripper:
-    return LeaderGripper(
-        eps.mcu_device,
-        eps.wrist_video,
-        eps.tactile_left_serial,
-        eps.tactile_right_serial,
-    )
+    # Calibration only talks to the MCU (encoder); cameras stay off.
+    return LeaderGripper(eps.mcu_device)
 
 
 def _read_positions_rad(g: LeaderGripper) -> tuple[float, float]:
@@ -131,7 +127,6 @@ def calibrate(sn: str, *, skip_open_probe: bool,
     print(f"  side         : {_bold(side_str)}")
     print(f"  mcu serial   : {eps.mcu_serial}")
     print(f"  mcu device   : {eps.mcu_device}")
-    print(f"  tactile L/R  : {eps.tactile_left_serial} / {eps.tactile_right_serial}")
     print()
 
     g = _open_gripper(eps)

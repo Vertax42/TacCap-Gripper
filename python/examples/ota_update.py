@@ -64,13 +64,8 @@ def _open_gripper(side: str) -> tuple[LeaderGripper, object]:
         eps = find_right()
     else:
         raise ValueError(f"bad --side: {side!r}")
-    g = LeaderGripper(
-        mcu_device=eps.mcu_device,
-        wrist_video=eps.wrist_video,
-        tactile_left_serial=eps.tactile_left_serial,
-        tactile_right_serial=eps.tactile_right_serial,
-        rectify_tactile=False,  # OTA doesn't need vision processing
-    )
+    # OTA only needs the MCU control link; cameras stay off (the default).
+    g = LeaderGripper(mcu_device=eps.mcu_device)
     return g, eps
 
 

@@ -8,7 +8,11 @@ its 6-DoF pose from. We attach a Pico4 motion tracker to each gripper
 and pull the pose from the XenseVR PC Service via xensevr_pc_service_sdk.
 This example overlays those tracker poses on top of the existing dual
 gripper stream so you can see, in one viewer, what each gripper is
-*sensing* (tactile / wrist / encoder / IMU) and *where it is in space*.
+*sensing* (encoder / IMU) and *where it is in space*.
+
+The wrist camera and OG tactile sensors are owned by an external camera
+service and are not opened here — this viewer covers the MCU telemetry
+(IMU + encoder) plus the Pico tracker poses.
 
 Per-side mapping is explicit: pass the firmware-burned tracker SN as
 --left-tracker-sn / --right-tracker-sn so swap-in/swap-out events
@@ -47,16 +51,13 @@ from typing import Optional
 
 # These flush knobs are read by the rerun SDK at rr.init() time, so we
 # must seed them before any other rerun import / call. Small batch +
-# short tick = low latency at the cost of more gRPC packets. We tried
-# the opposite (64 KB / 30 ms) once: the larger batch held small
-# Transform3D updates behind the bigger tactile/wrist JPEG batches,
-# making the 3D ellipsoid look choppy. Keep this low-latency profile
-# and instead decouple the xrt poller from rr.log via TrackerCache
-# below — that's what actually keeps the world view smooth.
+# short tick = low latency at the cost of more gRPC packets. The
+# low-latency profile keeps the per-tick Transform3D pose updates from
+# bunching up, so the 3D ellipsoid tracks smoothly; we further decouple
+# the xrt poller from rr.log via TrackerCache below.
 os.environ.setdefault("RERUN_FLUSH_NUM_BYTES", "4096")
 os.environ.setdefault("RERUN_FLUSH_TICK_SECS", "0.01")
 
-import cv2  # noqa: E402  — must come after env knobs to keep them paired
 import numpy as np  # noqa: E402
 import rerun as rr  # noqa: E402
 import rerun.blueprint as rrb  # noqa: E402
@@ -76,15 +77,11 @@ IMU_HZ = 100
 ENCODER_HZ = 100
 # 90 Hz is the Pico tracker's native sampling rate — polling slower
 # than this throws away real data; polling faster just returns duplicate
-# samples. Now that JPEG-compressed image streams have freed up gRPC
-# bandwidth, the viewer keeps up with the full tracker rate.
+# samples. With only IMU/encoder scalars + tracker poses on the wire, the
+# viewer keeps up with the full tracker rate comfortably.
 TRACKER_POLL_HZ = 90
 TRACKER_TRAIL_MAX = 90
 
-# JPEG quality for image streams. 90 is visually indistinguishable from
-# raw on these sensors and gives ~6-8× wire-size reduction vs BGR8.
-JPEG_QUALITY = 90
-_JPEG_ENCODE_PARAMS = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
 # Visualiser tick rate: the consumer thread reads TrackerCache and calls
 # rr.log at this rate, independent of how fast the producer pumps xrt.
 # 60 Hz matches typical displays without burning gRPC bandwidth.
@@ -93,7 +90,7 @@ TRACKER_VIS_HZ = 60
 # TRACKER_TRAIL_MAX points × 3 floats); decimating it independently from
 # the per-tick Transform3D keeps the ellipsoid pose updates light.
 TRAIL_LOG_HZ = 30
-GRIPPER_STREAMS = ["imu", "encoder", "tac0", "tac1", "wrist"]
+GRIPPER_STREAMS = ["imu", "encoder"]
 # One observed-fps stream per side. Counters bumped in the poller, scalar
 # emitted from the 1 Hz status loop (same path as gripper streams) so the
 # "observed fps" panel stays semantically clean — the previous
@@ -115,11 +112,6 @@ def parse_args() -> argparse.Namespace:
                    help="Pico motion-tracker SN bound to the RIGHT gripper.")
     p.add_argument("--no-tracker", action="store_true",
                    help="Skip Pico SDK entirely; show only gripper streams.")
-    p.add_argument("--with-raw", action="store_true",
-                   help="Also log the unrectified tactile streams. Off by "
-                        "default — most downstream tooling consumes the "
-                        "rectified frames, and dropping `raw` ~halves "
-                        "tactile bandwidth for tighter viewer latency.")
     p.add_argument("--imu-hz", type=int, default=IMU_HZ,
                    help=f"Requested IMU stream rate Hz (default {IMU_HZ}).")
     p.add_argument("--encoder-hz", type=int, default=ENCODER_HZ,
@@ -130,27 +122,6 @@ def parse_args() -> argparse.Namespace:
 
 
 # ---------------------- Gripper handlers ----------------------------------- #
-
-
-def _log_image_compressed(path: str, bgr: np.ndarray) -> None:
-    """Encode `bgr` (BGR8, SDK-native) as JPEG and log as EncodedImage.
-
-    `cv2.imencode` already expects BGR input — it handles BGR→YCbCr
-    internally per the OpenCV convention. Pre-swapping to RGB here
-    would land the file with R/B inverted, since imencode would then
-    treat the swapped data as if it were BGR. So: pass `bgr` straight
-    through; the JPEG on the wire is colour-correct and rerun decodes
-    it as RGB on the viewer side.
-    """
-    if bgr.ndim != 3 or bgr.shape[2] != 3:
-        # Mono / unusual shape — fall back to raw to avoid silent corruption.
-        rr.log(path, rr.Image(bgr))
-        return
-    ok, buf = cv2.imencode(".jpg", bgr, _JPEG_ENCODE_PARAMS)
-    if not ok:
-        rr.log(path, rr.Image(bgr[..., ::-1], color_model="rgb"))
-        return
-    rr.log(path, rr.EncodedImage(contents=bytes(buf), media_type="image/jpeg"))
 
 
 class StreamCounters:
@@ -193,27 +164,6 @@ def make_encoder_handler(side: str, counters: StreamCounters, set_time):
         set_time()
         rr.log(f"/{side}/encoder/position", rr.Scalars(float(s.position_rad)))
         rr.log(f"/{side}/encoder/velocity", rr.Scalars(float(s.velocity_rad_s)))
-    return h
-
-
-def make_tactile_handler(side: str, idx: int, counters: StreamCounters,
-                         set_time, with_raw: bool):
-    def h(f):
-        counters.bump(side, f"tac{idx}")
-        set_time()
-        if with_raw:
-            _log_image_compressed(f"/{side}/{idx}_tactile/raw", f.raw)
-        if f.rectified.size > 0:
-            _log_image_compressed(f"/{side}/{idx}_tactile/rectified",
-                                  f.rectified)
-    return h
-
-
-def make_wrist_handler(side: str, counters: StreamCounters, set_time):
-    def h(f):
-        counters.bump(side, "wrist")
-        set_time()
-        _log_image_compressed(f"/{side}/wrist_cam", f.image)
     return h
 
 
@@ -454,36 +404,21 @@ class TrackerVisualiser(threading.Thread):
 
 def _side_panel(side: str) -> rrb.ContainerLike:
     return rrb.Vertical(
-        rrb.Horizontal(
-            rrb.Vertical(
-                rrb.Spatial2DView(name=f"{side}/wrist",
-                                  origin=f"/{side}/wrist_cam"),
-                rrb.Spatial2DView(name=f"{side}/tac0 (rect)",
-                                  origin=f"/{side}/0_tactile/rectified"),
-                rrb.Spatial2DView(name=f"{side}/tac1 (rect)",
-                                  origin=f"/{side}/1_tactile/rectified"),
-                row_shares=[1, 1, 1],
-            ),
-            rrb.Vertical(
-                rrb.TimeSeriesView(name=f"{side}/encoder",
-                                   origin=f"/{side}/encoder"),
-                rrb.TimeSeriesView(name=f"{side}/accel",
-                                   origin=f"/{side}/imu/accel"),
-                rrb.TimeSeriesView(name=f"{side}/gyro",
-                                   origin=f"/{side}/imu/gyro"),
-                rrb.TimeSeriesView(name=f"{side}/mag",
-                                   origin=f"/{side}/imu/mag"),
-                row_shares=[1, 1, 1, 1],
-            ),
-            column_shares=[3, 2],
-        ),
+        rrb.TimeSeriesView(name=f"{side}/encoder",
+                           origin=f"/{side}/encoder"),
+        rrb.TimeSeriesView(name=f"{side}/accel",
+                           origin=f"/{side}/imu/accel"),
+        rrb.TimeSeriesView(name=f"{side}/gyro",
+                           origin=f"/{side}/imu/gyro"),
+        rrb.TimeSeriesView(name=f"{side}/mag",
+                           origin=f"/{side}/imu/mag"),
         rrb.TimeSeriesView(
             name=f"{side}/observed fps",
             origin=f"/perf/{side}",
             contents=[f"+ $origin/{s}" for s in GRIPPER_STREAMS]
                      + [f"+ $origin/{s}" for s in TRACKER_STREAMS],
         ),
-        row_shares=[5, 1],
+        row_shares=[2, 2, 2, 2, 1],
     )
 
 
@@ -534,12 +469,9 @@ def init_world_scene() -> None:
 
 
 def _open_gripper(eps) -> LeaderGripper:
-    return LeaderGripper(
-        eps.mcu_device,
-        eps.wrist_video,
-        eps.tactile_left_serial,
-        eps.tactile_right_serial,
-    )
+    # MCU-only: the wrist camera + OG tactile sensors are owned by an
+    # external camera service and are not opened here.
+    return LeaderGripper(eps.mcu_device)
 
 
 def main() -> int:
@@ -615,9 +547,6 @@ def main() -> int:
             log.info(f"[subscribe] {side} callbacks attached")
             g.imu.on_data(make_imu_handler(side, counters, set_time))
             g.encoder.on_data(make_encoder_handler(side, counters, set_time))
-            g.tactile_left.start(make_tactile_handler(side, 0, counters, set_time, args.with_raw))
-            g.tactile_right.start(make_tactile_handler(side, 1, counters, set_time, args.with_raw))
-            g.wrist_camera.start(make_wrist_handler(side, counters, set_time))
 
         log.info(f"[stream] starting both sides "
                  f"(imu={args.imu_hz}Hz, enc={args.encoder_hz}Hz) ...")
@@ -674,16 +603,11 @@ def main() -> int:
             poller.stop()
             poller.join(timeout=2.0)
         for label, g in (("L", gL), ("R", gR)):
-            for fn in (
-                lambda gg=g: gg.tactile_left.stop(),
-                lambda gg=g: gg.tactile_right.stop(),
-                lambda gg=g: gg.wrist_camera.stop(),
-                lambda gg=g: gg.stop_streaming() if gg.is_streaming else None,
-            ):
-                try:
-                    fn()
-                except Exception as e:
-                    log.warning(f"[{label}] during stop: {type(e).__name__}: {e}")
+            try:
+                if g.is_streaming:
+                    g.stop_streaming()
+            except Exception as e:
+                log.warning(f"[{label}] during stop: {type(e).__name__}: {e}")
 
         elapsed = time.time() - mono_start
         log.info(f"[summary] {elapsed:.2f}s total")
