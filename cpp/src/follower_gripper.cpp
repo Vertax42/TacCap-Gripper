@@ -44,8 +44,7 @@ FollowerGripper::FollowerGripper(const Config& cfg)
       motor_(t_),
       key_(t_),
       errors_(t_),
-      ota_(t_),
-      wrist_(make_wrist_config(cfg)) {
+      ota_(t_) {
     // Mirror LeaderGripper: drain leftover DATA, then probe firmware
     // version + SN once at construction time so the log shows what the
     // host is talking to.
@@ -79,19 +78,24 @@ FollowerGripper::FollowerGripper(const Config& cfg)
     } catch (...) {}
 
     logger()->info(
-        "FollowerGripper opened: device={} firmware={} sn={} "
-        "tactile_left={} tactile_right={} wrist={}",
-        cfg_.mcu_device, fw_version_str, fw_sn_str,
-        cfg_.tactile_left_serial, cfg_.tactile_right_serial,
-        cfg_.wrist_video);
+        "FollowerGripper opened: device={} firmware={} sn={} open_cameras={}",
+        cfg_.mcu_device, fw_version_str, fw_sn_str, cfg_.open_cameras);
 
-    if (!cfg_.tactile_left_serial.empty()) {
-        tac_l_ = std::make_unique<TactileSensor>(
-            TactileSensor::Config{cfg_.tactile_left_serial, cfg_.rectify_tactile});
-    }
-    if (!cfg_.tactile_right_serial.empty()) {
-        tac_r_ = std::make_unique<TactileSensor>(
-            TactileSensor::Config{cfg_.tactile_right_serial, cfg_.rectify_tactile});
+    // Cameras are off by default — an external camera service owns the wrist
+    // UVC + OG V4L2 devices. Only open them when explicitly asked AND a
+    // device path / serial is provided.
+    if (cfg_.open_cameras) {
+        if (!cfg_.wrist_video.empty()) {
+            wrist_ = std::make_unique<Camera>(make_wrist_config(cfg_));
+        }
+        if (!cfg_.tactile_left_serial.empty()) {
+            tac_l_ = std::make_unique<TactileSensor>(
+                TactileSensor::Config{cfg_.tactile_left_serial, cfg_.rectify_tactile});
+        }
+        if (!cfg_.tactile_right_serial.empty()) {
+            tac_r_ = std::make_unique<TactileSensor>(
+                TactileSensor::Config{cfg_.tactile_right_serial, cfg_.rectify_tactile});
+        }
     }
 }
 
@@ -100,12 +104,13 @@ FollowerGripper::~FollowerGripper() {
 }
 
 std::unique_ptr<FollowerGripper> FollowerGripper::open() {
+    // Discovery is MCU-only; cameras are owned externally and stay off
+    // (open_cameras defaults to false). A caller that still wants this
+    // gripper to drive the cameras must construct it explicitly with
+    // open_cameras=true and the device paths/serials.
     auto eps = discovery::find_one();
     Config cfg{};
-    cfg.mcu_device           = eps.mcu_device;
-    cfg.wrist_video          = eps.wrist_video;
-    cfg.tactile_left_serial  = eps.tactile_left_serial;
-    cfg.tactile_right_serial = eps.tactile_right_serial;
+    cfg.mcu_device = eps.mcu_device;
     return std::make_unique<FollowerGripper>(cfg);
 }
 
