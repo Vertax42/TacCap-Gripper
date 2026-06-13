@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-14
+
+### Fixed
+- **V1.8 global byte stuffing** in the framing layer (`pack_frame` escapes the
+  body ADDR..CRC; `try_parse_frame` is TAIL-delimited and unstuffs before the
+  CRC check, which stays over the unescaped HEAD..PAYLOAD). The firmware and PC
+  tool escape the wire as of V1.8 — without this, `GetSn` and any frame whose
+  body contains 0xAA/0x55/0x7D silently timed out.
+- libxense (submodule): VID:PID `3938:1300` added to the device whitelist and
+  the `GSPS` serial prefix mapped to the Omni sensor type.
+
+### Changed
+- **Discovery is MCU-only.** `scan_grippers()` no longer enumerates the wrist
+  camera or visuotactile sensors (an external camera service owns them);
+  `GripperEndpoints` drops `wrist_video` / `tactile_*_serial`. `LeaderGripper` /
+  `FollowerGripper` no longer open cameras at construction — gated behind a new
+  `open_cameras` flag (default off). **Breaking.**
+- Examples reworked: `leader_demo` / `calibrate` / `ota_update` are MCU-only;
+  `rerun_visualize` opens wrist/tactile only via `--wrist` / `--tactile-*`;
+  `rerun_dual_with_tracker` drops the camera panels.
+
+### Added
+- **TacCap SN scheme** (`TCGU01A24Z0001m` / `GSPS01A24Z0001`): `parse_serial()`,
+  a `Role` enum, `GripperEndpoints.role`, and `find_leader()` / `find_follower()`.
+  Side comes from the SN sequence digit, with a `GetDevType` (firmware
+  LEFT/RIGHT) fallback, then CH343 chip-SN parity.
+- **V1.7 command set** (follower / motor — interfaces reserved, pending
+  follower hardware): motor set-zero, CAN-id read/write, protocol switch/query,
+  control-stats, and follower gripper-config get/set. New `GripperConfig`,
+  `MotorControlStats`, `MotorProtocol`; `MotorStatus` grew 18→40 B and
+  `MotorImpedanceCtrl` 16→20 B (lenient decode keeps legacy 18 B working).
+
 ## [0.1.0] - 2026-05-27
 
 First usable release. Everything below landed on `main` since the
