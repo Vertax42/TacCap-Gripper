@@ -5,6 +5,7 @@
 #include <taccap/error.hpp>
 #include <taccap/protocol/codec.hpp>
 #include <taccap/protocol/commands.hpp>
+#include <taccap/protocol/payloads.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -114,17 +115,26 @@ std::vector<GripperEndpoints> scan_all() {
     // and OG visuotactile sensors are owned by an external camera service
     // now, so discovery is MCU-only — no USB-hub grouping needed.
     //
-    // The firmware-side SN (Cmd::GetSn) — NOT the CH343 chip SN — decides
-    // the gripper's side. The CH343 USB-chip SN is hardware-burned in the
-    // WCH chip and bears no relationship to the board build; the firmware
-    // SN is what's burned intentionally per-board, so it's the
-    // authoritative side identifier.
+    // Side priority (most → least authoritative):
+    //   1. TacCap SN (GetSn 0x04 / parse_serial): the burned SN encodes the
+    //      side in its sequence digit — for an m/s-suffixed gripper SN
+    //      (TCGU01A24Z0001m) that is the *second-to-last character* of the
+    //      string (the suffix m/s is last). This is the authoritative source.
+    //   2. GetDevType (0x06): the flash-burned LEFT/RIGHT byte — fallback for
+    //      units whose SN isn't burned / readable (e.g. firmware too old for
+    //      GetSn). Better than chip parity because it's firmware ground truth.
+    //   3. CH343 chip-SN parity — last-resort; the WCH chip SN is unrelated to
+    //      the board build, so it can be wrong (e.g. a left board whose chip
+    //      SN happens to end even).
+    // Role (leader/follower) only comes from the SN patch suffix (m/s).
     std::vector<GripperEndpoints> out;
     for (auto& mcu : scan_mcus()) {
-        // Open a transient transport, read firmware SN, decide side.
-        // This is a one-shot startup cost — closed before LeaderGripper /
-        // FollowerGripper open their own Transport on the same device.
+        // Open a transient transport and probe the firmware. One-shot startup
+        // cost — closed before LeaderGripper / FollowerGripper open their own
+        // Transport on the same device. ack_timeout/retries are kept low here
+        // because both probes are best-effort (old firmware may not answer).
         std::string fw_sn;
+        std::optional<Side> dev_side;   // from GetDevType (authoritative)
         try {
             bus::Transport::Config cfg{};
             cfg.serial.device           = mcu.device;
@@ -132,40 +142,53 @@ std::vector<GripperEndpoints> scan_all() {
             cfg.serial.read_timeout_ms  = 1;
             cfg.serial.write_timeout_ms = 1000;
             cfg.peer                    = protocol::Address::MCU;
-            cfg.ack_timeout             = std::chrono::milliseconds(1000);
-            cfg.max_retries             = 2;
+            cfg.ack_timeout             = std::chrono::milliseconds(500);
+            cfg.max_retries             = 1;
             bus::Transport t(cfg);
-            // If the firmware is still streaming from a previous host
-            // process (Ctrl+C / abort, or a sibling publisher we just
-            // killed), the rx pipe is full of DATA frames and the GetSn
-            // ACK gets buried until they drain. Send a best-effort
-            // StopStream first to quiesce the firmware before the real
-            // request — same pattern as LeaderGripper::start_streaming.
+            // If the firmware is still streaming from a previous host process
+            // (Ctrl+C / abort, or a sibling publisher we just killed), the rx
+            // pipe is full of DATA frames and the next ACK gets buried until
+            // they drain. Best-effort StopStream first to quiesce it.
             try {
                 t.send_cmd(protocol::Cmd::StopStream, {},
                            std::chrono::milliseconds(500));
             } catch (...) { /* expected when fw is already idle */ }
 
-            auto ack = t.send_cmd(protocol::Cmd::GetSn, {},
-                                  std::chrono::milliseconds(1000));
-            if (!ack.is_nack && !ack.data.empty()) {
-                fw_sn = protocol::decode_sn(ack.data.data(), ack.data.size());
-            }
+            // 1) GetDevType — firmware-authoritative side (LEFT=0/RIGHT=1/
+            //    UNKNOWN=0xFF). Primary source; survives firmware too old for
+            //    GetSn.
+            try {
+                auto dt = t.send_cmd(protocol::Cmd::GetDevType, {},
+                                     std::chrono::milliseconds(500));
+                if (!dt.is_nack && dt.data.size() == 1) {
+                    if (dt.data[0] == static_cast<uint8_t>(protocol::DeviceType::Left))
+                        dev_side = Side::Left;
+                    else if (dt.data[0] == static_cast<uint8_t>(protocol::DeviceType::Right))
+                        dev_side = Side::Right;
+                }
+            } catch (...) { /* very old fw without dev-type — leave unset */ }
+
+            // 2) GetSn — full TacCap SN, carries the leader/follower role in
+            //    its patch suffix. May time out on firmware that predates SN
+            //    support; that's fine, role just stays Unknown.
+            try {
+                auto ack = t.send_cmd(protocol::Cmd::GetSn, {},
+                                      std::chrono::milliseconds(500));
+                if (!ack.is_nack && !ack.data.empty()) {
+                    fw_sn = protocol::decode_sn(ack.data.data(), ack.data.size());
+                }
+            } catch (...) { /* GetSn unsupported / timed out — leave empty */ }
         } catch (...) {
-            // Transport open failed (port already in use by another
-            // process, baud rate unsupported, etc.) — fall back to the
-            // CH343 chip SN parity so discovery still produces a result,
-            // even if the side is unreliable. Caller can still match by
-            // mcu_serial / firmware_sn after we report what we have.
+            // Transport open failed (port in use, etc.) — fall back to the
+            // CH343 chip-SN parity below.
         }
 
-        // The firmware SN now carries both side and leader/follower role.
-        // parse_serial degrades gracefully (legacy / empty SN → side still
-        // recovered from the last digit, role Unknown).
         const auto parsed = parse_serial(fw_sn);
 
         GripperEndpoints e{};
-        e.side        = parsed.side.value_or(mcu.side);
+        e.side        = parsed.side ? *parsed.side     // burned SN (authoritative)
+                      : dev_side    ? *dev_side        // GetDevType fallback
+                                    : mcu.side;        // chip-SN parity last resort
         e.mcu_device  = mcu.device;
         e.mcu_serial  = mcu.serial_number;
         e.firmware_sn = std::move(fw_sn);
@@ -193,8 +216,8 @@ GripperEndpoints find_left() {
         if (g.side == Side::Left) return g;
     }
     throw IoError("discovery::find_left: no left-side gripper detected "
-                  "(firmware SN must end in an odd digit; CH343 chip SN "
-                  "parity is no longer the authoritative source)", ENODEV);
+                  "(side comes from GetDevType / the SN sequence; check the "
+                  "device's burned DEV_TYPE)", ENODEV);
 }
 
 GripperEndpoints find_right() {
@@ -202,8 +225,8 @@ GripperEndpoints find_right() {
         if (g.side == Side::Right) return g;
     }
     throw IoError("discovery::find_right: no right-side gripper detected "
-                  "(firmware SN must end in an even digit; CH343 chip SN "
-                  "parity is no longer the authoritative source)", ENODEV);
+                  "(side comes from GetDevType / the SN sequence; check the "
+                  "device's burned DEV_TYPE)", ENODEV);
 }
 
 GripperEndpoints find_leader() {

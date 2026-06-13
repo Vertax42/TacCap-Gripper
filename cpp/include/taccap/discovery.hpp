@@ -2,8 +2,11 @@
 //
 // Zero-config gripper discovery.
 //
-// Side (Left/Right) comes from the firmware-burned SN's sequence number:
-// **last digit odd → left, even → right**. No udev rules, no system setup.
+// Side (Left/Right) is read from the firmware: GetDevType (0x06) returns the
+// flash-burned DEV_TYPE (LEFT/RIGHT) — the authoritative source, available
+// even on firmware too old for GetSn. It falls back to the SN sequence parity
+// (last digit odd → left, even → right) and finally the CH343 chip-SN parity.
+// No udev rules, no system setup.
 //
 //   MCU board (CH343 dual-serial, VID:PID 1a86:55d2):
 //       /dev/serial/by-id/usb-1a86_USB_Dual_Serial_<SN>-if02
