@@ -34,6 +34,47 @@ std::optional<Side> side_from_serial(const std::string& s) noexcept {
     return std::nullopt;
 }
 
+ParsedSerial parse_serial(const std::string& s) noexcept {
+    ParsedSerial out;
+    out.raw = s;
+
+    // Full TacCap grammar:
+    //   product (4 alpha + 2 digit) | batch (1 alpha + 2 digit) |
+    //   line (1 alpha: Z=R&D, A=production) | sequence (4 digit) |
+    //   patch (optional m|s).  e.g.  TCGU01 A24 Z 0001 m   /   GSPS01 A24 Z 0001
+    static const std::regex re(
+        R"(^([A-Za-z]{4}\d{2})([A-Za-z]\d{2})([A-Za-z])(\d{4})([mMsS]?)$)");
+    std::smatch m;
+    if (std::regex_match(s, m, re)) {
+        out.product  = m[1].str();
+        out.batch    = m[2].str();
+        out.line     = m[3].str()[0];
+        out.sequence = m[4].str();
+        const char last = out.sequence.back();
+        out.side = ((last - '0') % 2 == 1) ? Side::Left : Side::Right;
+        const std::string patch = m[5].str();
+        if (!patch.empty()) {
+            const char p = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(patch[0])));
+            out.role = (p == 'm') ? Role::Leader : Role::Follower;
+        }
+        out.valid = true;
+        return out;
+    }
+
+    // Not a full TacCap SN (legacy "SN0000002", empty, vendor string, ...).
+    // Recover what we can so callers still get a usable side/role: the last
+    // digit decides side, a trailing m|s decides role.
+    out.side = side_from_serial(s);
+    if (!s.empty()) {
+        const char last = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(s.back())));
+        if (last == 'm') out.role = Role::Leader;
+        else if (last == 's') out.role = Role::Follower;
+    }
+    return out;
+}
+
 namespace {
 
 // Extract SN from "/dev/serial/by-id/usb-1a86_USB_Dual_Serial_5C2C247728-if02".
@@ -84,7 +125,6 @@ std::vector<GripperEndpoints> scan_all() {
         // This is a one-shot startup cost — closed before LeaderGripper /
         // FollowerGripper open their own Transport on the same device.
         std::string fw_sn;
-        std::optional<Side> fw_side;
         try {
             bus::Transport::Config cfg{};
             cfg.serial.device           = mcu.device;
@@ -110,7 +150,6 @@ std::vector<GripperEndpoints> scan_all() {
                                   std::chrono::milliseconds(1000));
             if (!ack.is_nack && !ack.data.empty()) {
                 fw_sn = protocol::decode_sn(ack.data.data(), ack.data.size());
-                fw_side = side_from_serial(fw_sn);
             }
         } catch (...) {
             // Transport open failed (port already in use by another
@@ -120,11 +159,17 @@ std::vector<GripperEndpoints> scan_all() {
             // mcu_serial / firmware_sn after we report what we have.
         }
 
+        // The firmware SN now carries both side and leader/follower role.
+        // parse_serial degrades gracefully (legacy / empty SN → side still
+        // recovered from the last digit, role Unknown).
+        const auto parsed = parse_serial(fw_sn);
+
         GripperEndpoints e{};
-        e.side        = fw_side.value_or(mcu.side);
+        e.side        = parsed.side.value_or(mcu.side);
         e.mcu_device  = mcu.device;
         e.mcu_serial  = mcu.serial_number;
         e.firmware_sn = std::move(fw_sn);
+        e.role        = parsed.role;
         out.push_back(std::move(e));
     }
     return out;
@@ -159,6 +204,24 @@ GripperEndpoints find_right() {
     throw IoError("discovery::find_right: no right-side gripper detected "
                   "(firmware SN must end in an even digit; CH343 chip SN "
                   "parity is no longer the authoritative source)", ENODEV);
+}
+
+GripperEndpoints find_leader() {
+    for (const auto& g : scan_all()) {
+        if (g.role == Role::Leader) return g;
+    }
+    throw IoError("discovery::find_leader: no leader gripper detected "
+                  "(firmware SN must end with patch suffix 'm'; legacy or "
+                  "unburned SNs report role Unknown)", ENODEV);
+}
+
+GripperEndpoints find_follower() {
+    for (const auto& g : scan_all()) {
+        if (g.role == Role::Follower) return g;
+    }
+    throw IoError("discovery::find_follower: no follower gripper detected "
+                  "(firmware SN must end with patch suffix 's'; legacy or "
+                  "unburned SNs report role Unknown)", ENODEV);
 }
 
 }  // namespace xense::taccap::discovery
