@@ -81,10 +81,15 @@ LeaderGripper = _taccap_native.LeaderGripper
 FollowerGripper = _taccap_native.FollowerGripper
 GripperEndpoints = _taccap_native.GripperEndpoints
 Side = _taccap_native.Side
+Role = _taccap_native.Role
+ParsedSerial = _taccap_native.ParsedSerial
+parse_serial = _taccap_native.parse_serial
 scan_grippers = _taccap_native.scan_grippers
 find_one = _taccap_native.find_one
 find_left = _taccap_native.find_left
 find_right = _taccap_native.find_right
+find_leader = _taccap_native.find_leader
+find_follower = _taccap_native.find_follower
 
 # ---- Exceptions -------------------------------------------------------------
 ProtocolError = _taccap_native.ProtocolError
@@ -139,10 +144,15 @@ __all__ = [
     "FollowerGripper",
     "GripperEndpoints",
     "Side",
+    "Role",
+    "ParsedSerial",
+    "parse_serial",
     "scan_grippers",
     "find_one",
     "find_left",
     "find_right",
+    "find_leader",
+    "find_follower",
     # Exceptions
     "ProtocolError",
     "CrcError",

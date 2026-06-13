@@ -500,22 +500,53 @@ void bind_components(py::module_& m) {
         .value("Left",  discovery::Side::Left)
         .value("Right", discovery::Side::Right);
 
+    py::enum_<discovery::Role>(m, "Role")
+        .value("Leader",   discovery::Role::Leader)
+        .value("Follower", discovery::Role::Follower)
+        .value("Unknown",  discovery::Role::Unknown);
+
+    py::class_<discovery::ParsedSerial>(m, "ParsedSerial")
+        .def_readonly("raw",      &discovery::ParsedSerial::raw)
+        .def_readonly("product",  &discovery::ParsedSerial::product)
+        .def_readonly("batch",    &discovery::ParsedSerial::batch)
+        .def_property_readonly("line", [](const discovery::ParsedSerial& p) {
+            return std::string(1, p.line);
+        })
+        .def_readonly("sequence", &discovery::ParsedSerial::sequence)
+        .def_readonly("side",     &discovery::ParsedSerial::side)
+        .def_readonly("role",     &discovery::ParsedSerial::role)
+        .def_readonly("valid",    &discovery::ParsedSerial::valid)
+        .def("__repr__", [](const discovery::ParsedSerial& p) {
+            return std::string("ParsedSerial(raw=") + p.raw +
+                   ", product=" + p.product +
+                   ", line=" + std::string(1, p.line) +
+                   ", seq=" + p.sequence +
+                   ", side=" + (p.side ? discovery::to_string(*p.side) : "None") +
+                   ", role=" + discovery::to_string(p.role) +
+                   ", valid=" + (p.valid ? "True" : "False") + ")";
+        });
+    m.def("parse_serial", &discovery::parse_serial, py::arg("serial"));
+
     py::class_<discovery::GripperEndpoints>(m, "GripperEndpoints")
         .def_readonly("side",                 &discovery::GripperEndpoints::side)
+        .def_readonly("role",                 &discovery::GripperEndpoints::role)
         .def_readonly("mcu_device",           &discovery::GripperEndpoints::mcu_device)
         .def_readonly("mcu_serial",           &discovery::GripperEndpoints::mcu_serial)
         .def_readonly("firmware_sn",          &discovery::GripperEndpoints::firmware_sn)
         .def("__repr__", [](const discovery::GripperEndpoints& e) {
             return std::string("GripperEndpoints(side=") +
                    discovery::to_string(e.side) +
+                   ", role=" + discovery::to_string(e.role) +
                    ", mcu=" + e.mcu_device +
                    " ch343_sn=" + e.mcu_serial +
                    " fw_sn=" + e.firmware_sn + ")";
         });
-    m.def("scan_grippers", &discovery::scan_all);
-    m.def("find_one",      &discovery::find_one);
-    m.def("find_left",     &discovery::find_left);
-    m.def("find_right",    &discovery::find_right);
+    m.def("scan_grippers",  &discovery::scan_all);
+    m.def("find_one",       &discovery::find_one);
+    m.def("find_left",      &discovery::find_left);
+    m.def("find_right",     &discovery::find_right);
+    m.def("find_leader",    &discovery::find_leader);
+    m.def("find_follower",  &discovery::find_follower);
 
     // ---- LeaderGripper --------------------------------------------------
     py::class_<LeaderGripper>(m, "LeaderGripper")
