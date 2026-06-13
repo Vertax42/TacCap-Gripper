@@ -505,18 +505,12 @@ void bind_components(py::module_& m) {
         .def_readonly("mcu_device",           &discovery::GripperEndpoints::mcu_device)
         .def_readonly("mcu_serial",           &discovery::GripperEndpoints::mcu_serial)
         .def_readonly("firmware_sn",          &discovery::GripperEndpoints::firmware_sn)
-        .def_readonly("wrist_video",          &discovery::GripperEndpoints::wrist_video)
-        .def_readonly("tactile_left_serial",  &discovery::GripperEndpoints::tactile_left_serial)
-        .def_readonly("tactile_right_serial", &discovery::GripperEndpoints::tactile_right_serial)
         .def("__repr__", [](const discovery::GripperEndpoints& e) {
             return std::string("GripperEndpoints(side=") +
                    discovery::to_string(e.side) +
                    ", mcu=" + e.mcu_device +
                    " ch343_sn=" + e.mcu_serial +
-                   " fw_sn=" + e.firmware_sn +
-                   ", wrist=" + e.wrist_video +
-                   ", tactile_l=" + e.tactile_left_serial +
-                   ", tactile_r=" + e.tactile_right_serial + ")";
+                   " fw_sn=" + e.firmware_sn + ")";
         });
     m.def("scan_grippers", &discovery::scan_all);
     m.def("find_one",      &discovery::find_one);
@@ -528,7 +522,7 @@ void bind_components(py::module_& m) {
         .def(py::init([](const std::string& mcu, const std::string& wrist,
                          const std::string& tac_l, const std::string& tac_r,
                          uint32_t baud, unsigned ack_ms, unsigned retries,
-                         bool rectify) {
+                         bool open_cameras, bool rectify) {
                 LeaderGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
@@ -537,17 +531,20 @@ void bind_components(py::module_& m) {
                 cfg.baudrate             = baud;
                 cfg.ack_timeout_ms       = ack_ms;
                 cfg.max_retries          = retries;
+                cfg.open_cameras         = open_cameras;
                 cfg.rectify_tactile      = rectify;
                 py::gil_scoped_release gil;
                 return std::make_unique<LeaderGripper>(cfg);
              }),
              py::arg("mcu_device"),
-             py::arg("wrist_video"),
-             py::arg("tactile_left_serial"),
-             py::arg("tactile_right_serial"),
+             // Cameras are off by default; these only matter with open_cameras=True.
+             py::arg("wrist_video")         = "",
+             py::arg("tactile_left_serial") = "",
+             py::arg("tactile_right_serial") = "",
              py::arg("baudrate")            = 3'000'000u,
              py::arg("ack_timeout_ms")      = 200u,
              py::arg("max_retries")         = 1u,
+             py::arg("open_cameras")        = false,
              py::arg("rectify_tactile")     = true)
         .def_static("open", []() {
             py::gil_scoped_release gil;
@@ -582,7 +579,7 @@ void bind_components(py::module_& m) {
         .def(py::init([](const std::string& mcu, const std::string& wrist,
                          const std::string& tac_l, const std::string& tac_r,
                          uint32_t baud, unsigned ack_ms, unsigned retries,
-                         bool rectify) {
+                         bool open_cameras, bool rectify) {
                 FollowerGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
@@ -591,17 +588,20 @@ void bind_components(py::module_& m) {
                 cfg.baudrate             = baud;
                 cfg.ack_timeout_ms       = ack_ms;
                 cfg.max_retries          = retries;
+                cfg.open_cameras         = open_cameras;
                 cfg.rectify_tactile      = rectify;
                 py::gil_scoped_release gil;
                 return std::make_unique<FollowerGripper>(cfg);
              }),
              py::arg("mcu_device"),
-             py::arg("wrist_video"),
-             py::arg("tactile_left_serial"),
-             py::arg("tactile_right_serial"),
+             // Cameras are off by default; these only matter with open_cameras=True.
+             py::arg("wrist_video")         = "",
+             py::arg("tactile_left_serial") = "",
+             py::arg("tactile_right_serial") = "",
              py::arg("baudrate")            = 3'000'000u,
              py::arg("ack_timeout_ms")      = 1000u,
              py::arg("max_retries")         = 2u,
+             py::arg("open_cameras")        = false,
              py::arg("rectify_tactile")     = true)
         .def_static("open", []() {
             py::gil_scoped_release gil;

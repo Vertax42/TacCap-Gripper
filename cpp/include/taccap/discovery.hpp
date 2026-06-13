@@ -10,18 +10,13 @@
 //       /dev/serial/by-id/usb-1a86_USB_Dual_Serial_<SN>-if02
 //                                                  ^^^^^ last digit
 //
-//   Wrist UVC camera (Sunplus VID 1bcf or Xense PID-bearing):
-//       /dev/v4l/by-id/usb-Xense_..._XC<NNNNNN>_...   (last digit of XC SN)
-//
-//   Tactile (OG) sensors via libxense lite Context::enumerate_devices():
-//       OG<NNNNNN> serial; last digit decides which side of *its* gripper
-//       it sits on.
-//
-// One physical gripper unit = one MCU board + one wrist camera + a pair of
-// OG sensors. Today's prototype has a single gripper plugged in at a time;
-// the API is designed so that adding a second one (e.g. left + right) just
-// requires the user to call `find_left()` / `find_right()` instead of
-// `find_one()`.
+// Discovery is MCU-only: the wrist UVC camera and the OG visuotactile
+// sensors are no longer started by this SDK (an external camera service
+// owns them now), so we do not enumerate them here. One MCU board = one
+// gripper unit. Today's prototype has a single gripper plugged in at a
+// time; the API is designed so that adding a second one (e.g. left +
+// right) just requires the user to call `find_left()` / `find_right()`
+// instead of `find_one()`.
 
 #pragma once
 
@@ -43,21 +38,7 @@ struct McuEndpoint {
     Side        side;            // from last digit of serial_number
 };
 
-// One OG visuotactile sensor entry.
-struct OgEndpoint {
-    std::string serial;          // e.g. "OG000477"
-    std::string video_path;      // e.g. /dev/video1
-    Side        side;            // from last digit of serial
-};
-
-// One wrist UVC camera entry (Sunplus / Xense XC* device).
-struct WristCameraEndpoint {
-    std::string device;          // e.g. /dev/v4l/by-id/...XC000008...-video-index0
-    std::string serial;          // e.g. "XC000008" (parsed from path) or empty
-    std::optional<Side> side;    // populated iff serial is parsable
-};
-
-// One complete gripper unit: MCU + wrist + 2 OG sensors.
+// One complete gripper unit, identified by its MCU board.
 // `side` of the gripper is taken from the firmware-side SN (read at
 // discovery time via Cmd::GetSn). The CH343 USB-chip SN that lives in
 // `mcu_serial` is preserved for identification / debugging but does NOT
@@ -70,19 +51,13 @@ struct GripperEndpoints {
     std::string mcu_serial;               // CH343 chip SN, e.g. "5C2C247728"
     std::string firmware_sn;              // STM32 flash SN read via Cmd::GetSn,
                                           // e.g. "SN0000002" — drives `side`
-    std::string wrist_video;
-    std::string tactile_left_serial;      // OG with odd last digit (within this gripper)
-    std::string tactile_right_serial;     // OG with even last digit
 };
 
-// Lower-level scan helpers (testable / inspectable).
-std::vector<McuEndpoint>         scan_mcus();
-std::vector<OgEndpoint>          scan_og_sensors();
-std::vector<WristCameraEndpoint> scan_wrist_cameras();
+// Lower-level scan helper (testable / inspectable).
+std::vector<McuEndpoint> scan_mcus();
 
-// Pair MCU + OG sensors + wrist camera into per-gripper bundles.
-// Today this assumes a single gripper unit is plugged in; future work
-// (USB-topology matching) can extend the matching for multi-gripper setups.
+// Enumerate per-gripper bundles. One MCU board = one gripper unit; the
+// firmware SN read over the control link decides the side.
 std::vector<GripperEndpoints> scan_all();
 
 // Convenience accessors. Throw IoError if the requested gripper isn't found.
