@@ -340,6 +340,58 @@ void bind_components(py::module_& m) {
     }, py::arg("data"),
        "Compute CRC32 with the same parameters as zlib.crc32 / firmware.");
 
+    // ---- V1.7 follower (slave) types ------------------------------------
+    py::enum_<protocol::MotorProtocol>(m, "MotorProtocol")
+        .value("Private", protocol::MotorProtocol::Private)
+        .value("Mit",     protocol::MotorProtocol::Mit);
+
+    py::class_<protocol::GripperConfig>(m, "GripperConfig")
+        .def(py::init([]() {
+            protocol::GripperConfig c{};
+            c.magic   = protocol::GRIPPER_CONFIG_MAGIC;
+            c.version = protocol::GRIPPER_CONFIG_VERSION;
+            c.flags   = protocol::GripperConfigFlag::Valid;
+            return c;
+        }))
+        .def_readwrite("magic",        &protocol::GripperConfig::magic)
+        .def_readwrite("version",      &protocol::GripperConfig::version)
+        .def_readwrite("flags",        &protocol::GripperConfig::flags)
+        .def_readwrite("max_open_rad", &protocol::GripperConfig::max_open_rad)
+        .def_readwrite("min_open_rad", &protocol::GripperConfig::min_open_rad)
+        .def("__repr__", [](const protocol::GripperConfig& c) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                "GripperConfig(flags=0x%04x, max_open=%.4frad, min_open=%.4frad)",
+                c.flags, c.max_open_rad, c.min_open_rad);
+            return std::string(buf);
+        });
+
+    py::class_<protocol::MotorControlStats>(m, "MotorControlStats")
+        .def_readonly("running",             &protocol::MotorControlStats::running)
+        .def_readonly("mode",                &protocol::MotorControlStats::mode)
+        .def_readonly("target_hz",           &protocol::MotorControlStats::target_hz)
+        .def_readonly("period_ms",           &protocol::MotorControlStats::period_ms)
+        .def_readonly("sample_ms",           &protocol::MotorControlStats::sample_ms)
+        .def_readonly("actual_hz",           &protocol::MotorControlStats::actual_hz)
+        .def_readonly("target_seq",          &protocol::MotorControlStats::target_seq)
+        .def_readonly("applied_seq",         &protocol::MotorControlStats::applied_seq)
+        .def_readonly("loop_count",          &protocol::MotorControlStats::loop_count)
+        .def_readonly("error_count",         &protocol::MotorControlStats::error_count)
+        .def_readonly("deadline_miss_count", &protocol::MotorControlStats::deadline_miss_count)
+        .def_readonly("timeout_count",       &protocol::MotorControlStats::timeout_count)
+        .def_readonly("last_error",          &protocol::MotorControlStats::last_error)
+        .def_readonly("target_age_ms",       &protocol::MotorControlStats::target_age_ms)
+        .def_readonly("target_update_hz",    &protocol::MotorControlStats::target_update_hz)
+        .def("__repr__", [](const protocol::MotorControlStats& s) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "MotorControlStats(running=%d, mode=%d, actual_hz=%.1f, loops=%u, errors=%u)",
+                s.running, s.mode, s.actual_hz,
+                static_cast<unsigned>(s.loop_count),
+                static_cast<unsigned>(s.error_count));
+            return std::string(buf);
+        });
+
     // ---- MotorStatusSample ----------------------------------------------
     py::class_<MotorStatusSample>(m, "MotorStatusSample")
         .def_property_readonly("host_time", [](const MotorStatusSample& s) {
@@ -350,6 +402,14 @@ void bind_components(py::module_& m) {
         .def_readonly("actual_torque",  &MotorStatusSample::actual_torque)
         .def_readonly("motor_temp_c",   &MotorStatusSample::motor_temp_c)
         .def_readonly("status",         &MotorStatusSample::status)
+        // V1.7 (zero when firmware sends the legacy 18-byte status):
+        .def_readonly("actual_current", &MotorStatusSample::actual_current)
+        .def_readonly("target_pos",     &MotorStatusSample::target_pos)
+        .def_readonly("target_vel",     &MotorStatusSample::target_vel)
+        .def_readonly("target_torque",  &MotorStatusSample::target_torque)
+        .def_readonly("target_current", &MotorStatusSample::target_current)
+        .def_readonly("control_mode",   &MotorStatusSample::control_mode)
+        .def_readonly("current_source", &MotorStatusSample::current_source)
         .def("__repr__", [](const MotorStatusSample& s) {
             char buf[160];
             std::snprintf(buf, sizeof(buf),
@@ -409,14 +469,16 @@ void bind_components(py::module_& m) {
             },
             py::arg("target_torque_nm"),
             py::arg("max_vel_radps"))
-        .def("set_impedance", [](Motor& self, float pos, float kp, float kd, float ff) {
+        .def("set_impedance", [](Motor& self, float pos, float kp, float kd,
+                                 float ff, float ff_vel) {
                 py::gil_scoped_release g;
-                self.set_impedance(pos, kp, kd, ff);
+                self.set_impedance(pos, kp, kd, ff, ff_vel);
             },
             py::arg("target_pos_rad"),
             py::arg("kp_nm_per_rad"),
             py::arg("kd_nm_s_per_rad"),
-            py::arg("feedforward_torque_nm"))
+            py::arg("feedforward_torque_nm"),
+            py::arg("feedforward_vel_radps") = 0.0f)  // V1.7; MIT only
         .def("read_status", [](Motor& self, unsigned timeout_ms) {
             py::gil_scoped_release gil;
             return self.read_status(std::chrono::milliseconds(timeout_ms));
@@ -431,7 +493,23 @@ void bind_components(py::module_& m) {
                 } catch (...) {}
             });
         }, py::arg("callback"))
-        .def("off", &Motor::off, py::arg("subscription_id"));
+        .def("off", &Motor::off, py::arg("subscription_id"))
+        // ---- V1.7 (follower-only; reserved, pending hardware) --------------
+        .def("set_zero", [](Motor& self) { py::gil_scoped_release g; self.set_zero(); })
+        .def("get_can_id", [](Motor& self) { py::gil_scoped_release g; return self.get_can_id(); })
+        .def("set_can_id", [](Motor& self, uint8_t id) {
+            py::gil_scoped_release g; self.set_can_id(id);
+        }, py::arg("can_id"))
+        .def("switch_protocol", [](Motor& self, protocol::MotorProtocol p) {
+            py::gil_scoped_release g; self.switch_protocol(p);
+        }, py::arg("protocol"))
+        .def("get_protocol", [](Motor& self) {
+            py::gil_scoped_release g; return self.get_protocol();
+        })
+        .def("control_stats", [](Motor& self, unsigned timeout_ms) {
+            py::gil_scoped_release g;
+            return self.control_stats(std::chrono::milliseconds(timeout_ms));
+        }, py::arg("timeout_ms") = 100);
 
     // ---- Camera ---------------------------------------------------------
     py::class_<Camera>(m, "Camera")
@@ -660,6 +738,16 @@ void bind_components(py::module_& m) {
         .def_property_readonly("ota",           [](FollowerGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](FollowerGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
         .def_property_readonly("is_streaming",  &FollowerGripper::is_streaming)
+        // V1.7 follower config (reserved; pending follower hardware).
+        .def("get_gripper_config", [](FollowerGripper& g, unsigned timeout_ms) {
+            py::gil_scoped_release gil;
+            return g.get_gripper_config(std::chrono::milliseconds(timeout_ms));
+        }, py::arg("timeout_ms") = 100u)
+        .def("set_gripper_config", [](FollowerGripper& g,
+                                      const protocol::GripperConfig& cfg) {
+            py::gil_scoped_release gil;
+            g.set_gripper_config(cfg);
+        }, py::arg("config"))
         .def("__enter__", [](FollowerGripper& g) -> FollowerGripper& { return g; })
         .def("__exit__",  [](FollowerGripper& g, py::object, py::object, py::object) {
             py::gil_scoped_release gil;

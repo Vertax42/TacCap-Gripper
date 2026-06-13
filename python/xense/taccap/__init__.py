@@ -59,6 +59,9 @@ TransportStats = _taccap_native.TransportStats
 ImuSample = _taccap_native.ImuSample
 EncoderSample = _taccap_native.EncoderSample
 MotorStatusSample = _taccap_native.MotorStatusSample
+MotorProtocol = _taccap_native.MotorProtocol          # V1.7
+GripperConfig = _taccap_native.GripperConfig          # V1.7
+MotorControlStats = _taccap_native.MotorControlStats  # V1.7
 KeySample = _taccap_native.KeySample
 SensorErrorSample = _taccap_native.SensorErrorSample
 CameraFrame = _taccap_native.CameraFrame
@@ -132,6 +135,9 @@ __all__ = [
     "ImuSample",
     "EncoderSample",
     "MotorStatusSample",
+    "MotorProtocol",
+    "GripperConfig",
+    "MotorControlStats",
     "CameraFrame",
     "TactileFrame",
     "IMU",
