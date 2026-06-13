@@ -277,20 +277,30 @@ owned by an external camera service now, so the scanner no longer
 enumerates them — one CH343 MCU board = one gripper unit, and there is no
 USB-hub grouping step any more.
 
+The firmware SN follows the TacCap scheme and encodes both side and role:
+
+```
+  TCGU01 A24 Z 0001 m     line: Z=R&D / A=production   seq last digit: odd→Left
+  product batch line seq patch  patch: m=Master(leader) / s=Slave(follower)
+```
+
 ```
 scan_grippers():
   1) walk /dev/serial/by-id/, keep usb-1a86_USB_Dual_Serial_<SN>-if02
   2) for each MCU, open a transient Transport and read the firmware SN
-     (Cmd::GetSn); side := odd-last(SN) -> Left, else Right. Falls back
-     to the CH343 chip-SN parity if the SN read fails.
-  3) emit one GripperEndpoints{side, mcu_device, mcu_serial, firmware_sn}
-     per MCU board.
+     (Cmd::GetSn), then parse_serial(): side := odd-last(seq) -> Left else
+     Right; role := patch m|s -> Leader|Follower. Side falls back to the
+     CH343 chip-SN parity if the SN read fails; role is Unknown for legacy/
+     empty SNs.
+  3) emit one GripperEndpoints{side, role, mcu_device, mcu_serial,
+     firmware_sn} per MCU board.
 
 API:
    scan_grippers()       -> list of GripperEndpoints
    find_one()            -> single gripper, throws if 0 or >1
-   find_left()           -> first GripperEndpoints with side==Left
-   find_right()          -> first GripperEndpoints with side==Right
+   find_left()  / find_right()    -> by side  (odd/even seq digit)
+   find_leader()/ find_follower() -> by role  (SN patch suffix m/s)
+   parse_serial(sn)      -> ParsedSerial{product,batch,line,sequence,side,role,valid}
 ```
 
 ---

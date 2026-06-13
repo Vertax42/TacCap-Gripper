@@ -37,8 +37,11 @@ What's in:
   plus opt-in visuotactile (+ rectify @ 30 Hz) and wrist UVC (@ 30 Hz)
   camera classes (off by default — owned by an external camera service)
 - `LeaderGripper` / `FollowerGripper` aggregates, zero-config MCU
-  discovery (`scan_grippers` / `find_left` / `find_right`)
-- Side detection from firmware-burned SN (one MCU board = one gripper)
+  discovery (`scan_grippers` / `find_left` / `find_right` /
+  `find_leader` / `find_follower`)
+- Side **and** leader/follower role parsed from the firmware-burned SN
+  (TacCap scheme, e.g. `TCGU01A24Z0001m`) via `parse_serial()`; one MCU
+  board = one gripper
 - Python bindings on 3.10 + 3.12 (system py3.10 for ROS 2 Humble,
   conda py3.12 for primary dev)
 - Single-instance spdlog logger shared with C++; per-session file
@@ -285,6 +288,35 @@ g_right.start_streaming(imu_hz=100, encoder_hz=100)
 # ... attach callbacks, stop_streaming() on exit ...
 ```
 
+### Serial numbers (TacCap SN scheme)
+
+The firmware-burned SN encodes both the side and the leader/follower role:
+
+```
+  TCGU01 A24 Z 0001 m        gripper      GSPS01 A24 Z 0001   visuotactile
+  └─┬──┘ └┬┘ │ └┬─┘ │                                          (no patch suffix)
+ product batch│  seq patch    product : TCGU01 gripper / GSPS01 sensor
+              line            line    : Z = R&D/test, A = production
+                              seq     : last digit odd → Left, even → Right
+                              patch   : m = Master (leader), s = Slave (follower)
+```
+
+`scan_grippers()` parses this for every gripper; each `GripperEndpoints`
+carries `.side` (`Side.Left/Right`) and `.role` (`Role.Leader/Follower/
+Unknown`). Pick a unit by side **or** role:
+
+```python
+from xense.taccap import find_left, find_right, find_leader, find_follower, parse_serial
+
+eps = find_leader()              # the gripper whose SN patch suffix is 'm'
+p   = parse_serial("TCGU01A24Z0001m")
+print(p.side, p.role, p.valid)   # Side.Left  Role.Leader  True
+```
+
+`parse_serial()` degrades gracefully: a legacy (`SN000002`) or empty SN
+still yields a best-effort `side` (last digit) with `role = Role.Unknown`
+and `valid = False`.
+
 ### Encoder zero calibration
 
 ```python
@@ -320,6 +352,12 @@ All scripts live under `python/examples/`. Enable C++ examples with
 specific gripper — software can't re-derive which is which. We maintain
 two bilateral pairs on **this bench**; figure out which one is plugged in
 (`scan_grippers` reports the firmware SNs) and use the matching row.
+
+> **Note — legacy SNs.** The firmware-SN column below predates the TacCap
+> SN scheme (`TCGU01A24…`); these units still report the old `SN0000NN`
+> strings until they're re-burned. The **CH343 SN** column is the stable
+> key that never changes, so match on that. Once re-burned, `.role`
+> (leader/follower) becomes available via the new SN too.
 
 **Pair A** — verified 2026-05-27 by shaking each gripper and watching the
 matching ellipsoid move in the rerun 3D view:
@@ -375,7 +413,7 @@ To actually re-zero the gripper, run `calibrate.py` against the SN
 you want to fix:
 
 ```bash
-python python/examples/calibrate.py SN000002      # right gripper
+python python/examples/calibrate.py TCGU01A24A0002m   # right leader gripper
 ```
 
 The script:
