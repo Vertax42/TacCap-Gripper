@@ -4,13 +4,17 @@ C++17 / Python SDK for the **TacCap-Gripper** —— XenseRobotics' multimodal
 tactile data-collection gripper. Exposes a single namespace
 (`xense::taccap::` / `xense.taccap`) for:
 
-- Two visuotactile cameras (V4L2 + on-sensor calibration → rectify) — vendored
-  from [libxensesdk](http://192.168.1.61/Vertax42/libxensesdk) in **lite mode**
-  (no ONNX / CUDA / MIGraphX runtime dependency)
-- Wrist UVC camera
 - IMU + encoder readout via the TC-GU-01 serial protocol
 - Motor control (follower side, FDCAN→灵足 transparently routed via MCU)
-- Leader / follower gripper objects that aggregate the above
+- Leader / follower gripper objects that aggregate the MCU sensors and
+  expose zero-config discovery
+- Standalone `Camera` (wrist UVC) and `TactileSensor` (visuotactile: V4L2 +
+  on-sensor calibration → rectify, vendored from
+  [libxensesdk](http://192.168.1.61/Vertax42/libxensesdk) in **lite mode** —
+  no ONNX / CUDA / MIGraphX runtime dependency). These are **opt-in**: an
+  external camera service owns the V4L2 devices now, so the gripper
+  aggregates do **not** open them unless constructed with
+  `open_cameras=True`.
 
 This repository is the foundation for two adapter repos that will follow:
 
@@ -29,12 +33,12 @@ What's in:
 - TC-GU-01 wire protocol up to firmware V1.6 (OTA, MagCal, KeyStatus,
   sensor errors), async transport with ACK matching, per-cmd DATA
   subscribers
-- All sensor components: IMU @ 100 Hz, encoder @ 100 Hz, two
-  visuotactile cameras + rectify @ 30 Hz, wrist UVC @ 30 Hz
-- `LeaderGripper` / `FollowerGripper` aggregates, zero-config single
-  + bilateral discovery (`scan_grippers` / `find_left` / `find_right`)
-- Side detection from firmware-burned SN, hub-path grouping for
-  bilateral setups
+- MCU sensor components: IMU @ 100 Hz, encoder @ 100 Hz, motor status;
+  plus opt-in visuotactile (+ rectify @ 30 Hz) and wrist UVC (@ 30 Hz)
+  camera classes (off by default — owned by an external camera service)
+- `LeaderGripper` / `FollowerGripper` aggregates, zero-config MCU
+  discovery (`scan_grippers` / `find_left` / `find_right`)
+- Side detection from firmware-burned SN (one MCU board = one gripper)
 - Python bindings on 3.10 + 3.12 (system py3.10 for ROS 2 Humble,
   conda py3.12 for primary dev)
 - Single-instance spdlog logger shared with C++; per-session file
@@ -58,12 +62,12 @@ CMake project; you choose which surface to build.
 
 ### 1. Prerequisites
 
-| | Required |
-|---|---|
-| OS | Linux (Ubuntu 22.04+ tested). The capture path is V4L2 + UVC XU; macOS / Windows are not supported. |
-| Toolchain | gcc/g++ ≥ 13, CMake ≥ 3.20, Ninja, pkg-config |
-| Python (for bindings) | CPython 3.12 |
-| Recommended | `mamba` / `conda` — `environment.yml` pins the entire toolchain & C++ deps to a known-good set |
+|                       | Required                                                                                            |
+| --------------------- | --------------------------------------------------------------------------------------------------- |
+| OS                    | Linux (Ubuntu 22.04+ tested). The capture path is V4L2 + UVC XU; macOS / Windows are not supported. |
+| Toolchain             | gcc/g++ ≥ 13, CMake ≥ 3.20, Ninja, pkg-config                                                       |
+| Python (for bindings) | CPython 3.12                                                                                        |
+| Recommended           | `mamba` / `conda` — `environment.yml` pins the entire toolchain & C++ deps to a known-good set      |
 
 > **Why mamba is recommended.** `environment.yml` ships gcc-14, OpenCV
 > 4.12, Eigen, OpenSSL, zlib, nlohmann_json, gtest, pybind11 and
@@ -179,11 +183,11 @@ output, so the example binaries run in place without `LD_LIBRARY_PATH`.
 
 CMake options (top-level `CMakeLists.txt:19-21`):
 
-| Option | Default | Effect |
-|---|---|---|
-| `TACCAP_BUILD_PYTHON`   | `ON`  | Build the `_taccap_native` pybind11 module |
-| `TACCAP_BUILD_EXAMPLES` | `OFF` | Build `taccap_hello` and `leader_demo` smoke binaries |
-| `TACCAP_BUILD_TESTS`    | `OFF` | Build the gtest suite under `cpp/tests/` |
+| Option                  | Default | Effect                                                |
+| ----------------------- | ------- | ----------------------------------------------------- |
+| `TACCAP_BUILD_PYTHON`   | `ON`    | Build the `_taccap_native` pybind11 module            |
+| `TACCAP_BUILD_EXAMPLES` | `OFF`   | Build `taccap_hello` and `leader_demo` smoke binaries |
+| `TACCAP_BUILD_TESTS`    | `OFF`   | Build the gtest suite under `cpp/tests/`              |
 
 `XENSE_LITE_BUILD=ON` is forced before the submodule's CMakeLists is
 loaded, so the libxense lite path is always selected — no ML deps will
@@ -229,20 +233,34 @@ git submodule foreach --recursive 'git clean -xdf'
 ```python
 import xense.taccap as t
 
-# Auto-discover the one connected gripper (left or right) by USB topology.
+# Auto-discover the one connected gripper (left or right) by its MCU serial.
 # Throws IoError if 0 or >1 grippers are plugged in — use the explicit
 # constructor (below) for bilateral setups.
-gripper = t.LeaderGripper.open()
+gripper = t.LeaderGripper.open()      # MCU-only; cameras stay off
 gripper.start_streaming(imu_hz=100, encoder_hz=100)
 
-gripper.tactile_left.start(lambda f:  print("L", f.frame_index, f.rectified.shape))
-gripper.tactile_right.start(lambda f: print("R", f.frame_index, f.rectified.shape))
-
+enc_sub = gripper.encoder.on_data(lambda s: print("enc", s.position_rad))
 imu_sub = gripper.imu.on_data(lambda s: print(s))
 
 # ... do work ...
 gripper.stop_streaming()
 ```
+
+The wrist camera and OG tactile sensors are owned by an external camera
+service, so `open()` does not touch them. To have a gripper drive them,
+construct it explicitly with `open_cameras=True` and the device IDs:
+
+```python
+g = t.LeaderGripper(mcu_device, wrist_video="/dev/video2",
+                    tactile_left_serial="OG000477",
+                    tactile_right_serial="OG000478",
+                    open_cameras=True)
+g.tactile_left.start(lambda f: print("L", f.frame_index, f.rectified.shape))
+g.wrist_camera.start(lambda f: print("wrist", f.frame_index))
+```
+
+Or open them on their own with the standalone `t.Camera` / `t.TactileSensor`
+classes — independent of any gripper.
 
 ### Bilateral (left + right in one process)
 
@@ -259,8 +277,7 @@ right = next(e for e in endpoints if e.side == Side.Right)
 # that throw if the requested side isn't visible.
 
 def _open(eps):
-    return LeaderGripper(eps.mcu_device, eps.wrist_video,
-                         eps.tactile_left_serial, eps.tactile_right_serial)
+    return LeaderGripper(eps.mcu_device)   # MCU-only; cameras off by default
 
 g_left, g_right = _open(left), _open(right)
 g_left.start_streaming(imu_hz=100, encoder_hz=100)
@@ -286,15 +303,15 @@ check, live readout).
 All scripts live under `python/examples/`. Enable C++ examples with
 `-DTACCAP_BUILD_EXAMPLES=ON` (they're off by default).
 
-| Script | What it does |
-|---|---|
-| `rerun_visualize.py` | Single-gripper multimodal rerun viewer — wrist + 2× tactile (raw + rect) + IMU/encoder time-series + observed FPS panel. |
-| `rerun_dual_with_tracker.py` | Dual-gripper + Pico4 motion-tracker 6-DoF poses in one viewer. Requires [`xensevr_pc_service_sdk`](https://github.com/Vertax42/Xense-Pico-Teleop-Interface) and the XenseVR PC Service running. Streaming-friendly: JPEG-compressed image streams, tight rerun flush. Use `--left-tracker-sn` / `--right-tracker-sn` to map tracker SNs to sides; add `--with-raw` to also log raw tactile. |
-| `calibrate.py` | Per-SN encoder zero calibration CLI. Shows raw + cooked side-by-side, latches zero, sanity-checks max-open angle, then enters a live readout. See [Calibration](#calibration). |
-| `ota_update.py` | Firmware OTA flashing CLI with progress + post-flash status probe. **Risky — wrong artefact bricks the MCU.** |
-| `v4l2_probe.py`, `v4l2_sweep.py` | Manual V4L2 bringup probes. Used when firmware SN isn't burned yet or the SDK discovery path is broken. |
-| `taccap_hello` (C++) | Smoke test for the C++ install path — prints the SDK + libxense versions and constructs a `Context`. |
-| `leader_demo` (C++) | Reports streaming rates for a single leader gripper over 5 seconds. |
+| Script                           | What it does                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rerun_visualize.py`             | Single-gripper rerun viewer — IMU/encoder time-series + observed FPS panel. Wrist + tactile are opt-in: pass `--wrist` / `--tactile-left` / `--tactile-right` to open them standalone (off by default).                                                                                                                                                                                       |
+| `rerun_dual_with_tracker.py`     | Dual-gripper IMU/encoder + Pico4 motion-tracker 6-DoF poses in one viewer. Requires [`xensevr_pc_service_sdk`](https://github.com/Vertax42/Xense-Pico-Teleop-Interface) and the XenseVR PC Service running. Use `--left-tracker-sn` / `--right-tracker-sn` to map tracker SNs to sides. (Cameras are owned by the external camera service and not shown here.)                                  |
+| `calibrate.py`                   | Per-SN encoder zero calibration CLI. Shows raw + cooked side-by-side, latches zero, sanity-checks max-open angle, then enters a live readout. See [Calibration](#calibration).                                                                                                                                                                                                              |
+| `ota_update.py`                  | Firmware OTA flashing CLI with progress + post-flash status probe. **Risky — wrong artefact bricks the MCU.**                                                                                                                                                                                                                                                                               |
+| `v4l2_probe.py`, `v4l2_sweep.py` | Manual V4L2 bringup probes for the wrist / OG cameras (discovery is MCU-only and no longer enumerates them). Also handy when a firmware SN isn't burned yet.                                                                                                                                                                                                                                  |
+| `taccap_hello` (C++)             | Smoke test for the C++ install path — prints the SDK + libxense versions and constructs a `Context`.                                                                                                                                                                                                                                                                                        |
+| `leader_demo` (C++)              | Reports streaming rates for a single leader gripper over 5 seconds.                                                                                                                                                                                                                                                                                                                         |
 
 ### Bench-specific tracker ↔ gripper binding (this checkout)
 
@@ -307,25 +324,24 @@ two bilateral pairs on **this bench**; figure out which one is plugged in
 **Pair A** — verified 2026-05-27 by shaking each gripper and watching the
 matching ellipsoid move in the rerun 3D view:
 
-| Side  | Gripper firmware SN | Gripper CH343 SN | Pico4 tracker SN     |
-|-------|---------------------|------------------|----------------------|
-| LEFT  | `SN000001`          | `5C2C247734`     | `PC2310MLK7080553G`  |
-| RIGHT | `SN000002`          | `5C2C247736`     | `PC2310MLL1091974G`  |
+| Side  | Gripper firmware SN | Gripper CH343 SN | Pico4 tracker SN    |
+| ----- | ------------------- | ---------------- | ------------------- |
+| LEFT  | `SN000001`          | `5C2C247734`     | `PC2310MLK7080553G` |
+| RIGHT | `SN000002`          | `5C2C247736`     | `PC2310MLL1091974G` |
 
 **Pair B** — verified 2026-05-29 by the same shake-test:
 
-| Side  | Gripper firmware SN | Gripper CH343 SN | Pico4 tracker SN     |
-|-------|---------------------|------------------|----------------------|
-| LEFT  | `SN000003`          | `5C2C246526`     | `PC2310MLL3200579G`  |
-| RIGHT | `SN000004`          | `5C2C246523`     | `PC2310MLL3200496G`  |
+| Side  | Gripper firmware SN | Gripper CH343 SN | Pico4 tracker SN    |
+| ----- | ------------------- | ---------------- | ------------------- |
+| LEFT  | `SN000003`          | `5C2C246526`     | `PC2310MLL3200579G` |
+| RIGHT | `SN000004`          | `5C2C246523`     | `PC2310MLL3200496G` |
 
 Canonical invocations:
 
+
 ```bash
 # Pair A
-python python/examples/rerun_dual_with_tracker.py \
-    --left-tracker-sn  PC2310MLK7080553G \
-    --right-tracker-sn PC2310MLL1091974G
+python python/examples/rerun_dual_with_tracker.py --left-tracker-sn  PC2310MLK7080553G --right-tracker-sn PC2310MLL1091974G
 
 # Pair B
 python python/examples/rerun_dual_with_tracker.py \
@@ -333,7 +349,7 @@ python python/examples/rerun_dual_with_tracker.py \
     --right-tracker-sn PC2310MLL3200496G
 ```
 
-> **Heads-up for forks / other benches.** These SNs identify *our*
+> **Heads-up for forks / other benches.** These SNs identify _our_
 > hardware, not yours. If you clone this repo onto a different setup,
 > replace them with whatever `xensevr_pc_service_sdk` reports for your
 > trackers, then re-verify by shaking one gripper at a time. Also note:
@@ -364,8 +380,7 @@ python python/examples/calibrate.py SN000002      # right gripper
 
 The script:
 
-1. Resolves the firmware SN to the right `mcu_device` / cameras /
-   tactile sensors.
+1. Resolves the firmware SN to the right `mcu_device`.
 2. Prints the current encoder reading (both `raw` and clamped) so the
    existing drift is visible.
 3. Prompts "hold the gripper **FULLY CLOSED**, press [Enter]".
@@ -396,10 +411,10 @@ for diagnostic output — they bypass the file sink.
 
 Two sinks attached by default:
 
-| Sink | Level | Pattern |
-|---|---|---|
-| stderr (colour) | user-controllable, default `INFO` | `[%D %T.%e] [%n] [%^%l%$] %v` |
-| file (per-session) | always `DEBUG` | `[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v` |
+| Sink               | Level                             | Pattern                               |
+| ------------------ | --------------------------------- | ------------------------------------- |
+| stderr (colour)    | user-controllable, default `INFO` | `[%D %T.%e] [%n] [%^%l%$] %v`         |
+| file (per-session) | always `DEBUG`                    | `[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v` |
 
 File-sink behaviour:
 
@@ -453,6 +468,7 @@ Both paths are listed in `.gitignore` — they live next to the SDK for
 easy `grep` / IDE discovery but never appear in `git status`.
 
 What's where:
+
 - `tc-gu-01/App/protocol/protocol_cmd.h` + `protocol_data.h` — canonical
   command enum + POD payload layouts. The SDK's
   `cpp/include/taccap/protocol/{commands.hpp,payloads.hpp}` mirror these

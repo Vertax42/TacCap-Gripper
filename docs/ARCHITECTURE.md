@@ -23,9 +23,9 @@ repositories and are out of scope here.
 │  L4  AGGREGATE                                                         │
 │  ─────────────                                                         │
 │   LeaderGripper          aggregate object: owns Transport + IMU +      │
-│                          Encoder + 2× TactileSensor + Camera; lifecycle│
-│                          (start_streaming / stop_streaming); discovery │
-│                          (open() = auto-find via USB hub topology).    │
+│                          Encoder; lifecycle (start/stop_streaming).    │
+│                          Discovery open() auto-finds by MCU serial.    │
+│                          Cameras/tactile are opt-in (open_cameras).    │
 │                                                                        │
 │   FollowerGripper        (future: same layout + Motor; not in repo yet)│
 └────────────────────────────┬───────────────────────────────────────────┘
@@ -236,6 +236,11 @@ taccap-gripper/
                       (Python: gil_scoped_acquire + try/discard_as_unraisable)
 ```
 
+> The Camera (3.3) and Tactile (3.4) paths below are **opt-in** — they run
+> only when the device was opened (a gripper constructed with
+> `open_cameras=true`, or a standalone `Camera` / `TactileSensor`). They are
+> not part of the default gripper lifecycle, which is MCU-only.
+
 ### 3.3 Camera (wrist, V4L2)
 
 ```
@@ -265,41 +270,21 @@ taccap-gripper/
 
 ---
 
-## 4. Discovery (zero-config, bilateral)
+## 4. Discovery (zero-config, MCU-only)
 
-Each TacCap-Gripper unit plugs into one external host USB port. Inside it
-sits an internal hub fan-out:
-
-```
-host USB port           e.g. /sys/bus/usb/devices/1-3
-        ↓
-internal Corechips hub
-        ↓
-  ┌─────┴─────┬───────┬───────┐
-CH343        OG×2    XC      ...
-(USART3)    (UVC)   (UVC)
-```
-
-The discovery scanner extracts `<bus>-<port>` from each device's sysfs
-path (e.g. `1-3`) — that's a stable per-gripper key. With the lab leader
-plugged into root port 3, all four devices live under `1-3.*` and group
-into one bundle.
+Discovery is MCU-only. The wrist camera and OG visuotactile sensors are
+owned by an external camera service now, so the scanner no longer
+enumerates them — one CH343 MCU board = one gripper unit, and there is no
+USB-hub grouping step any more.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  scan_grippers()                                             │
-├──────────────────────────────────────────────────────────────┤
-│   1) walk /dev/serial/by-id/                                 │
-│        keep usb-1a86_USB_Dual_Serial_<SN>-if02 entries       │
-│        side := odd-last(SN) → Left, else Right               │
-│   2) Context::enumerate_devices() → keep OG* serials         │
-│   3) walk /dev/v4l/by-id/  → keep XC* / Sunplus entries      │
-│   4) for each device, find_hub_path() = first \d+-[\d.]+     │
-│      segment of its canonical sysfs path                     │
-│   5) group by hub_path. one group with an MCU = one gripper. │
-│   6) within a group: OG with odd-last-SN → tactile_left      │
-│                       OG with even-last-SN → tactile_right   │
-└──────────────────────────────────────────────────────────────┘
+scan_grippers():
+  1) walk /dev/serial/by-id/, keep usb-1a86_USB_Dual_Serial_<SN>-if02
+  2) for each MCU, open a transient Transport and read the firmware SN
+     (Cmd::GetSn); side := odd-last(SN) -> Left, else Right. Falls back
+     to the CH343 chip-SN parity if the SN read fails.
+  3) emit one GripperEndpoints{side, mcu_device, mcu_serial, firmware_sn}
+     per MCU board.
 
 API:
    scan_grippers()       -> list of GripperEndpoints
@@ -317,17 +302,21 @@ API:
 ```cpp
 #include <taccap/leader_gripper.hpp>
 
-auto g = xense::taccap::LeaderGripper::open();   // unique_ptr; throws on no device
+auto g = xense::taccap::LeaderGripper::open();   // unique_ptr; MCU-only, throws on no device
 
 g->imu().on_data    ([](const xense::taccap::ImuSample& s)     { ... });
 g->encoder().on_data([](const xense::taccap::EncoderSample& s) { ... });
-g->tactile_left ().start([](const xense::taccap::TactileFrame& f) { ... });
-g->tactile_right().start([](const xense::taccap::TactileFrame& f) { ... });
-g->wrist_camera ().start([](const xense::taccap::CameraFrame&  f) { ... });
 
 g->start_streaming(/*imu_hz=*/100, /*encoder_hz=*/100);
 std::this_thread::sleep_for(5s);
 g->stop_streaming();
+
+// Wrist camera + tactile are opt-in — an external camera service owns the
+// V4L2 devices. Construct explicitly with open_cameras=true to drive them:
+//   LeaderGripper::Config cfg; cfg.mcu_device = ...; cfg.wrist_video = ...;
+//   cfg.tactile_left_serial = ...; cfg.open_cameras = true;
+//   auto g = std::make_unique<LeaderGripper>(cfg);
+//   g->tactile_left().start(...); g->wrist_camera().start(...);
 ```
 
 ### Python
@@ -336,16 +325,17 @@ g->stop_streaming();
 import time
 from xense.taccap import LeaderGripper
 
-with LeaderGripper.open() as g:
+with LeaderGripper.open() as g:          # MCU-only; cameras off by default
     g.imu.on_data           (lambda s: print(s.accel_mps2, s.temperature_c))
     g.encoder.on_data       (lambda s: print(s.position_rad))
-    g.tactile_left.start    (lambda f: ...)
-    g.tactile_right.start   (lambda f: ...)
-    g.wrist_camera.start    (lambda f: ...)
 
     g.start_streaming(imu_hz=100, encoder_hz=100)
     time.sleep(5)
     g.stop_streaming()
+
+# Opt-in cameras: LeaderGripper(mcu_device, wrist_video=..., open_cameras=True)
+# then g.tactile_left.start(...) / g.wrist_camera.start(...); or use the
+# standalone Camera / TactileSensor classes directly.
 ```
 
 ---
@@ -421,7 +411,9 @@ streams, no cameras) and assemble its own data-flow on top.
 ## 9. Verified end-to-end (real hardware)
 
 5-second multistream capture on the lab leader (`OG000477` /
-`OG000478` / `XC000008`, MCU `5C2C247728`):
+`OG000478` / `XC000008`, MCU `5C2C247728`). This historical run was taken
+with the cameras opened (`open_cameras=true`); the default gripper
+lifecycle is now MCU-only (IMU + encoder):
 
 ```
 IMU         : 506 frames | 101.2 fps   (firmware caps at ~100 Hz)
