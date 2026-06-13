@@ -4,7 +4,12 @@
 // firmware: HEAD(0xAA) | ADDR | SEQ | TYPE | CMD | LEN(2 LE) | PAYLOAD
 //          | CRC(2 LE) | TAIL(0x55)
 //
-// Mirror of Embedded Software/tc-gu-01/App/protocol/protocol_frame.{h,c}.
+// Protocol V1.8: the body between HEAD and TAIL (ADDR..CRC) is byte-stuffed
+// on the wire — every 0xAA/0x55/0x7D becomes ESC,(byte^0x20) — so HEAD/TAIL
+// stay unambiguous delimiters. CRC is computed over the *unstuffed*
+// HEAD..PAYLOAD. The layout above is the unstuffed view.
+//
+// Mirror of third_party/firmware/tc-gu-01/App/protocol/protocol_frame.{h,c}.
 
 #pragma once
 

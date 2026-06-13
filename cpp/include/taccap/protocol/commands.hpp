@@ -8,7 +8,10 @@
 // When in doubt, the firmware source is canonical. The PROTOCOL.md document
 // and any host-side Python implementation are secondary.
 //
-// Tracked firmware protocol version: **V1.6** (2026-05-19).
+// Tracked firmware protocol: **wire framing V1.8** (global byte stuffing, see
+// bus/frame.cpp) + **command set V1.7** (motor / CAN-id / gripper-config
+// commands; motor_status_t / motor_impedance_ctrl_t struct growth). The
+// follower-only V1.7 commands are implemented but not yet hardware-validated.
 
 #pragma once
 

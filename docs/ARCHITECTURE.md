@@ -9,6 +9,14 @@ recording tools, ROS 2 hardware-interface packages, lerobot Robot
 adapters, the follower gripper with motor control — live in their own
 repositories and are out of scope here.
 
+**Protocol tracked:** wire framing **V1.8** (the body between HEAD and TAIL
+is byte-stuffed; CRC over the unstuffed HEAD..PAYLOAD) + command set **V1.7**
+(motor / CAN-id / gripper-config, plus motor_status_t / motor_impedance_ctrl_t
+growth). Discovery is MCU-only; cameras are owned by an external camera
+service. Side/role come from the firmware SN (`parse_serial`) with a
+GetDevType fallback. The follower-only V1.7 commands are implemented to the
+protocol but not yet validated on follower hardware.
+
 ---
 
 ## 1. Layered stack

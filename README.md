@@ -30,9 +30,11 @@ Both adapters consume this SDK; they do not reimplement device access.
 gripper setups (left + right simultaneously, ~280 MB/s outbound).
 What's in:
 
-- TC-GU-01 wire protocol up to firmware V1.6 (OTA, MagCal, KeyStatus,
-  sensor errors), async transport with ACK matching, per-cmd DATA
-  subscribers
+- TC-GU-01 protocol: **wire framing V1.8** (global byte stuffing) +
+  **command set V1.7** (OTA, MagCal, KeyStatus, sensor errors, motor /
+  CAN-id / gripper-config). Async transport with ACK matching, per-cmd
+  DATA subscribers. Follower-only V1.7 motor commands are implemented but
+  pending follower-hardware validation.
 - MCU sensor components: IMU @ 100 Hz, encoder @ 100 Hz, motor status;
   plus opt-in visuotactile (+ rectify @ 30 Hz) and wrist UVC (@ 30 Hz)
   camera classes (off by default — owned by an external camera service)
