@@ -5,6 +5,7 @@ add_executable(taccap_unit_tests
     test_frame.cpp
     test_codec.cpp
     test_codec_v16.cpp
+    test_codec_v17.cpp
     test_python_compat.cpp
     test_stuff.cpp
     test_transport.cpp

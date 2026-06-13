@@ -44,6 +44,7 @@
 #include <taccap/ota.hpp>
 
 #include <cerrno>
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -90,6 +91,13 @@ public:
     TactileSensor&  tactile_left()   { return deref_(tac_l_, "tactile_left",  "tactile_left_serial"); }
     TactileSensor&  tactile_right()  { return deref_(tac_r_, "tactile_right", "tactile_right_serial"); }
     Motor&          motor()          noexcept { return motor_; }
+
+    // ---- V1.7 follower config (reserved; pending follower hardware) ---------
+    // Read / write the follower's open/close limit config (Cmd 0x66/0x67).
+    // Not yet validated on real hardware; NACKs as SensorOffline on a leader.
+    protocol::GripperConfig get_gripper_config(
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
+    void set_gripper_config(const protocol::GripperConfig& cfg);
     Key&            key()            noexcept { return key_; }            // V1.4
     SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
     OtaSession&     ota()            noexcept { return ota_; }            // V1.3

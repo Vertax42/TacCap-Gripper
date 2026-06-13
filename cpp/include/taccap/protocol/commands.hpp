@@ -69,11 +69,17 @@ enum class Cmd : uint8_t {
     MotorEnable         = 0x30,
     MotorDisable        = 0x31,
     MotorClearFault     = 0x32,
+    MotorSetZero        = 0x33,    // V1.7 — zero / mode (0..2-byte payload)
+    MotorGetCanId       = 0x34,    // V1.7 — read motor CAN id (resp 1B)
+    MotorSetCanId       = 0x35,    // V1.7 — set motor CAN id (req 1B)
+    MotorSwitchProtocol = 0x36,    // V1.7 — switch CAN protocol, persist to flash
+    MotorGetProtocol    = 0x37,    // V1.7 — query CAN protocol (resp 1B MotorProtocol)
     MotorPosCtrl        = 0x40,
     MotorVelCtrl        = 0x41,
     MotorTorqueCtrl     = 0x42,
     MotorImpedanceCtrl  = 0x43,
     GetMotorStatus      = 0x50,
+    GetMotorControlStats = 0x51,   // V1.7 — follower control-loop stats (resp 48B)
 
     // Config (0x60–0x6F)
     SetImuConfig        = 0x60,
@@ -82,6 +88,8 @@ enum class Cmd : uint8_t {
     GetEncoderConfig    = 0x63,
     SetEskinConfig      = 0x64,
     GetEskinConfig      = 0x65,
+    SetGripperConfig    = 0x66,    // V1.7 — follower open/close limits (req 32B)
+    GetGripperConfig    = 0x67,    // V1.7 — read follower config (resp 32B)
 
     // OTA upgrade (0x70–0x7F) — added V1.3
     OtaStart            = 0x70,    // ota_start_t (12B)

@@ -147,6 +147,12 @@ enum class MotorMode : uint8_t {
     Impedance = 4,
 };
 
+// Motor CAN protocol (V1.7 — Cmd::MotorGetProtocol / MotorSwitchProtocol).
+enum class MotorProtocol : uint8_t {
+    Private = 0,   // Xense private CAN protocol
+    Mit     = 2,   // MIT-style CAN protocol
+};
+
 namespace MotorStatusBit {
     constexpr uint16_t Enabled       = 0x0001;
     constexpr uint16_t Fault         = 0x0002;
@@ -181,6 +187,8 @@ struct MotorImpedanceCtrl {
     float kp;             // Nm/rad
     float kd;             // Nm·s/rad
     float target_torque;  // Nm (feed-forward)
+    float vel;            // V1.7 — feed-forward velocity (rad/s); 0 = firmware
+                          // estimates from the position delta. MIT protocol only.
 };
 
 struct MotorStatus {
@@ -189,6 +197,51 @@ struct MotorStatus {
     float    actual_torque;   // Nm
     float    motor_temp;      // °C
     uint16_t status;          // MotorStatusBit::*
+    // ---- V1.7 additions (motor_status_t grew 18 -> 40 bytes) -------------
+    float    actual_current;  // A — measured iq, or torque-derived estimate
+    float    target_pos;      // rad   — last applied target
+    float    target_vel;      // rad/s
+    float    target_torque;   // Nm    — target / feed-forward / clamp
+    float    target_current;  // A     — target / clamp
+    uint8_t  control_mode;    // MotorMode of the last applied command
+    uint8_t  current_source;  // 0 = torque-estimated, 1 = low-level iq param
+};
+
+// ---- Follower (slave) gripper config (V1.7 — Cmd::*GripperConfig 0x66/0x67)
+constexpr uint32_t GRIPPER_CONFIG_MAGIC   = 0x47525052u;  // "GRPR"
+constexpr uint16_t GRIPPER_CONFIG_VERSION = 0x0001u;
+namespace GripperConfigFlag {
+    constexpr uint16_t Valid   = 0x0001;  // config is valid
+    constexpr uint16_t Reverse = 0x0002;  // "open" is the motor's negative dir
+}
+
+struct GripperConfig {
+    uint32_t magic;          // GRIPPER_CONFIG_MAGIC
+    uint16_t version;        // GRIPPER_CONFIG_VERSION
+    uint16_t flags;          // GripperConfigFlag::* bits
+    float    max_open_rad;   // max open span after zeroing (rad)
+    float    min_open_rad;   // reserved, default 0
+    uint8_t  reserved[16];   // future expansion
+};
+
+// ---- Follower motor control loop stats (V1.7 — Cmd::GetMotorControlStats 0x51)
+struct MotorControlStats {
+    uint8_t  running;              // control thread running?
+    uint8_t  mode;                 // MotorMode
+    uint16_t target_hz;            // requested control rate (Hz)
+    uint16_t period_ms;            // control period (ms)
+    uint16_t sample_ms;            // stats sampling window (ms)
+    float    actual_hz;            // measured control output rate
+    uint32_t target_seq;           // host target update sequence
+    uint32_t applied_seq;          // last applied target sequence
+    uint32_t loop_count;           // cumulative control loops
+    uint32_t error_count;          // cumulative control errors
+    uint32_t deadline_miss_count;  // cumulative period overruns
+    uint32_t timeout_count;        // cumulative comm timeouts (reserved)
+    int32_t  last_error;           // last error code
+    uint16_t target_age_ms;        // age of current target (ms)
+    uint16_t reserved;
+    float    target_update_hz;     // host target update rate
 };
 
 // ---- Stream config -------------------------------------------------------
@@ -380,8 +433,10 @@ static_assert(sizeof(CombinedSensorHeader) == 8);
 static_assert(sizeof(MotorPosCtrl)       == 12);
 static_assert(sizeof(MotorVelCtrl)       == 12);
 static_assert(sizeof(MotorTorqueCtrl)    == 12);
-static_assert(sizeof(MotorImpedanceCtrl) == 16);
-static_assert(sizeof(MotorStatus)        == 18);  // MOTOR_STATUS_SIZE
+static_assert(sizeof(MotorImpedanceCtrl) == 20);  // V1.7 (+ feed-forward vel)
+static_assert(sizeof(MotorStatus)        == 40);  // V1.7 motor_status_t
+static_assert(sizeof(GripperConfig)      == 32);  // V1.7 gripper_config_t
+static_assert(sizeof(MotorControlStats)  == 48);  // V1.7 motor_control_stats
 static_assert(sizeof(StreamConfig)       == 12);
 static_assert(sizeof(AckPayload)         == 4);
 // V1.4+

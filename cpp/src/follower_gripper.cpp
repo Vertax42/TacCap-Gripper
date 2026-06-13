@@ -155,4 +155,24 @@ void FollowerGripper::stop_streaming() {
     }
 }
 
+// ---- V1.7 follower config (reserved; not yet hardware-validated) -----------
+
+protocol::GripperConfig FollowerGripper::get_gripper_config(
+        std::chrono::milliseconds timeout) {
+    auto ack = t_.send_cmd(protocol::Cmd::GetGripperConfig, {}, timeout);
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("FollowerGripper::get_gripper_config NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+    return protocol::decode_gripper_config(ack.data.data(), ack.data.size());
+}
+
+void FollowerGripper::set_gripper_config(const protocol::GripperConfig& cfg) {
+    auto ack = t_.send_cmd(protocol::Cmd::SetGripperConfig, protocol::encode(cfg));
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("FollowerGripper::set_gripper_config NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+}
+
 }  // namespace xense::taccap

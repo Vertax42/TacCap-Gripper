@@ -3,6 +3,7 @@
 #include <taccap/protocol/codec.hpp>
 #include <taccap/error.hpp>
 
+#include <algorithm>
 #include <cstring>
 
 namespace xense::taccap::protocol {
@@ -29,6 +30,7 @@ std::vector<uint8_t> encode(const MotorPosCtrl& v)        { return encode_pod(v)
 std::vector<uint8_t> encode(const MotorVelCtrl& v)        { return encode_pod(v); }
 std::vector<uint8_t> encode(const MotorTorqueCtrl& v)     { return encode_pod(v); }
 std::vector<uint8_t> encode(const MotorImpedanceCtrl& v)  { return encode_pod(v); }
+std::vector<uint8_t> encode(const GripperConfig& v)       { return encode_pod(v); }
 std::vector<uint8_t> encode(const StreamConfig& v)        { return encode_pod(v); }
 std::vector<uint8_t> encode(const ImuConfig& v)           { return encode_pod(v); }
 std::vector<uint8_t> encode(const EncoderConfig& v)       { return encode_pod(v); }
@@ -104,7 +106,27 @@ EskinConfig decode_eskin_config(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<EskinConfig>(data, len, "EskinConfig");
 }
 MotorStatus decode_motor_status(const uint8_t* data, std::size_t len) {
-    return pod_from_bytes<MotorStatus>(data, len, "MotorStatus");
+    // V1.7 grew motor_status_t 18 -> 40 bytes by APPENDING fields; the V1.6
+    // prefix (pos/vel/torque/temp/status) keeps identical offsets. Accept any
+    // length from the 18-byte prefix up, copying what's present, so the SDK
+    // works against both old and new follower firmware.
+    constexpr std::size_t kPrefix = 18;
+    if (data == nullptr || len < kPrefix) {
+        throw ProtocolError(
+            "decode MotorStatus: expected >= 18 bytes, got " +
+            std::to_string(len));
+    }
+    MotorStatus out{};
+    std::memcpy(&out, data, std::min(len, sizeof(MotorStatus)));
+    return out;
+}
+
+GripperConfig decode_gripper_config(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<GripperConfig>(data, len, "GripperConfig");
+}
+
+MotorControlStats decode_motor_control_stats(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<MotorControlStats>(data, len, "MotorControlStats");
 }
 StreamConfig decode_stream_config(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<StreamConfig>(data, len, "StreamConfig");

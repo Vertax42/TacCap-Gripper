@@ -39,6 +39,7 @@ std::vector<uint8_t> encode(const MotorPosCtrl&);
 std::vector<uint8_t> encode(const MotorVelCtrl&);
 std::vector<uint8_t> encode(const MotorTorqueCtrl&);
 std::vector<uint8_t> encode(const MotorImpedanceCtrl&);
+std::vector<uint8_t> encode(const GripperConfig&);   // V1.7
 std::vector<uint8_t> encode(const StreamConfig&);
 std::vector<uint8_t> encode(const ImuConfig&);
 std::vector<uint8_t> encode(const EncoderConfig&);
@@ -69,6 +70,9 @@ EncoderConfig      decode_encoder_config(const uint8_t* data, std::size_t len);
 EskinHeader        decode_eskin_header(const uint8_t* data, std::size_t len);
 EskinConfig        decode_eskin_config(const uint8_t* data, std::size_t len);
 MotorStatus        decode_motor_status(const uint8_t* data, std::size_t len);
+// V1.7 follower (slave) gripper
+GripperConfig      decode_gripper_config(const uint8_t* data, std::size_t len);
+MotorControlStats  decode_motor_control_stats(const uint8_t* data, std::size_t len);
 StreamConfig       decode_stream_config(const uint8_t* data, std::size_t len);
 AckPayload         decode_ack(const uint8_t* data, std::size_t len);
 // V1.4+

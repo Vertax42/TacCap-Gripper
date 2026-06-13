@@ -55,11 +55,17 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::MotorEnable:         return "MotorEnable";
         case Cmd::MotorDisable:        return "MotorDisable";
         case Cmd::MotorClearFault:     return "MotorClearFault";
+        case Cmd::MotorSetZero:        return "MotorSetZero";
+        case Cmd::MotorGetCanId:       return "MotorGetCanId";
+        case Cmd::MotorSetCanId:       return "MotorSetCanId";
+        case Cmd::MotorSwitchProtocol: return "MotorSwitchProtocol";
+        case Cmd::MotorGetProtocol:    return "MotorGetProtocol";
         case Cmd::MotorPosCtrl:        return "MotorPosCtrl";
         case Cmd::MotorVelCtrl:        return "MotorVelCtrl";
         case Cmd::MotorTorqueCtrl:     return "MotorTorqueCtrl";
         case Cmd::MotorImpedanceCtrl:  return "MotorImpedanceCtrl";
         case Cmd::GetMotorStatus:      return "GetMotorStatus";
+        case Cmd::GetMotorControlStats: return "GetMotorControlStats";
 
         case Cmd::SetImuConfig:        return "SetImuConfig";
         case Cmd::GetImuConfig:        return "GetImuConfig";
@@ -67,6 +73,8 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::GetEncoderConfig:    return "GetEncoderConfig";
         case Cmd::SetEskinConfig:      return "SetEskinConfig";
         case Cmd::GetEskinConfig:      return "GetEskinConfig";
+        case Cmd::SetGripperConfig:    return "SetGripperConfig";
+        case Cmd::GetGripperConfig:    return "GetGripperConfig";
 
         case Cmd::OtaStart:            return "OtaStart";
         case Cmd::OtaWriteBlock:       return "OtaWriteBlock";
