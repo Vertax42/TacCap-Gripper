@@ -19,6 +19,7 @@
 #include <taccap/components/sensor_errors.hpp>
 #include <taccap/components/tactile_sensor.hpp>
 #include <taccap/components/motor.hpp>
+#include <taccap/control_loop.hpp>
 #include <taccap/follower_gripper.hpp>
 #include <taccap/leader_gripper.hpp>
 #include <taccap/discovery.hpp>
@@ -366,6 +367,24 @@ void bind_components(py::module_& m) {
             return std::string(buf);
         });
 
+    // ---- GripperPosition: pure raw-rad <-> normalized [0,1] converter ------
+    py::class_<GripperPosition>(m, "GripperPosition")
+        .def(py::init<>())
+        .def(py::init<const protocol::GripperConfig&>(), py::arg("config"))
+        .def_property_readonly("valid",        &GripperPosition::valid)
+        .def_property_readonly("max_open_rad", &GripperPosition::max_open_rad)
+        .def_property_readonly("min_open_rad", &GripperPosition::min_open_rad)
+        .def_property_readonly("reverse",      &GripperPosition::reverse)
+        .def("to_position", &GripperPosition::to_position, py::arg("raw_rad"))
+        .def("to_rad",      &GripperPosition::to_rad,      py::arg("position"))
+        .def("__repr__", [](const GripperPosition& gp) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf),
+                "GripperPosition(valid=%d, max_open=%.4frad, reverse=%d)",
+                gp.valid(), gp.max_open_rad(), gp.reverse());
+            return std::string(buf);
+        });
+
     py::class_<protocol::MotorControlStats>(m, "MotorControlStats")
         .def_readonly("running",             &protocol::MotorControlStats::running)
         .def_readonly("mode",                &protocol::MotorControlStats::mode)
@@ -479,6 +498,43 @@ void bind_components(py::module_& m) {
             py::arg("kd_nm_s_per_rad"),
             py::arg("feedforward_torque_nm"),
             py::arg("feedforward_vel_radps") = 0.0f)  // V1.7; MIT only
+        // ---- High-rate control submission (no ACK) -------------------------
+        // Fire-and-forget for a realtime loop (up to the firmware's 500Hz). No
+        // ACK, no NACK, no retry, no throw on a rejected target — the only
+        // exception is IoError on a stopped transport. MIT is assumed. Poll
+        // control_stats() (off the loop) for health: applied_seq, actual_hz,
+        // error_count, last_error. The follow/teleop loop + grasp FSM live in
+        // the upper layer (taccap_gripper_ros2), not here.
+        .def("submit_impedance", [](Motor& self, float pos, float kp, float kd,
+                                    float ff, float ff_vel) {
+                py::gil_scoped_release g;
+                self.submit_impedance(pos, kp, kd, ff, ff_vel);
+            },
+            py::arg("target_pos_rad"),
+            py::arg("kp_nm_per_rad"),
+            py::arg("kd_nm_s_per_rad"),
+            py::arg("feedforward_torque_nm"),
+            py::arg("feedforward_vel_radps") = 0.0f)
+        .def("submit_position", [](Motor& self, float pos, float max_vel, float max_torque) {
+                py::gil_scoped_release g;
+                self.submit_position(pos, max_vel, max_torque);
+            },
+            py::arg("target_pos_rad"),
+            py::arg("max_vel_radps"),
+            py::arg("max_torque_nm"))
+        .def("submit_velocity", [](Motor& self, float vel, float max_torque, float profile_acc) {
+                py::gil_scoped_release g;
+                self.submit_velocity(vel, max_torque, profile_acc);
+            },
+            py::arg("target_vel_radps"),
+            py::arg("max_torque_nm"),
+            py::arg("profile_acc_radps2"))
+        .def("submit_torque", [](Motor& self, float torque, float max_vel) {
+                py::gil_scoped_release g;
+                self.submit_torque(torque, max_vel);
+            },
+            py::arg("target_torque_nm"),
+            py::arg("max_vel_radps"))
         .def("read_status", [](Motor& self, unsigned timeout_ms) {
             py::gil_scoped_release gil;
             return self.read_status(std::chrono::milliseconds(timeout_ms));
@@ -494,7 +550,7 @@ void bind_components(py::module_& m) {
             });
         }, py::arg("callback"))
         .def("off", &Motor::off, py::arg("subscription_id"))
-        // ---- V1.7 (follower-only; reserved, pending hardware) --------------
+        // ---- Follower motor admin (follower-only; validated against hw_v1.1.0)
         .def("set_zero", [](Motor& self) { py::gil_scoped_release g; self.set_zero(); })
         .def("get_can_id", [](Motor& self) { py::gil_scoped_release g; return self.get_can_id(); })
         .def("set_can_id", [](Motor& self, uint8_t id) {
@@ -575,8 +631,9 @@ void bind_components(py::module_& m) {
 
     // ---- discovery ------------------------------------------------------
     py::enum_<discovery::Side>(m, "Side")
-        .value("Left",  discovery::Side::Left)
-        .value("Right", discovery::Side::Right);
+        .value("Left",    discovery::Side::Left)
+        .value("Right",   discovery::Side::Right)
+        .value("Unknown", discovery::Side::Unknown);
 
     py::enum_<discovery::Role>(m, "Role")
         .value("Leader",   discovery::Role::Leader)
@@ -738,7 +795,7 @@ void bind_components(py::module_& m) {
         .def_property_readonly("ota",           [](FollowerGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](FollowerGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
         .def_property_readonly("is_streaming",  &FollowerGripper::is_streaming)
-        // V1.7 follower config (reserved; pending follower hardware).
+        // Follower gripper open/close limit config (Cmd 0x66/0x67).
         .def("get_gripper_config", [](FollowerGripper& g, unsigned timeout_ms) {
             py::gil_scoped_release gil;
             return g.get_gripper_config(std::chrono::milliseconds(timeout_ms));
@@ -748,10 +805,97 @@ void bind_components(py::module_& m) {
             py::gil_scoped_release gil;
             g.set_gripper_config(cfg);
         }, py::arg("config"))
+        // ---- Normalized position (0 = closed, 1 = open) -------------------
+        // NOTE: normalized [0,1] — distinct from motor.set_position() (raw rad).
+        // set_position() is fire-and-forget (no ACK); poll motor.control_stats()
+        // for health. Throws if the gripper isn't calibrated.
+        .def("position", [](FollowerGripper& g, unsigned timeout_ms) {
+            py::gil_scoped_release gil;
+            return g.position(std::chrono::milliseconds(timeout_ms));
+        }, py::arg("timeout_ms") = 100u)
+        .def("set_position", [](FollowerGripper& g, float position,
+                                float kp, float kd, float ff) {
+            py::gil_scoped_release gil;
+            g.set_position(position, kp, kd, ff);
+        }, py::arg("position"), py::arg("kp_nm_per_rad"),
+           py::arg("kd_nm_s_per_rad"), py::arg("feedforward_torque_nm") = 0.0f)
+        .def("pos_to_rad", [](FollowerGripper& g, float position) {
+            py::gil_scoped_release gil;
+            return g.pos_to_rad(position);
+        }, py::arg("position"))
+        .def("rad_to_pos", [](FollowerGripper& g, float raw_rad) {
+            py::gil_scoped_release gil;
+            return g.rad_to_pos(raw_rad);
+        }, py::arg("raw_rad"))
+        .def("position_map", [](FollowerGripper& g) {
+            py::gil_scoped_release gil;
+            return g.position_map();          // copy of the cached converter
+        })
+        .def("reload_config", [](FollowerGripper& g) {
+            py::gil_scoped_release gil;
+            g.reload_config();
+        })
         .def("__enter__", [](FollowerGripper& g) -> FollowerGripper& { return g; })
         .def("__exit__",  [](FollowerGripper& g, py::object, py::object, py::object) {
             py::gil_scoped_release gil;
             g.stop_streaming();
+        });
+
+    // ---- GripperObservation ---------------------------------------------
+    py::class_<GripperObservation>(m, "GripperObservation")
+        .def_readonly("valid",    &GripperObservation::valid)
+        .def_readonly("position", &GripperObservation::position)   // [0,1]
+        .def_readonly("velocity", &GripperObservation::velocity)
+        .def_readonly("torque",   &GripperObservation::torque)
+        .def_readonly("raw_pos",  &GripperObservation::raw_pos)
+        .def_readonly("status",   &GripperObservation::status)
+        .def_readonly("seq",      &GripperObservation::seq)
+        .def_readonly("age_ms",   &GripperObservation::age_ms)
+        .def("__repr__", [](const GripperObservation& o) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                "GripperObservation(valid=%d, position=%.4f, vel=%.4f, "
+                "torque=%.4f, age=%.1fms, seq=%llu)",
+                o.valid, o.position, o.velocity, o.torque, o.age_ms,
+                (unsigned long long)o.seq);
+            return std::string(buf);
+        });
+
+    // ---- ControlLoop: fixed-rate send/recv for embodied control ----------
+    py::class_<ControlLoop>(m, "ControlLoop")
+        .def(py::init([](FollowerGripper& g, unsigned hz, float kp, float kd,
+                         float feedforward_torque, unsigned motor_stream_hz) {
+                ControlLoop::Config c;
+                c.hz = hz; c.kp = kp; c.kd = kd;
+                c.feedforward_torque = feedforward_torque;
+                c.motor_stream_hz = motor_stream_hz;
+                return std::make_unique<ControlLoop>(g, c);
+            }),
+            py::arg("gripper"), py::arg("hz") = 200u,
+            py::arg("kp") = 8.0f, py::arg("kd") = 1.0f,
+            py::arg("feedforward_torque") = 0.0f,
+            py::arg("motor_stream_hz") = 100u,
+            py::keep_alive<1, 2>())   // keep the gripper alive while the loop lives
+        .def("start", [](ControlLoop& l) { py::gil_scoped_release g; l.start(); })
+        .def("stop",  [](ControlLoop& l) { py::gil_scoped_release g; l.stop(); })
+        .def_property_readonly("running", &ControlLoop::running)
+        .def("set_target", [](ControlLoop& l, float p) {
+            py::gil_scoped_release g; l.set_target(p);
+        }, py::arg("position"))
+        .def("set_gains", [](ControlLoop& l, float kp, float kd, float ff) {
+            py::gil_scoped_release g; l.set_gains(kp, kd, ff);
+        }, py::arg("kp"), py::arg("kd"), py::arg("feedforward_torque") = 0.0f)
+        .def_property_readonly("target", &ControlLoop::target)
+        .def("observation", [](const ControlLoop& l) {
+            py::gil_scoped_release g; return l.observation();
+        })
+        .def_property_readonly("submit_hz",    &ControlLoop::submit_hz)
+        .def_property_readonly("submit_count", &ControlLoop::submit_count)
+        .def("__enter__", [](ControlLoop& l) -> ControlLoop& {
+            py::gil_scoped_release g; l.start(); return l;
+        })
+        .def("__exit__", [](ControlLoop& l, py::object, py::object, py::object) {
+            py::gil_scoped_release g; l.stop();
         });
 }
 

@@ -61,6 +61,9 @@ EncoderSample = _taccap_native.EncoderSample
 MotorStatusSample = _taccap_native.MotorStatusSample
 MotorProtocol = _taccap_native.MotorProtocol          # V1.7
 GripperConfig = _taccap_native.GripperConfig          # V1.7
+GripperPosition = _taccap_native.GripperPosition      # raw rad <-> normalized [0,1]
+GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
+ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
 MotorControlStats = _taccap_native.MotorControlStats  # V1.7
 KeySample = _taccap_native.KeySample
 SensorErrorSample = _taccap_native.SensorErrorSample
@@ -137,6 +140,9 @@ __all__ = [
     "MotorStatusSample",
     "MotorProtocol",
     "GripperConfig",
+    "GripperPosition",
+    "GripperObservation",
+    "ControlLoop",
     "MotorControlStats",
     "CameraFrame",
     "TactileFrame",

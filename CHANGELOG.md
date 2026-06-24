@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-06-25
+
+### Added
+- **MIT force-position control submission path** on `Motor`: no-ACK
+  `submit()` overloads (impedance / position / velocity / torque) plus float
+  `submit_impedance()` / `submit_position()` / `submit_velocity()` /
+  `submit_torque()` wrappers, bound in Python. These send `CMD_NO_ACK` frames
+  fire-and-forget for a host-driven realtime loop up to the firmware's 500 Hz
+  slave-control rate — no ACK, retry, or throw (only `IoError` on a stopped
+  transport). Health is out-of-band via `control_stats()` / `on_status()` /
+  `SensorErrors`. The MIT impedance frame is the force-position hybrid primitive
+  (kp/kd track `target_pos`; `feedforward_torque` adds the force term). The
+  follow/teleop loop and grasp FSM stay in the upper layer.
+- `python/examples/motor_mit_control.py`: primitive demo of the submission API
+  with the out-of-band health channel.
+- **Normalized gripper position** (0 = closed, 1 = open). New `GripperPosition`
+  pure converter (raw shaft rad ↔ normalized [0,1], built from `GripperConfig`)
+  and `FollowerGripper::position()` / `set_position(pos, kp, kd, ff)` /
+  `pos_to_rad()` / `rad_to_pos()` / `position_map()` / `reload_config()`, bound
+  in Python. `set_position()` is the normalized counterpart of
+  `Motor::set_impedance` (fire-and-forget, no ACK). NOTE: `FollowerGripper::
+  set_position()` is normalized [0,1] and distinct from `Motor::set_position()`
+  (raw rad). Throws if the gripper isn't calibrated (`GripperConfig` not Valid).
+  Validated on real follower hardware (max_open = 1.1802 rad, Reverse).
+- **`ControlLoop`** — a fixed-rate send/receive loop for embodied control. A C++
+  background thread submits the latest normalized position target as a MIT
+  impedance frame at `hz` (fire-and-forget), while the firmware motor-status
+  STREAM keeps a thread-safe `GripperObservation` fresh. The policy thread only
+  touches `set_target(0..1)` and `observation()` (both non-blocking). Reads
+  observations from the push stream instead of polling `GetMotorStatus` (polling
+  > ~100 Hz can stall the firmware's status refresh). Bound in Python with
+  context-manager support. Validated on hardware (200 Hz submit, ~100 Hz obs,
+  obs age a few ms).
+- `python/examples/gripper_control_test.py`: interactive open/close control test
+  exercising both `set_position()` (one-shot) and `ControlLoop` (realtime).
+
+### Changed
+- Promoted the V1.7 follower / motor command surface from "reserved, pending
+  hardware" to first-class, validated against firmware `hw_v1.1.0`. The leader
+  mismatch behavior is unchanged: these NACK `SensorOffline` → `ProtocolError`
+  on leader hardware.
+
+### Fixed
+- **Discovery never guesses a side from the CH343 chip SN.** Side now comes from
+  firmware sources only — the burned SN (`Cmd::GetSn`, sequence-digit parity) with
+  `GetDevType` as a secondary firmware fallback; when neither answers the side is
+  reported as the new `Side::Unknown` (bound in Python) instead of the WCH chip
+  SN's meaningless parity, which could confidently report the wrong side. The
+  `GetSn` probe in `scan_all()` now retries on cold start (the first command(s)
+  after a fresh plug-in could be dropped while the USB-CDC link settled, which
+  previously left the side falling back to the chip SN on the very first scan).
+  `McuEndpoint` drops its chip-parity `side` field. **Minor API addition**
+  (`Side::Unknown`); existing `Left`/`Right` are unchanged.
+
 ## [0.1.1] - 2026-06-14
 
 ### Fixed
