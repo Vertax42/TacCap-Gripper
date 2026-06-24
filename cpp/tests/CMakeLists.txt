@@ -11,6 +11,7 @@ add_executable(taccap_unit_tests
     test_transport.cpp
     test_components.cpp
     test_discovery.cpp
+    test_gripper_position.cpp
     test_upper_v16.cpp
     test_upper_v16_pty.cpp
     test_crc32_boundaries.cpp

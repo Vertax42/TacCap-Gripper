@@ -41,6 +41,7 @@
 #include <taccap/components/tactile_sensor.hpp>
 #include <taccap/discovery.hpp>
 #include <taccap/error.hpp>
+#include <taccap/gripper_position.hpp>
 #include <taccap/ota.hpp>
 
 #include <cerrno>
@@ -92,12 +93,38 @@ public:
     TactileSensor&  tactile_right()  { return deref_(tac_r_, "tactile_right", "tactile_right_serial"); }
     Motor&          motor()          noexcept { return motor_; }
 
-    // ---- V1.7 follower config (reserved; pending follower hardware) ---------
-    // Read / write the follower's open/close limit config (Cmd 0x66/0x67).
-    // Not yet validated on real hardware; NACKs as SensorOffline on a leader.
+    // ---- Follower gripper open/close limit config (Cmd 0x66/0x67) ----------
+    // Read / write the follower's open/close limit config. NACKs as
+    // SensorOffline on a leader (no follower config there).
     protocol::GripperConfig get_gripper_config(
         std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
     void set_gripper_config(const protocol::GripperConfig& cfg);
+
+    // ---- Normalized gripper position (0 = closed, 1 = open) -----------------
+    // Convenience layer over the motor + GripperConfig so callers work in a
+    // normalized [0,1] position instead of raw shaft radians. NOTE: this is
+    // distinct from motor().set_position(), which takes RAW radians — these
+    // FollowerGripper methods are normalized [0,1].
+    //
+    // The mapping (closed = motor zero, travel = max_open_rad, direction from
+    // the Reverse flag) is read once from the firmware via Cmd::GetGripperConfig
+    // and cached; call reload_config() after re-calibrating. All methods throw
+    // ProtocolError if the gripper isn't calibrated (config not Valid).
+    //
+    // The motor must be enabled before set_position() moves anything; like
+    // Motor::submit_*, set_position() is fire-and-forget (no ACK) for a host
+    // realtime loop — poll motor().control_stats() for health.
+    float position(                                       // read: raw -> [0,1]
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
+    void  set_position(float position,                    // command in [0,1], no-ACK
+                       float kp_nm_per_rad,
+                       float kd_nm_s_per_rad,
+                       float feedforward_torque_nm = 0.0f);
+    float pos_to_rad(float position);                     // [0,1] -> raw rad
+    float rad_to_pos(float raw_rad);                      // raw rad -> [0,1]
+    const GripperPosition& position_map();                // cached converter (loads if needed)
+    void  reload_config();                                // re-read + rebuild converter
+
     Key&            key()            noexcept { return key_; }            // V1.4
     SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
     OtaSession&     ota()            noexcept { return ota_; }            // V1.3
@@ -128,6 +155,10 @@ private:
         return *p;
     }
 
+    // Load + cache the GripperPosition converter from the firmware GripperConfig
+    // on first use. Throws ProtocolError if the config isn't Valid (uncalibrated).
+    void ensure_position_map_();
+
     Config                          cfg_;
     bus::Transport                  t_;
     IMU                             imu_;
@@ -140,6 +171,8 @@ private:
     std::unique_ptr<TactileSensor>  tac_l_;
     std::unique_ptr<TactileSensor>  tac_r_;
     bool                            streaming_ = false;
+    GripperPosition                 pos_map_;             // raw<->position, cached
+    bool                            pos_map_loaded_ = false;
 };
 
 }  // namespace xense::taccap

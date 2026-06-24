@@ -16,6 +16,7 @@ add_library(taccap_core SHARED
     src/discovery.cpp
     src/leader_gripper.cpp
     src/follower_gripper.cpp
+    src/control_loop.cpp
     src/ota.cpp
 )
 

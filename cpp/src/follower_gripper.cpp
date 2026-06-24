@@ -155,7 +155,7 @@ void FollowerGripper::stop_streaming() {
     }
 }
 
-// ---- V1.7 follower config (reserved; not yet hardware-validated) -----------
+// ---- Follower gripper open/close limit config (Cmd 0x66/0x67) --------------
 
 protocol::GripperConfig FollowerGripper::get_gripper_config(
         std::chrono::milliseconds timeout) {
@@ -173,6 +173,58 @@ void FollowerGripper::set_gripper_config(const protocol::GripperConfig& cfg) {
         throw ProtocolError(std::string("FollowerGripper::set_gripper_config NACK: ") +
                             protocol::to_string(ack.error_code));
     }
+    // Config just changed on the firmware — drop the cache so the next
+    // position call rebuilds the converter from the new limits.
+    pos_map_loaded_ = false;
+}
+
+// ---- Normalized gripper position (0 = closed, 1 = open) --------------------
+
+void FollowerGripper::ensure_position_map_() {
+    if (pos_map_loaded_) return;
+    GripperPosition m(get_gripper_config());
+    if (!m.valid()) {
+        throw ProtocolError(
+            "FollowerGripper: gripper config is not calibrated "
+            "(GripperConfig flags lack Valid, or max_open_rad <= min_open_rad) "
+            "— normalized position is unavailable until the gripper is "
+            "calibrated (zero at full close, then write max_open via "
+            "set_gripper_config)");
+    }
+    pos_map_ = m;
+    pos_map_loaded_ = true;
+}
+
+void FollowerGripper::reload_config() {
+    pos_map_loaded_ = false;
+    ensure_position_map_();
+}
+
+const GripperPosition& FollowerGripper::position_map() {
+    ensure_position_map_();
+    return pos_map_;
+}
+
+float FollowerGripper::pos_to_rad(float position) {
+    ensure_position_map_();
+    return pos_map_.to_rad(position);
+}
+
+float FollowerGripper::rad_to_pos(float raw_rad) {
+    ensure_position_map_();
+    return pos_map_.to_position(raw_rad);
+}
+
+float FollowerGripper::position(std::chrono::milliseconds timeout) {
+    ensure_position_map_();
+    return pos_map_.to_position(motor_.read_status(timeout).actual_pos);
+}
+
+void FollowerGripper::set_position(float position, float kp, float kd,
+                                   float feedforward_torque_nm) {
+    ensure_position_map_();
+    motor_.submit_impedance(pos_map_.to_rad(position), kp, kd,
+                            feedforward_torque_nm);
 }
 
 }  // namespace xense::taccap
