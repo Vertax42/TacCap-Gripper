@@ -2,11 +2,14 @@
 //
 // Zero-config gripper discovery.
 //
-// Side (Left/Right) is read from the firmware: GetDevType (0x06) returns the
-// flash-burned DEV_TYPE (LEFT/RIGHT) — the authoritative source, available
-// even on firmware too old for GetSn. It falls back to the SN sequence parity
-// (last digit odd → left, even → right) and finally the CH343 chip-SN parity.
-// No udev rules, no system setup.
+// Side (Left/Right) is read from the firmware ONLY: the burned SN read via
+// Cmd::GetSn (sequence last digit odd → left, even → right) is authoritative,
+// with GetDevType (0x06, flash-burned DEV_TYPE LEFT/RIGHT) as a secondary
+// firmware source for SNs too legacy to carry a side. The CH343 USB-chip SN
+// is NEVER used to decide the side — it is hardware-burned independently of
+// the board's left/right identity, so its parity is meaningless. When neither
+// firmware source answers, the side is reported as Side::Unknown rather than
+// guessed. No udev rules, no system setup.
 //
 //   MCU board (CH343 dual-serial, VID:PID 1a86:55d2):
 //       /dev/serial/by-id/usb-1a86_USB_Dual_Serial_<SN>-if02
@@ -37,9 +40,11 @@
 
 namespace xense::taccap::discovery {
 
-enum class Side : char { Left = 'L', Right = 'R' };
+enum class Side : char { Left = 'L', Right = 'R', Unknown = '?' };
 constexpr const char* to_string(Side s) noexcept {
-    return s == Side::Left ? "Left" : "Right";
+    return s == Side::Left  ? "Left"
+         : s == Side::Right ? "Right"
+                            : "Unknown";
 }
 
 // Leader/follower role, taken from the SN patch suffix (m = Master/leader,
@@ -71,22 +76,22 @@ struct ParsedSerial {
 // the string doesn't match the full grammar (e.g. legacy or empty SNs).
 ParsedSerial parse_serial(const std::string& s) noexcept;
 
-// One MCU board entry.
+// One MCU board entry. Note: serial_number is the CH343 USB-chip SN, kept for
+// identification only — it is NOT a side source (see header note).
 struct McuEndpoint {
     std::string device;          // e.g. /dev/serial/by-id/...-if02
-    std::string serial_number;   // e.g. "5C2C247728"
-    Side        side;            // from last digit of serial_number
+    std::string serial_number;   // CH343 chip SN, e.g. "5C2C247728"
 };
 
 // One complete gripper unit, identified by its MCU board.
-// `side` of the gripper is taken from the firmware-side SN (read at
-// discovery time via Cmd::GetSn). The CH343 USB-chip SN that lives in
-// `mcu_serial` is preserved for identification / debugging but does NOT
-// drive the Left/Right decision — the firmware SN is what xense-flare
-// uses too, and the CH343 chip SN is hardware-burned independently of
-// the board so they don't have to share parity.
+// `side` is taken from the firmware SN (Cmd::GetSn) with GetDevType as a
+// secondary firmware source; it is Side::Unknown when neither answers. The
+// CH343 USB-chip SN in `mcu_serial` is preserved for identification / debugging
+// but NEVER drives the Left/Right decision — it is hardware-burned independently
+// of the board's left/right identity.
 struct GripperEndpoints {
-    Side        side;
+    Side        side = Side::Unknown;     // firmware SN / GetDevType; Unknown if
+                                          // neither firmware source answered
     std::string mcu_device;
     std::string mcu_serial;               // CH343 chip SN, e.g. "5C2C247728"
     std::string firmware_sn;              // STM32 flash SN read via Cmd::GetSn,

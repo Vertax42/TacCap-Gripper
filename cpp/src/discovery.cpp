@@ -100,12 +100,12 @@ std::vector<McuEndpoint> scan_mcus() {
     for (auto& e : fs::directory_iterator(by_id, ec)) {
         if (ec) break;
         const std::string p = e.path().string();
-        // Only the if02 interface of the CH343 dual-serial is the MCU control link.
+        // Only the if02 interface of the CH343 dual-serial is the MCU control
+        // link. The chip SN is kept for identification only — it is NOT used to
+        // decide the side (that comes from the firmware SN / GetDevType later).
         const auto sn = parse_ch343_serial(p);
         if (sn.empty()) continue;
-        auto s = side_from_serial(sn);
-        if (!s) continue;
-        out.push_back({p, sn, *s});
+        out.push_back({p, sn});
     }
     return out;
 }
@@ -115,17 +115,15 @@ std::vector<GripperEndpoints> scan_all() {
     // and OG visuotactile sensors are owned by an external camera service
     // now, so discovery is MCU-only — no USB-hub grouping needed.
     //
-    // Side priority (most → least authoritative):
+    // Side priority — firmware sources ONLY (never the CH343 chip SN, whose
+    // parity is unrelated to the board's left/right identity and can be wrong):
     //   1. TacCap SN (GetSn 0x04 / parse_serial): the burned SN encodes the
     //      side in its sequence digit — for an m/s-suffixed gripper SN
     //      (TCGU01A24Z0001m) that is the *second-to-last character* of the
-    //      string (the suffix m/s is last). This is the authoritative source.
+    //      string (the suffix m/s is last). Authoritative; retried on cold start.
     //   2. GetDevType (0x06): the flash-burned LEFT/RIGHT byte — fallback for
-    //      units whose SN isn't burned / readable (e.g. firmware too old for
-    //      GetSn). Better than chip parity because it's firmware ground truth.
-    //   3. CH343 chip-SN parity — last-resort; the WCH chip SN is unrelated to
-    //      the board build, so it can be wrong (e.g. a left board whose chip
-    //      SN happens to end even).
+    //      units whose SN isn't burned / readable (e.g. firmware too old for GetSn).
+    //   3. Neither answered → Side::Unknown. We do NOT guess from the chip SN.
     // Role (leader/follower) only comes from the SN patch suffix (m/s).
     std::vector<GripperEndpoints> out;
     for (auto& mcu : scan_mcus()) {
@@ -168,16 +166,23 @@ std::vector<GripperEndpoints> scan_all() {
                 }
             } catch (...) { /* very old fw without dev-type — leave unset */ }
 
-            // 2) GetSn — full TacCap SN, carries the leader/follower role in
-            //    its patch suffix. May time out on firmware that predates SN
-            //    support; that's fine, role just stays Unknown.
-            try {
-                auto ack = t.send_cmd(protocol::Cmd::GetSn, {},
-                                      std::chrono::milliseconds(500));
-                if (!ack.is_nack && !ack.data.empty()) {
-                    fw_sn = protocol::decode_sn(ack.data.data(), ack.data.size());
-                }
-            } catch (...) { /* GetSn unsupported / timed out — leave empty */ }
+            // 2) GetSn — full TacCap SN, the authoritative source of BOTH the
+            //    side (sequence parity) and the leader/follower role (patch
+            //    suffix). Retry a few times: right after a cold plug-in the
+            //    USB-CDC link and firmware are still settling, so the first
+            //    command(s) can be dropped and a single 500ms attempt misses
+            //    the SN — which would otherwise leave the side Unknown on the
+            //    very first scan. May still time out on firmware that predates
+            //    SN support; that's fine, side/role just stay Unknown.
+            for (int attempt = 0; attempt < 3 && fw_sn.empty(); ++attempt) {
+                try {
+                    auto ack = t.send_cmd(protocol::Cmd::GetSn, {},
+                                          std::chrono::milliseconds(500));
+                    if (!ack.is_nack && !ack.data.empty()) {
+                        fw_sn = protocol::decode_sn(ack.data.data(), ack.data.size());
+                    }
+                } catch (...) { /* timed out — retry while the link warms up */ }
+            }
         } catch (...) {
             // Transport open failed (port in use, etc.) — fall back to the
             // CH343 chip-SN parity below.
@@ -186,9 +191,9 @@ std::vector<GripperEndpoints> scan_all() {
         const auto parsed = parse_serial(fw_sn);
 
         GripperEndpoints e{};
-        e.side        = parsed.side ? *parsed.side     // burned SN (authoritative)
-                      : dev_side    ? *dev_side        // GetDevType fallback
-                                    : mcu.side;        // chip-SN parity last resort
+        e.side        = parsed.side ? *parsed.side     // firmware SN (authoritative)
+                      : dev_side    ? *dev_side        // GetDevType (firmware) fallback
+                                    : Side::Unknown;   // no firmware source — never guess
         e.mcu_device  = mcu.device;
         e.mcu_serial  = mcu.serial_number;
         e.firmware_sn = std::move(fw_sn);

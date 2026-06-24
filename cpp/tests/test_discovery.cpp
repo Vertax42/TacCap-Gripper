@@ -119,4 +119,14 @@ TEST(ToString, RoleAndSide) {
     EXPECT_STREQ(d::to_string(Role::Unknown), "Unknown");
     EXPECT_STREQ(d::to_string(Side::Left), "Left");
     EXPECT_STREQ(d::to_string(Side::Right), "Right");
+    EXPECT_STREQ(d::to_string(Side::Unknown), "Unknown");
+}
+
+// A freshly-constructed endpoint has Unknown side: discovery never guesses a
+// side from the CH343 chip SN — it stays Unknown until a firmware source
+// (GetSn / GetDevType) resolves it.
+TEST(Discovery, GripperEndpointsDefaultSideIsUnknown) {
+    d::GripperEndpoints e{};
+    EXPECT_EQ(e.side, Side::Unknown);
+    EXPECT_EQ(e.role, Role::Unknown);
 }
