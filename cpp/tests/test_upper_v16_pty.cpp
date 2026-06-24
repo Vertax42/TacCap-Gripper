@@ -15,6 +15,7 @@
 
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/key.hpp>
+#include <taccap/components/motor.hpp>
 #include <taccap/components/sensor_errors.hpp>
 #include <taccap/components/imu.hpp>
 #include <taccap/error.hpp>
@@ -679,4 +680,148 @@ TEST(OtaEnd2End, AbortIsBestEffortAndNeverThrows) {
 
     // Don't drive the fake firmware — abort should swallow the timeout.
     EXPECT_NO_THROW(ota.abort());
+}
+
+// ============================================================
+// Motor (MIT) no-ACK submit(): fire-and-forget CMD_NO_ACK path
+// for a host-driven realtime loop. Contrast with set_*() which
+// blocks on a CMD_NEED_ACK round-trip.
+// ============================================================
+
+TEST(MotorSubmit, ImpedanceSendsNoAckFrame) {
+    Pty pty;
+    tb::Transport host(base_config(pty.slave_path()));
+    tx::Motor motor(host);
+
+    std::optional<tb::Frame> received;
+    std::thread fw([&]() { received = pty.expect_frame(); });
+
+    // Fire-and-forget: returns immediately, firmware sends no response.
+    motor.submit(tp::MotorImpedanceCtrl{1.0f, 2.0f, 3.0f, 4.0f, 5.0f});
+    fw.join();
+
+    ASSERT_TRUE(received.has_value());
+    EXPECT_EQ(received->cmd, tp::Cmd::MotorImpedanceCtrl);
+    EXPECT_EQ(received->type, tp::FrameType::CMD_NO_ACK);  // the crux
+    ASSERT_EQ(received->payload.size(), 20u);
+    float f[5];
+    std::memcpy(f, received->payload.data(), 20);
+    EXPECT_FLOAT_EQ(f[0], 1.0f);
+    EXPECT_FLOAT_EQ(f[3], 4.0f);
+    EXPECT_FLOAT_EQ(f[4], 5.0f);  // MIT feed-forward vel
+}
+
+TEST(MotorSubmit, PosVelTorqueAreNoAck12Byte) {
+    Pty pty;
+    tb::Transport host(base_config(pty.slave_path()));
+    tx::Motor motor(host);
+
+    auto grab = [&](auto&& send) -> tb::Frame {
+        std::optional<tb::Frame> r;
+        std::thread fw([&]() { r = pty.expect_frame(); });
+        send();
+        fw.join();
+        EXPECT_TRUE(r.has_value());
+        return r.value_or(tb::Frame{});
+    };
+
+    auto p = grab([&]() { motor.submit_position(0.5f, 10.0f, 1.0f); });
+    EXPECT_EQ(p.cmd, tp::Cmd::MotorPosCtrl);
+    EXPECT_EQ(p.type, tp::FrameType::CMD_NO_ACK);
+    EXPECT_EQ(p.payload.size(), 12u);
+
+    auto v = grab([&]() { motor.submit_velocity(-1.0f, 0.5f, 4.0f); });
+    EXPECT_EQ(v.cmd, tp::Cmd::MotorVelCtrl);
+    EXPECT_EQ(v.type, tp::FrameType::CMD_NO_ACK);
+    EXPECT_EQ(v.payload.size(), 12u);
+
+    auto t = grab([&]() { motor.submit_torque(0.3f, 8.0f); });
+    EXPECT_EQ(t.cmd, tp::Cmd::MotorTorqueCtrl);
+    EXPECT_EQ(t.type, tp::FrameType::CMD_NO_ACK);
+    EXPECT_EQ(t.payload.size(), 12u);
+}
+
+// At 500Hz the loop cannot block on ACKs; verify the no-ACK path delivers
+// every frame without dropping into the seq-matching machinery.
+TEST(MotorSubmit, HighRateBurstAllDelivered) {
+    Pty pty;
+    tb::Transport host(base_config(pty.slave_path()));
+    tx::Motor motor(host);
+
+    constexpr int kN = 500;
+    std::atomic<int> count{0};
+    std::thread fw([&]() {
+        for (int i = 0; i < kN; ++i) {
+            auto f = pty.expect_frame(2000);
+            if (!f) break;
+            if (f->cmd == tp::Cmd::MotorImpedanceCtrl &&
+                f->type == tp::FrameType::CMD_NO_ACK) {
+                count.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    });
+
+    for (int i = 0; i < kN; ++i) {
+        motor.submit(tp::MotorImpedanceCtrl{
+            static_cast<float>(i), 1.0f, 0.1f, 0.0f, 0.0f});
+    }
+    fw.join();
+    EXPECT_EQ(count.load(), kN);
+}
+
+// Regression guard: the blocking path must stay distinct (CMD_NEED_ACK).
+TEST(MotorSubmit, SetImpedanceStillUsesNeedAck) {
+    Pty pty;
+    tb::Transport host(base_config(pty.slave_path()));
+    tx::Motor motor(host);
+
+    std::optional<tb::Frame> received;
+    std::thread fw([&]() {
+        received = pty.expect_frame();
+        if (received) pty.send_ack_ok(received->seq, tp::Cmd::MotorImpedanceCtrl);
+    });
+    motor.set_impedance(1.0f, 2.0f, 3.0f, 4.0f, 5.0f);  // blocks on ACK
+    fw.join();
+
+    ASSERT_TRUE(received.has_value());
+    EXPECT_EQ(received->type, tp::FrameType::CMD_NEED_ACK);
+}
+
+TEST(MotorSubmit, OnStoppedTransportThrowsIo) {
+    Pty pty;
+    tb::Transport host(base_config(pty.slave_path()));
+    tx::Motor motor(host);
+
+    host.stop();
+    EXPECT_THROW(motor.submit(tp::MotorImpedanceCtrl{0, 0, 0, 0, 0}),
+                 tx::IoError);
+}
+
+// The documented health channel (control_stats) works alongside the
+// fire-and-forget submit path.
+TEST(MotorSubmit, ControlStatsRoundtripsAfterSubmit) {
+    Pty pty;
+    tb::Transport host(base_config(pty.slave_path()));
+    tx::Motor motor(host);
+
+    tp::MotorControlStats stats{};
+    stats.running = 1; stats.mode = 4; stats.actual_hz = 499.0f;
+    stats.target_seq = 10; stats.applied_seq = 10;
+    std::vector<uint8_t> body(sizeof(stats));
+    std::memcpy(body.data(), &stats, sizeof(stats));
+
+    std::thread fw([&]() {
+        pty.expect_frame();                       // drain the submit frame
+        auto f = pty.expect_frame();              // the control_stats request
+        if (f && f->cmd == tp::Cmd::GetMotorControlStats)
+            pty.send_response(f->seq, tp::Cmd::GetMotorControlStats, body);
+    });
+
+    motor.submit(tp::MotorImpedanceCtrl{0.1f, 1.0f, 0.1f, 0.0f, 0.0f});
+    auto got = motor.control_stats(std::chrono::milliseconds(500));
+    fw.join();
+
+    EXPECT_EQ(got.running, 1u);
+    EXPECT_EQ(got.applied_seq, 10u);
+    EXPECT_FLOAT_EQ(got.actual_hz, 499.0f);
 }

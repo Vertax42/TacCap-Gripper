@@ -38,6 +38,40 @@ TEST(CodecV17, ImpedanceCtrlEncodesVel) {
     EXPECT_FLOAT_EQ(vel, 5.0f);
 }
 
+// ---- Control-frame encoders pin the wire bytes of Motor::submit() ---------
+TEST(CodecV17, PosCtrlEncodeRoundtrip) {
+    tp::MotorPosCtrl c{0.5f, 10.0f, 1.25f};
+    auto wire = tp::encode(c);
+    ASSERT_EQ(wire.size(), 12u);
+    float f[3];
+    std::memcpy(f, wire.data(), 12);
+    EXPECT_FLOAT_EQ(f[0], 0.5f);   // target_pos
+    EXPECT_FLOAT_EQ(f[1], 10.0f);  // max_vel
+    EXPECT_FLOAT_EQ(f[2], 1.25f);  // max_torque
+}
+
+TEST(CodecV17, VelCtrlEncodeRoundtrip) {
+    tp::MotorVelCtrl c{-2.0f, 0.75f, 5.0f};
+    auto wire = tp::encode(c);
+    ASSERT_EQ(wire.size(), 12u);
+    float f[3];
+    std::memcpy(f, wire.data(), 12);
+    EXPECT_FLOAT_EQ(f[0], -2.0f);  // target_vel
+    EXPECT_FLOAT_EQ(f[1], 0.75f);  // max_torque
+    EXPECT_FLOAT_EQ(f[2], 5.0f);   // profile_acc
+}
+
+TEST(CodecV17, TorqueCtrlEncodeRoundtrip) {
+    tp::MotorTorqueCtrl c{0.3f, 8.0f, 0.0f};
+    auto wire = tp::encode(c);
+    ASSERT_EQ(wire.size(), 12u);
+    float f[3];
+    std::memcpy(f, wire.data(), 12);
+    EXPECT_FLOAT_EQ(f[0], 0.3f);   // target_torque
+    EXPECT_FLOAT_EQ(f[1], 8.0f);   // max_vel
+    EXPECT_FLOAT_EQ(f[2], 0.0f);   // reserved padding
+}
+
 // ---- MotorStatus: full 40-byte decode -------------------------------------
 TEST(CodecV17, MotorStatusFullDecode) {
     tp::MotorStatus s{};

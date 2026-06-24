@@ -69,6 +69,47 @@ public:
                        float feedforward_torque_nm,
                        float feedforward_vel_radps = 0.0f);  // V1.7; MIT only
 
+    // ---- High-rate control submission (no ACK) -----------------------------
+    // Fire-and-forget MIT control frames for a host-driven realtime loop (e.g.
+    // a follow / teleop loop in the upper layer running up to the firmware's
+    // 500Hz slave control rate). These send a CMD_NO_ACK frame and return
+    // immediately: there is NO ACK, NO NACK, NO retry, NO timeout, and NO throw
+    // on a target the firmware rejects. The firmware's slave control task
+    // consumes the *latest* submitted target; the host's only job is to submit
+    // at rate. Unlike set_*(), which block on an ACK and throw ProtocolError on
+    // NACK, submit() never blocks.
+    //
+    // Health/error feedback is OUT-OF-BAND — poll these off the realtime thread,
+    // never inside the submit loop:
+    //   - control_stats(): target_seq vs applied_seq, actual_hz, error_count,
+    //     last_error, target_age_ms (host-submit vs firmware-applied cadence).
+    //   - on_status(): MotorStatusBit::Fault/Stalled/OverTemp/... + target/actual mirror.
+    //   - SensorErrors stream: async SensorErrorId::Motor reports.
+    //
+    // MIT protocol is assumed (the impedance `vel` feed-forward is MIT-only);
+    // there is no per-call protocol check in the hot path. Preconditions are
+    // the caller's: enable() and a cleared fault. The only exception is
+    // IoError if the transport has been stopped.
+    void submit(const protocol::MotorImpedanceCtrl& c);  // primary (MIT hybrid)
+    void submit(const protocol::MotorPosCtrl& c);
+    void submit(const protocol::MotorVelCtrl& c);
+    void submit(const protocol::MotorTorqueCtrl& c);
+
+    // Float-arg convenience forms mirroring set_*; used by the Python bindings.
+    void submit_impedance(float target_pos_rad,
+                          float kp_nm_per_rad,
+                          float kd_nm_s_per_rad,
+                          float feedforward_torque_nm,
+                          float feedforward_vel_radps = 0.0f);
+    void submit_position(float target_pos_rad,
+                         float max_vel_radps,
+                         float max_torque_nm);
+    void submit_velocity(float target_vel_radps,
+                         float max_torque_nm,
+                         float profile_acc_radps2);
+    void submit_torque(float target_torque_nm,
+                       float max_vel_radps);
+
     // ---- Telemetry ---------------------------------------------------------
     MotorStatusSample read_status(
         std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
@@ -78,11 +119,11 @@ public:
     SubId on_status(Callback cb);
     void  off(SubId id);
 
-    // ---- V1.7 additions (follower-only) ------------------------------------
-    // NOTE: reserved interfaces — the follower gripper hardware is not yet
-    // available, so these are implemented against the firmware protocol but
-    // have NOT been validated on a real motor. On leader hardware they NACK
-    // (SensorOffline) -> ProtocolError, like the other motor commands.
+    // ---- Follower motor admin (zero / CAN id / protocol / stats) -----------
+    // Follower-only, validated against firmware hw_v1.1.0. On leader hardware
+    // these NACK (SensorOffline) -> ProtocolError, like the other motor
+    // commands — that is the correct way to surface a leader/follower mismatch,
+    // not a stub.
     void              set_zero();                              // Cmd 0x33 (zero)
     uint8_t           get_can_id();                            // Cmd 0x34
     void              set_can_id(uint8_t can_id);              // Cmd 0x35

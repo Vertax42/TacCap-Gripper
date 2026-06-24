@@ -68,6 +68,37 @@ void Motor::set_impedance(float pos, float kp, float kd, float ff_torque,
     send_or_throw(t_, protocol::Cmd::MotorImpedanceCtrl, protocol::encode(c), "set_impedance");
 }
 
+// ---- High-rate control submission (no ACK) --------------------------------
+// Fire-and-forget via Transport::send_cmd_no_ack — no ACK wait, no retry, no
+// throw on NACK (there is none). The struct overloads are the single source of
+// truth; the float wrappers delegate. See motor.hpp for the health contract.
+void Motor::submit(const protocol::MotorImpedanceCtrl& c) {
+    t_.send_cmd_no_ack(protocol::Cmd::MotorImpedanceCtrl, protocol::encode(c));
+}
+void Motor::submit(const protocol::MotorPosCtrl& c) {
+    t_.send_cmd_no_ack(protocol::Cmd::MotorPosCtrl, protocol::encode(c));
+}
+void Motor::submit(const protocol::MotorVelCtrl& c) {
+    t_.send_cmd_no_ack(protocol::Cmd::MotorVelCtrl, protocol::encode(c));
+}
+void Motor::submit(const protocol::MotorTorqueCtrl& c) {
+    t_.send_cmd_no_ack(protocol::Cmd::MotorTorqueCtrl, protocol::encode(c));
+}
+
+void Motor::submit_impedance(float pos, float kp, float kd, float ff_torque,
+                             float ff_vel) {
+    submit(protocol::MotorImpedanceCtrl{pos, kp, kd, ff_torque, ff_vel});
+}
+void Motor::submit_position(float pos, float max_vel, float max_torque) {
+    submit(protocol::MotorPosCtrl{pos, max_vel, max_torque});
+}
+void Motor::submit_velocity(float vel, float max_torque, float profile_acc) {
+    submit(protocol::MotorVelCtrl{vel, max_torque, profile_acc});
+}
+void Motor::submit_torque(float torque, float max_vel) {
+    submit(protocol::MotorTorqueCtrl{torque, max_vel, 0.0f});
+}
+
 MotorStatusSample Motor::read_status(std::chrono::milliseconds timeout) {
     auto ack = t_.send_cmd(protocol::Cmd::GetMotorStatus, {}, timeout);
     if (ack.is_nack) {
@@ -89,7 +120,7 @@ Motor::SubId Motor::on_status(Callback cb) {
 
 void Motor::off(SubId id) { t_.unsubscribe(id); }
 
-// ---- V1.7 additions (follower-only; reserved, not yet hardware-validated) --
+// ---- Follower motor admin (follower-only; validated against hw_v1.1.0) -----
 
 void Motor::set_zero() {
     send_or_throw(t_, protocol::Cmd::MotorSetZero, {}, "set_zero");
