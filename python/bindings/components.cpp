@@ -1,7 +1,7 @@
 // Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
 //
 // pybind11 bindings for the component classes (IMU, Encoder, Camera,
-// TactileSensor, LeaderGripper) and their POD samples.
+// LeaderGripper, FollowerGripper) and their POD samples.
 //
 // Sample structs use numpy arrays for vector fields so users get the
 // expected `s.accel_mps2[0]` / `np.linalg.norm(s.accel_mps2)` ergonomics
@@ -17,7 +17,6 @@
 #include <taccap/components/camera.hpp>
 #include <taccap/components/key.hpp>
 #include <taccap/components/sensor_errors.hpp>
-#include <taccap/components/tactile_sensor.hpp>
 #include <taccap/components/motor.hpp>
 #include <taccap/control_loop.hpp>
 #include <taccap/follower_gripper.hpp>
@@ -142,21 +141,13 @@ void bind_components(py::module_& m) {
             return std::string(buf);
         });
 
-    // ---- CameraFrame / TactileFrame ------------------------------------
+    // ---- CameraFrame ----------------------------------------------------
     py::class_<CameraFrame>(m, "CameraFrame")
         .def_property_readonly("host_time", [](const CameraFrame& f) {
             return tp_to_seconds(f.host_time);
         })
         .def_readonly("frame_index", &CameraFrame::frame_index)
         .def_property_readonly("image", [](const CameraFrame& f) { return mat_to_numpy(f.image); });
-
-    py::class_<TactileFrame>(m, "TactileFrame")
-        .def_property_readonly("host_time", [](const TactileFrame& f) {
-            return tp_to_seconds(f.host_time);
-        })
-        .def_readonly("frame_index", &TactileFrame::frame_index)
-        .def_property_readonly("raw",       [](const TactileFrame& f) { return mat_to_numpy(f.raw); })
-        .def_property_readonly("rectified", [](const TactileFrame& f) { return mat_to_numpy(f.rectified); });
 
     // ---- IMU ------------------------------------------------------------
     py::class_<IMU>(m, "IMU")
@@ -603,32 +594,6 @@ void bind_components(py::module_& m) {
         .def_property_readonly("dropped_frames", &Camera::dropped_frames)
         .def_property_readonly("actual_fps",     &Camera::actual_fps);
 
-    // ---- TactileSensor --------------------------------------------------
-    py::class_<TactileSensor>(m, "TactileSensor")
-        .def(py::init([](const std::string& serial, bool rectify) {
-            return std::make_unique<TactileSensor>(TactileSensor::Config{serial, rectify});
-        }),
-            py::arg("serial"), py::arg("rectify") = true)
-        .def("start", [](TactileSensor& self, py::function pycb) {
-            auto cb = make_gil_safe_callback(std::move(pycb));
-            self.start([cb](const TactileFrame& f) {
-                py::gil_scoped_acquire acq;
-                try { (*cb)(f); }
-                catch (py::error_already_set& e) {
-                    e.discard_as_unraisable("xense.taccap.TactileSensor callback");
-                } catch (...) {}
-            });
-        }, py::arg("callback"))
-        .def("stop", [](TactileSensor& self) {
-            py::gil_scoped_release gil;
-            self.stop();
-        })
-        .def_property_readonly("serial",         &TactileSensor::serial)
-        .def_property_readonly("is_streaming",   &TactileSensor::is_streaming)
-        .def_property_readonly("total_frames",   &TactileSensor::total_frames)
-        .def_property_readonly("dropped_frames", &TactileSensor::dropped_frames)
-        .def_property_readonly("actual_fps",     &TactileSensor::actual_fps);
-
     // ---- discovery ------------------------------------------------------
     py::enum_<discovery::Side>(m, "Side")
         .value("Left",    discovery::Side::Left)
@@ -686,32 +651,25 @@ void bind_components(py::module_& m) {
     // ---- LeaderGripper --------------------------------------------------
     py::class_<LeaderGripper>(m, "LeaderGripper")
         .def(py::init([](const std::string& mcu, const std::string& wrist,
-                         const std::string& tac_l, const std::string& tac_r,
                          uint32_t baud, unsigned ack_ms, unsigned retries,
-                         bool open_cameras, bool rectify) {
+                         bool open_cameras) {
                 LeaderGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
-                cfg.tactile_left_serial  = tac_l;
-                cfg.tactile_right_serial = tac_r;
                 cfg.baudrate             = baud;
                 cfg.ack_timeout_ms       = ack_ms;
                 cfg.max_retries          = retries;
                 cfg.open_cameras         = open_cameras;
-                cfg.rectify_tactile      = rectify;
                 py::gil_scoped_release gil;
                 return std::make_unique<LeaderGripper>(cfg);
              }),
              py::arg("mcu_device"),
-             // Cameras are off by default; these only matter with open_cameras=True.
+             // The wrist camera is off by default; it only matters with open_cameras=True.
              py::arg("wrist_video")         = "",
-             py::arg("tactile_left_serial") = "",
-             py::arg("tactile_right_serial") = "",
              py::arg("baudrate")            = 3'000'000u,
              py::arg("ack_timeout_ms")      = 200u,
              py::arg("max_retries")         = 1u,
-             py::arg("open_cameras")        = false,
-             py::arg("rectify_tactile")     = true)
+             py::arg("open_cameras")        = false)
         .def_static("open", []() {
             py::gil_scoped_release gil;
             return LeaderGripper::open();   // returns unique_ptr<LeaderGripper>
@@ -727,8 +685,6 @@ void bind_components(py::module_& m) {
         .def_property_readonly("imu",           [](LeaderGripper& g) -> IMU&            { return g.imu(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("encoder",       [](LeaderGripper& g) -> Encoder&        { return g.encoder(); },       py::return_value_policy::reference_internal)
         .def_property_readonly("wrist_camera",  [](LeaderGripper& g) -> Camera&         { return g.wrist_camera(); },  py::return_value_policy::reference_internal)
-        .def_property_readonly("tactile_left",  [](LeaderGripper& g) -> TactileSensor&  { return g.tactile_left(); },  py::return_value_policy::reference_internal)
-        .def_property_readonly("tactile_right", [](LeaderGripper& g) -> TactileSensor&  { return g.tactile_right(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("key",           [](LeaderGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](LeaderGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](LeaderGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
@@ -743,32 +699,25 @@ void bind_components(py::module_& m) {
     // ---- FollowerGripper ------------------------------------------------
     py::class_<FollowerGripper>(m, "FollowerGripper")
         .def(py::init([](const std::string& mcu, const std::string& wrist,
-                         const std::string& tac_l, const std::string& tac_r,
                          uint32_t baud, unsigned ack_ms, unsigned retries,
-                         bool open_cameras, bool rectify) {
+                         bool open_cameras) {
                 FollowerGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
-                cfg.tactile_left_serial  = tac_l;
-                cfg.tactile_right_serial = tac_r;
                 cfg.baudrate             = baud;
                 cfg.ack_timeout_ms       = ack_ms;
                 cfg.max_retries          = retries;
                 cfg.open_cameras         = open_cameras;
-                cfg.rectify_tactile      = rectify;
                 py::gil_scoped_release gil;
                 return std::make_unique<FollowerGripper>(cfg);
              }),
              py::arg("mcu_device"),
-             // Cameras are off by default; these only matter with open_cameras=True.
+             // The wrist camera is off by default; it only matters with open_cameras=True.
              py::arg("wrist_video")         = "",
-             py::arg("tactile_left_serial") = "",
-             py::arg("tactile_right_serial") = "",
              py::arg("baudrate")            = 3'000'000u,
              py::arg("ack_timeout_ms")      = 1000u,
              py::arg("max_retries")         = 2u,
-             py::arg("open_cameras")        = false,
-             py::arg("rectify_tactile")     = true)
+             py::arg("open_cameras")        = false)
         .def_static("open", []() {
             py::gil_scoped_release gil;
             return FollowerGripper::open();
@@ -788,8 +737,6 @@ void bind_components(py::module_& m) {
         .def_property_readonly("encoder",       [](FollowerGripper& g) -> Encoder&        { return g.encoder(); },       py::return_value_policy::reference_internal)
         .def_property_readonly("motor",         [](FollowerGripper& g) -> Motor&          { return g.motor(); },         py::return_value_policy::reference_internal)
         .def_property_readonly("wrist_camera",  [](FollowerGripper& g) -> Camera&         { return g.wrist_camera(); },  py::return_value_policy::reference_internal)
-        .def_property_readonly("tactile_left",  [](FollowerGripper& g) -> TactileSensor&  { return g.tactile_left(); },  py::return_value_policy::reference_internal)
-        .def_property_readonly("tactile_right", [](FollowerGripper& g) -> TactileSensor&  { return g.tactile_right(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("key",           [](FollowerGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](FollowerGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](FollowerGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)

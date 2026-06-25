@@ -85,20 +85,12 @@ LeaderGripper::LeaderGripper(const Config& cfg)
         "LeaderGripper opened: device={} firmware={} sn={} open_cameras={}",
         cfg_.mcu_device, fw_version_str, fw_sn_str, cfg_.open_cameras);
 
-    // Cameras are off by default — an external camera service owns the wrist
-    // UVC + OG V4L2 devices. Only open them when explicitly asked AND a
-    // device path / serial is provided.
+    // The wrist camera is off by default — an external camera service owns the
+    // wrist UVC V4L2 device. Only open it when explicitly asked AND a device
+    // path is provided.
     if (cfg_.open_cameras) {
         if (!cfg_.wrist_video.empty()) {
             wrist_ = std::make_unique<Camera>(make_wrist_config(cfg_));
-        }
-        if (!cfg_.tactile_left_serial.empty()) {
-            tac_l_ = std::make_unique<TactileSensor>(
-                TactileSensor::Config{cfg_.tactile_left_serial, cfg_.rectify_tactile});
-        }
-        if (!cfg_.tactile_right_serial.empty()) {
-            tac_r_ = std::make_unique<TactileSensor>(
-                TactileSensor::Config{cfg_.tactile_right_serial, cfg_.rectify_tactile});
         }
     }
 }
@@ -151,11 +143,6 @@ void LeaderGripper::start_streaming(unsigned imu_hz, unsigned encoder_hz) {
 
     // The MCU now begins emitting DATA frames; subscribers on imu_/encoder_
     // start receiving immediately.
-
-    // Cameras stream independently of the MCU stream; the caller has set
-    // their callbacks via tactile_left().start(cb) etc. We do NOT auto-
-    // start them here because the user might want raw access patterns.
-    // Mirror this in the documentation above.
 
     streaming_ = true;
 }

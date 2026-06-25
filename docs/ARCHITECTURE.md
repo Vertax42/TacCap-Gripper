@@ -1,5 +1,14 @@
 # TacCap-Gripper SDK — Architecture
 
+> **Note (0.1.4):** the visuotactile (OG) capture/rectify path was removed from
+> this SDK. The `libxensesdk` submodule, the `vision.hpp` alias header and the
+> `TactileSensor` / `TactileFrame` classes are gone; visuotactile imaging now
+> lives at the Python level via the `xensesdk` wheel. Diagrams and sections
+> below that mention `vision.hpp`, `TactileSensor`, `Rectifier`, libxense
+> `Sensor`/`Frame`, or the `third_party/libxensesdk` submodule are **historical**
+> — the current C++ surface is gripper protocol + the wrist `Camera` (plain
+> OpenCV) only.
+
 This document captures the state of the SDK as of the close of step 4
 (zero-config bilateral discovery + ergonomic component classes).
 

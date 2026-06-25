@@ -2,9 +2,9 @@
 //
 // Camera component: thin wrapper around OpenCV's V4L2 capture for the
 // wrist-mounted UVC camera (Sunplus XC...). Uses cv::VideoCapture under
-// the hood — exposed as raw cv::Mat frames. For the visuotactile (OG)
-// cameras use TactileSensor instead, which goes through libxense lite to
-// pick up the on-sensor calibration / rectification path.
+// the hood — exposed as raw cv::Mat frames. The visuotactile (OG) sensors
+// are not handled in C++ here; they are read at the Python level via the
+// xensesdk wheel (on-sensor calibration / rectification path).
 //
 // We intentionally don't pull pybind11/numpy here — Python bindings live
 // in python/bindings/components.cpp.

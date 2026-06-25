@@ -9,7 +9,6 @@ add_library(taccap_core SHARED
     src/components/imu.cpp
     src/components/encoder.cpp
     src/components/camera.cpp
-    src/components/tactile_sensor.cpp
     src/components/motor.cpp
     src/components/key.cpp
     src/components/sensor_errors.cpp
@@ -33,15 +32,19 @@ target_include_directories(taccap_core
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
 )
 
-# Camera component uses cv::VideoCapture which lives in opencv_videoio
-# (not in libxensesdk's transitive set). Pull in just that one extra
-# component; the rest of OpenCV comes through xensesdk PUBLIC.
-find_package(OpenCV REQUIRED COMPONENTS videoio)
+# Camera component uses cv::VideoCapture (opencv_videoio) and cv::Mat
+# (opencv_core). spdlog backs the shared logger (taccap/log.hpp). Both used to
+# come transitively through libxensesdk; now that it is gone, request them
+# directly. spdlog is consumed header-only (matching the prior transitive use —
+# no libspdlog was ever linked).
+find_package(OpenCV REQUIRED COMPONENTS core videoio)
+find_package(spdlog REQUIRED)
 
 target_link_libraries(taccap_core
-    PUBLIC  xensesdk             # libxense lite — vision.hpp aliases
-    PUBLIC  opencv_videoio       # cv::VideoCapture in Camera component
-    PRIVATE Threads::Threads     # poll() + future async transport
+    PUBLIC  opencv_core                 # cv::Mat in Camera component
+    PUBLIC  opencv_videoio              # cv::VideoCapture in Camera component
+    PUBLIC  spdlog::spdlog_header_only  # logging (taccap/log.hpp)
+    PRIVATE Threads::Threads            # poll() + future async transport
 )
 
 set_target_properties(taccap_core PROPERTIES
@@ -49,10 +52,8 @@ set_target_properties(taccap_core PROPERTIES
     SOVERSION ${PROJECT_VERSION_MAJOR}
     VERSION   ${PROJECT_VERSION}
     OUTPUT_NAME taccap_core
-    # In dev: find libxensesdk.so wherever cmake built it.
-    # In wheel/install: $ORIGIN = same dir as libtaccap_core.so (we co-locate
-    # libxensesdk.so there via the python install() rule).
-    BUILD_RPATH   "$<TARGET_FILE_DIR:xensesdk>"
+    # In wheel/install: $ORIGIN = same dir as libtaccap_core.so so the Python
+    # extension finds it without LD_LIBRARY_PATH.
     INSTALL_RPATH "$ORIGIN"
 )
 

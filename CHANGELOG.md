@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-26
+
+### Removed
+- **Dropped the `libxensesdk` dependency and the C++ visuotactile path.** The
+  `third_party/libxensesdk` git submodule, the `vision.hpp` alias header, and the
+  `TactileSensor` / `TactileFrame` classes are gone, along with the
+  `LeaderGripper` / `FollowerGripper` `tactile_left()` / `tactile_right()`
+  accessors and their `tactile_*_serial` / `rectify_tactile` config. Visuotactile
+  (OG) capture and rectification now live at the Python level via the `xensesdk`
+  wheel; `xense.taccap` is the gripper-protocol + wrist-camera surface only.
+- Removed the now-unused `libxense_version` attribute.
+
+### Changed
+- Build no longer requires internal-network submodule access. CMake no longer
+  pulls in `libxensesdk`; `taccap_core` links `opencv_core` + `opencv_videoio`
+  directly (previously transitive through libxense). Dropped the
+  `eigen` / `openssl` / `zlib` / `nlohmann_json` build deps (all libxense-only).
+
 ## [0.1.3] - 2026-06-25
 
 ### Added

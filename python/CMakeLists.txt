@@ -19,8 +19,8 @@ set_target_properties(_taccap_native PROPERTIES
     INSTALL_RPATH "$ORIGIN"
 )
 
-# Also drop libtaccap_core.so + libxensesdk.so beside the Python ext during
-# development so editable installs can find them without LD_LIBRARY_PATH.
+# Also drop libtaccap_core.so beside the Python ext during development so
+# editable installs can find it without LD_LIBRARY_PATH.
 add_custom_command(TARGET _taccap_native POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:taccap_core>
@@ -28,14 +28,8 @@ add_custom_command(TARGET _taccap_native POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E create_symlink
             $<TARGET_FILE_NAME:taccap_core>
             ${CMAKE_CURRENT_SOURCE_DIR}/xense/taccap/$<TARGET_SONAME_FILE_NAME:taccap_core>
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:xensesdk>
-            ${CMAKE_CURRENT_SOURCE_DIR}/xense/taccap/$<TARGET_FILE_NAME:xensesdk>
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
-            $<TARGET_FILE_NAME:xensesdk>
-            ${CMAKE_CURRENT_SOURCE_DIR}/xense/taccap/$<TARGET_SONAME_FILE_NAME:xensesdk>
     VERBATIM)
 
-# Wheel: ship _taccap_native + libtaccap_core.so + libxensesdk.so together.
-install(TARGETS _taccap_native taccap_core xensesdk
+# Wheel: ship _taccap_native + libtaccap_core.so together.
+install(TARGETS _taccap_native taccap_core
     LIBRARY DESTINATION xense/taccap)

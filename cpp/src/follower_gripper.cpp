@@ -81,20 +81,12 @@ FollowerGripper::FollowerGripper(const Config& cfg)
         "FollowerGripper opened: device={} firmware={} sn={} open_cameras={}",
         cfg_.mcu_device, fw_version_str, fw_sn_str, cfg_.open_cameras);
 
-    // Cameras are off by default — an external camera service owns the wrist
-    // UVC + OG V4L2 devices. Only open them when explicitly asked AND a
-    // device path / serial is provided.
+    // The wrist camera is off by default — an external camera service owns the
+    // wrist UVC V4L2 device. Only open it when explicitly asked AND a device
+    // path is provided.
     if (cfg_.open_cameras) {
         if (!cfg_.wrist_video.empty()) {
             wrist_ = std::make_unique<Camera>(make_wrist_config(cfg_));
-        }
-        if (!cfg_.tactile_left_serial.empty()) {
-            tac_l_ = std::make_unique<TactileSensor>(
-                TactileSensor::Config{cfg_.tactile_left_serial, cfg_.rectify_tactile});
-        }
-        if (!cfg_.tactile_right_serial.empty()) {
-            tac_r_ = std::make_unique<TactileSensor>(
-                TactileSensor::Config{cfg_.tactile_right_serial, cfg_.rectify_tactile});
         }
     }
 }

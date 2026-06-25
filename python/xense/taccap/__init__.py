@@ -6,7 +6,7 @@ package (no ``__init__.py``), so this subpackage can coexist with any other
 
 Top-level surface today:
 
-  - Versioning:       ``__version__``, ``libxense_version``, ``hello()``
+  - Versioning:       ``__version__``, ``hello()``
   - Protocol enums:   ``Address``, ``FrameType``, ``Cmd``, ``ErrorCode``
   - Wire framing:     ``Frame``, ``FrameParser``, ``pack_frame``,
                        ``crc16_modbus``, ``stuff_data``, ``unstuff_data``
@@ -20,7 +20,6 @@ from . import _taccap_native
 
 # ---- Versioning -------------------------------------------------------------
 hello = _taccap_native.hello
-libxense_version = _taccap_native.libxense_version
 
 # ---- Logging (spdlog-backed, shared with C++ core) --------------------------
 log = _taccap_native.log
@@ -55,7 +54,7 @@ Transport = _taccap_native.Transport
 AckResponse = _taccap_native.AckResponse
 TransportStats = _taccap_native.TransportStats
 
-# ---- Components (typed wrappers around Transport + libxense lite) -----------
+# ---- Components (typed wrappers around Transport) ---------------------------
 ImuSample = _taccap_native.ImuSample
 EncoderSample = _taccap_native.EncoderSample
 MotorStatusSample = _taccap_native.MotorStatusSample
@@ -68,14 +67,12 @@ MotorControlStats = _taccap_native.MotorControlStats  # V1.7
 KeySample = _taccap_native.KeySample
 SensorErrorSample = _taccap_native.SensorErrorSample
 CameraFrame = _taccap_native.CameraFrame
-TactileFrame = _taccap_native.TactileFrame
 IMU = _taccap_native.IMU
 Encoder = _taccap_native.Encoder
 Motor = _taccap_native.Motor
 Key = _taccap_native.Key
 SensorErrors = _taccap_native.SensorErrors
 Camera = _taccap_native.Camera
-TactileSensor = _taccap_native.TactileSensor
 OtaSession = _taccap_native.OtaSession
 OtaTargetVersion = _taccap_native.OtaTargetVersion
 OtaStatus = _taccap_native.OtaStatus
@@ -106,7 +103,6 @@ TimeoutError = _taccap_native.TimeoutError
 __all__ = [
     "__version__",
     "hello",
-    "libxense_version",
     # Logging
     "log",
     # Enums
@@ -145,12 +141,10 @@ __all__ = [
     "ControlLoop",
     "MotorControlStats",
     "CameraFrame",
-    "TactileFrame",
     "IMU",
     "Encoder",
     "Motor",
     "Camera",
-    "TactileSensor",
     # Aggregate + discovery
     "LeaderGripper",
     "FollowerGripper",

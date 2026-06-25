@@ -5,8 +5,6 @@
 # Create:    mamba env create -f environment.yml
 # Activate:  mamba activate taccap
 # Update:    mamba env update -f environment.yml
-#
-# Note: this is a lite consumer of libxensesdk — no ONNX / CUDA / MIGraphX.
 # =============================================================================
 
 name: taccap
@@ -21,21 +19,19 @@ dependencies:
   - pkg-config
   - make
 
-  # C++ toolchain (aligned with libxensesdk env)
+  # C++ toolchain
   - gcc=14.*
   - gxx=14.*
   - gcc_linux-64=14.*
   - gxx_linux-64=14.*
 
-  # libxense_lite C++ transitive deps (still required in lite mode).
-  # Use libopencv (C++ only) here; the Python cv2 binding is pinned via pip
-  # below to opencv-python==4.12.0.88 to align with the rest of the
-  # XenseRobotics Python toolchain (xense-flare etc.).
+  # C++ deps. The Camera component links opencv_core + opencv_videoio; use
+  # libopencv (C++ only) here. The Python cv2 binding is pinned via pip below
+  # to opencv-python==4.12.0.88 to align with the rest of the XenseRobotics
+  # Python toolchain (xense-flare etc.). spdlog (header-only) backs the shared
+  # logger; it pulls in fmt as a transitive dep.
   - libopencv=4.12.0
-  - eigen=3.4.0
-  - openssl=3.6.0
-  - zlib=1.3.1
-  - nlohmann_json=3.11.3
+  - spdlog=1.17.0
 
   # Testing
   - gtest=1.17.0

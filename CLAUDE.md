@@ -97,12 +97,11 @@ archive format never changes (keeps historical greps parseable).
   working regardless.
 
 ## Load-bearing constraints (don't touch unless asked explicitly)
-- `third_party/libxensesdk/src/device/sensor.cpp` has
-  `set_ctrl(V4L2_CID_BRIGHTNESS, 38, ...)`. The literal `38` is a
-  calibration baseline, not a placeholder. A controlled experiment on
-  2026-05-06 confirmed the V4L2 control propagates and that other values
-  produce visibly wrong images. If a "make brightness configurable" task
-  appears, push back before changing the literal.
+- The visuotactile (OG) capture/rectify path is **not** part of this SDK as of
+  0.1.4 — `libxensesdk`, `vision.hpp` and `TactileSensor` were removed. Tactile
+  imaging is handled at the Python level via the `xensesdk` wheel. Don't
+  reintroduce a libxensesdk submodule; `xense.taccap` is gripper-protocol +
+  wrist-camera only.
 - `third_party/firmware/` is a **clone-on-demand** firmware reference dir,
   **not** a submodule. `.gitignore` already excludes it. Never `git add -f`
   or convert it into a submodule.

@@ -8,13 +8,11 @@ tactile data-collection gripper. Exposes a single namespace
 - Motor control (follower side, FDCAN→灵足 transparently routed via MCU)
 - Leader / follower gripper objects that aggregate the MCU sensors and
   expose zero-config discovery
-- Standalone `Camera` (wrist UVC) and `TactileSensor` (visuotactile: V4L2 +
-  on-sensor calibration → rectify, vendored from
-  [libxensesdk](http://192.168.1.61/Vertax42/libxensesdk) in **lite mode** —
-  no ONNX / CUDA / MIGraphX runtime dependency). These are **opt-in**: an
+- Standalone `Camera` (wrist UVC, plain OpenCV V4L2) — **opt-in**: an
   external camera service owns the V4L2 devices now, so the gripper
-  aggregates do **not** open them unless constructed with
-  `open_cameras=True`.
+  aggregates do **not** open it unless constructed with `open_cameras=True`.
+  The **visuotactile (OG) sensors are not handled in this SDK**; capture and
+  rectification live at the Python level via the `xensesdk` wheel.
 
 This repository is the foundation for two adapter repos that will follow:
 
@@ -36,8 +34,8 @@ What's in:
   DATA subscribers. Follower-only V1.7 motor commands are implemented but
   pending follower-hardware validation.
 - MCU sensor components: IMU @ 100 Hz, encoder @ 100 Hz, motor status;
-  plus opt-in visuotactile (+ rectify @ 30 Hz) and wrist UVC (@ 30 Hz)
-  camera classes (off by default — owned by an external camera service)
+  plus an opt-in wrist UVC (@ 30 Hz) `Camera` class (off by default — owned
+  by an external camera service)
 - `LeaderGripper` / `FollowerGripper` aggregates, zero-config MCU
   discovery (`scan_grippers` / `find_left` / `find_right` /
   `find_leader` / `find_follower`)
@@ -61,9 +59,9 @@ Full per-commit changelog in [CHANGELOG.md](CHANGELOG.md).
 ## Install
 
 The SDK has two consumable surfaces — the C++ shared library
-(`libtaccap_core.so` plus the vendored `libxensesdk.so`) and the Python
-extension (`xense.taccap`). Both are produced by the **same** top-level
-CMake project; you choose which surface to build.
+(`libtaccap_core.so`) and the Python extension (`xense.taccap`). Both are
+produced by the **same** top-level CMake project; you choose which surface
+to build.
 
 ### 1. Prerequisites
 
@@ -75,23 +73,18 @@ CMake project; you choose which surface to build.
 | Recommended           | `mamba` / `conda` — `environment.yml` pins the entire toolchain & C++ deps to a known-good set      |
 
 > **Why mamba is recommended.** `environment.yml` ships gcc-14, OpenCV
-> 4.12, Eigen, OpenSSL, zlib, nlohmann_json, gtest, pybind11 and
-> scikit-build-core at the exact versions libxensesdk-lite is verified
-> against. If you build against system packages instead, you are on your
-> own for ABI compatibility.
+> 4.12, spdlog, gtest, pybind11 and scikit-build-core at a known-good set
+> of versions. If you build against system packages instead, you are on
+> your own for ABI compatibility.
 
-### 2. Clone (with the libxensesdk submodule)
-
-The vendored `third_party/libxensesdk` is a git submodule. **Without it
-the top-level CMake configure aborts.**
+### 2. Clone
 
 ```bash
-git clone --recurse-submodules <repo-url> taccap-gripper
+git clone <repo-url> taccap-gripper
 cd taccap-gripper
-
-# If you forgot --recurse-submodules:
-git submodule update --init --recursive
 ```
+
+There are no git submodules — the SDK builds standalone.
 
 ### 3. Create the development environment
 
@@ -129,8 +122,8 @@ sudo usermod -aG dialout,video "$USER"
 `pyproject.toml` uses **scikit-build-core** as the build backend, which
 drives CMake under the hood with `TACCAP_BUILD_PYTHON=ON` and
 `TACCAP_BUILD_EXAMPLES=OFF`. A single `pip` invocation builds the C++
-core, the libxensesdk-lite shared library, and the pybind11 extension,
-then co-locates them inside the wheel under `xense/taccap/`:
+core and the pybind11 extension, then co-locates them inside the wheel
+under `xense/taccap/`:
 
 ```bash
 # Editable / development install (re-runs CMake on every `pip install -e .`):
@@ -145,11 +138,10 @@ What ends up where (editable build):
 ```
 python/xense/taccap/
 ├── _taccap_native.cpython-312-x86_64-linux-gnu.so   # pybind11 module
-├── libtaccap_core.so.0.0.1   (+ .so.0 symlink)      # SDK core
-└── libxensesdk.so.0.0.2      (+ .so.0 symlink)      # vendored lite SDK
+└── libtaccap_core.so.0.1.4   (+ .so.0 symlink)      # SDK core
 ```
 
-These three are co-located on purpose — the rpath is set to `$ORIGIN`,
+These two are co-located on purpose — the rpath is set to `$ORIGIN`,
 so loading `xense.taccap` just works without `LD_LIBRARY_PATH`.
 
 Build artefacts for editable installs land under `build/{wheel_tag}/`
@@ -176,40 +168,26 @@ Output:
 
 ```
 build/
-├── third_party/libxensesdk/libxensesdk.so(.0)(.0.0.2)
-├── cpp/libtaccap_core.so(.0)(.0.0.1)
-├── cpp/examples/taccap_hello
+├── cpp/libtaccap_core.so(.0)(.0.1.4)
 ├── cpp/examples/leader_demo
 └── cpp/tests/...                # gtest binaries; run via `ctest`
 ```
 
-The shared libraries' build-tree rpath points at the libxensesdk build
-output, so the example binaries run in place without `LD_LIBRARY_PATH`.
-
 CMake options (top-level `CMakeLists.txt:19-21`):
 
-| Option                  | Default | Effect                                                |
-| ----------------------- | ------- | ----------------------------------------------------- |
-| `TACCAP_BUILD_PYTHON`   | `ON`    | Build the `_taccap_native` pybind11 module            |
-| `TACCAP_BUILD_EXAMPLES` | `OFF`   | Build `taccap_hello` and `leader_demo` smoke binaries |
-| `TACCAP_BUILD_TESTS`    | `OFF`   | Build the gtest suite under `cpp/tests/`              |
-
-`XENSE_LITE_BUILD=ON` is forced before the submodule's CMakeLists is
-loaded, so the libxense lite path is always selected — no ML deps will
-be searched for or linked.
+| Option                  | Default | Effect                                          |
+| ----------------------- | ------- | ----------------------------------------------- |
+| `TACCAP_BUILD_PYTHON`   | `ON`    | Build the `_taccap_native` pybind11 module      |
+| `TACCAP_BUILD_EXAMPLES` | `OFF`   | Build the `leader_demo` smoke binary            |
+| `TACCAP_BUILD_TESTS`    | `OFF`   | Build the gtest suite under `cpp/tests/`        |
 
 ### 6. Verify
 
 ```bash
 # Python
 python -c "import xense.taccap as t; print(t.hello()); print(t.__version__)"
-# → taccap-gripper version: 0.0.1, libxense lite version: ...
-# → 0.0.1
-
-# C++ (only if TACCAP_BUILD_EXAMPLES=ON)
-./build/cpp/examples/taccap_hello
-# → taccap-gripper 0.0.1 (libxense lite ...)
-# → xense::taccap::Context created OK
+# → taccap-gripper OK; version 0.1.4
+# → 0.1.4
 
 # C++ tests (only if TACCAP_BUILD_TESTS=ON)
 ctest --test-dir build --output-on-failure
@@ -224,9 +202,8 @@ rm -rf build/ && pip install -e .
 # Pure C++: incremental rebuild is fine
 cmake --build build -j
 
-# Full reset (incl. the libxensesdk submodule build)
+# Full reset
 rm -rf build/
-git submodule foreach --recursive 'git clean -xdf'
 ```
 
 ---
@@ -251,21 +228,18 @@ imu_sub = gripper.imu.on_data(lambda s: print(s))
 gripper.stop_streaming()
 ```
 
-The wrist camera and OG tactile sensors are owned by an external camera
-service, so `open()` does not touch them. To have a gripper drive them,
-construct it explicitly with `open_cameras=True` and the device IDs:
+The wrist camera is owned by an external camera service, so `open()` does
+not touch it. To have a gripper drive the wrist UVC camera, construct it
+explicitly with `open_cameras=True` and the device path:
 
 ```python
-g = t.LeaderGripper(mcu_device, wrist_video="/dev/video2",
-                    tactile_left_serial="OG000477",
-                    tactile_right_serial="OG000478",
-                    open_cameras=True)
-g.tactile_left.start(lambda f: print("L", f.frame_index, f.rectified.shape))
+g = t.LeaderGripper(mcu_device, wrist_video="/dev/video2", open_cameras=True)
 g.wrist_camera.start(lambda f: print("wrist", f.frame_index))
 ```
 
-Or open them on their own with the standalone `t.Camera` / `t.TactileSensor`
-classes — independent of any gripper.
+Or open it on its own with the standalone `t.Camera` class — independent of
+any gripper. The visuotactile (OG) sensors are read separately via the
+`xensesdk` wheel, not through this SDK.
 
 ### Bilateral (left + right in one process)
 
@@ -339,12 +313,10 @@ All scripts live under `python/examples/`. Enable C++ examples with
 
 | Script                           | What it does                                                                                                                                                                                                                                                                                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rerun_visualize.py`             | Single-gripper rerun viewer — IMU/encoder time-series + observed FPS panel. Wrist + tactile are opt-in: pass `--wrist` / `--tactile-left` / `--tactile-right` to open them standalone (off by default).                                                                                                                                                                                       |
 | `rerun_dual_with_tracker.py`     | Dual-gripper IMU/encoder + Pico4 motion-tracker 6-DoF poses in one viewer. Requires [`xensevr_pc_service_sdk`](https://github.com/Vertax42/Xense-Pico-Teleop-Interface) and the XenseVR PC Service running. Use `--left-tracker-sn` / `--right-tracker-sn` to map tracker SNs to sides. (Cameras are owned by the external camera service and not shown here.)                                  |
 | `calibrate.py`                   | Per-SN encoder zero calibration CLI. Shows raw + cooked side-by-side, latches zero, sanity-checks max-open angle, then enters a live readout. See [Calibration](#calibration).                                                                                                                                                                                                              |
 | `ota_update.py`                  | Firmware OTA flashing CLI with progress + post-flash status probe. **Risky — wrong artefact bricks the MCU.**                                                                                                                                                                                                                                                                               |
 | `v4l2_probe.py`, `v4l2_sweep.py` | Manual V4L2 bringup probes for the wrist / OG cameras (discovery is MCU-only and no longer enumerates them). Also handy when a firmware SN isn't burned yet.                                                                                                                                                                                                                                  |
-| `taccap_hello` (C++)             | Smoke test for the C++ install path — prints the SDK + libxense versions and constructs a `Context`.                                                                                                                                                                                                                                                                                        |
 | `leader_demo` (C++)              | Reports streaming rates for a single leader gripper over 5 seconds.                                                                                                                                                                                                                                                                                                                         |
 
 ### Bench-specific tracker ↔ gripper binding (this checkout)
@@ -469,16 +441,15 @@ File-sink behaviour:
 ```
 taccap-gripper/
 ├── cpp/
-│   ├── include/taccap/        # Public C++ headers (namespace alias + new types)
+│   ├── include/taccap/        # Public C++ headers
 │   ├── src/                   # SDK implementation (protocol, bus, components, ...)
-│   ├── examples/              # C++ example programs (taccap_hello, leader_demo)
+│   ├── examples/              # C++ example programs (leader_demo)
 │   └── tests/                 # gtest unit tests
 ├── python/
 │   ├── bindings/              # pybind11 module sources
-│   ├── examples/              # Python examples (rerun_visualize.py)
+│   ├── examples/              # Python examples
 │   └── xense/taccap/          # Python package (PEP 420 namespace under `xense`)
 ├── third_party/
-│   ├── libxensesdk/           # Submodule, lite mode (no ML deps)
 │   └── firmware/              # Clone-on-demand reference repos (gitignored)
 │       ├── tc-gu-01/          #   STM32 firmware that runs on the gripper
 │       └── tc-gu-01-pc/       #   PyQt debug GUI (operator-side)

@@ -3,7 +3,7 @@
 // pybind11 entry point for the xense.taccap Python package.
 //
 // Layered exports:
-//   - top-level: __version__, libxense_version, hello()
+//   - top-level: __version__, hello()
 //   - protocol enums:    Address, FrameType, Cmd, ErrorCode
 //   - bus framing:       Frame, FrameParser, pack_frame(), crc16_modbus(),
 //                        stuff_data(), unstuff_data()
@@ -18,7 +18,6 @@
 #include <pybind11/functional.h>
 
 #include <taccap/version.hpp>
-#include <taccap/vision.hpp>
 #include <taccap/error.hpp>
 #include <taccap/protocol/commands.hpp>
 #include <taccap/protocol/payloads.hpp>
@@ -26,8 +25,6 @@
 #include <taccap/bus/frame.hpp>
 #include <taccap/bus/serial_bus.hpp>
 #include <taccap/bus/transport.hpp>
-
-#include <xense/core/version.hpp>  // defines XENSESDK_VERSION_STRING
 
 #include <chrono>
 #include <cstring>
@@ -61,12 +58,10 @@ void bind_log(py::module_& m);         // defined in log.cpp
 PYBIND11_MODULE(_taccap_native, m) {
     m.doc() = "TacCap-Gripper native module (lite scaffold + TC-GU-01 protocol)";
 
-    m.attr("__version__")      = TACCAP_VERSION_STRING;
-    m.attr("libxense_version") = XENSESDK_VERSION_STRING;
+    m.attr("__version__") = TACCAP_VERSION_STRING;
 
     m.def("hello", []() {
-        return std::string("taccap-gripper lite scaffold OK; "
-                           "libxense lite version: ") + XENSESDK_VERSION_STRING;
+        return std::string("taccap-gripper OK; version ") + TACCAP_VERSION_STRING;
     });
 
     using namespace xense::taccap;
@@ -390,6 +385,6 @@ PYBIND11_MODULE(_taccap_native, m) {
     // spdlog-backed logger shared with the C++ core.
     xense::taccap::python::bind_log(m);
 
-    // Component classes (IMU/Encoder/Camera/TactileSensor/LeaderGripper).
+    // Component classes (IMU/Encoder/Camera/LeaderGripper/FollowerGripper).
     xense::taccap::python::bind_components(m);
 }
