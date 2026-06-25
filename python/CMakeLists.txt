@@ -1,10 +1,47 @@
 find_package(pybind11 CONFIG REQUIRED)
+find_package(spdlog REQUIRED)
 
 pybind11_add_module(_taccap_native MODULE
     bindings/module.cpp
     bindings/components.cpp
     bindings/log.cpp
 )
+
+# pybind11 adds Python's include directory before transitive dependency
+# includes. Some environments also place an older spdlog copy under
+# include/pythonX.Y, which can be selected ahead of the spdlog package found by
+# CMake and then fail against the paired fmt headers. Put a build-local shim in
+# front so <spdlog/...> and <fmt/...> resolve to the packages found by CMake.
+set(_taccap_dependency_include_dir
+    ${CMAKE_CURRENT_BINARY_DIR}/dependency_include)
+file(MAKE_DIRECTORY ${_taccap_dependency_include_dir})
+
+function(_taccap_link_dependency_header_dir target_name header_dir_name)
+    get_target_property(_taccap_include_dirs
+        ${target_name} INTERFACE_INCLUDE_DIRECTORIES)
+    foreach(_taccap_include_dir IN LISTS _taccap_include_dirs)
+        if(EXISTS ${_taccap_include_dir}/${header_dir_name})
+            set(_taccap_link_path
+                ${_taccap_dependency_include_dir}/${header_dir_name})
+            if(EXISTS ${_taccap_link_path} OR IS_SYMLINK ${_taccap_link_path})
+                file(REMOVE ${_taccap_link_path})
+            endif()
+            file(CREATE_LINK
+                ${_taccap_include_dir}/${header_dir_name}
+                ${_taccap_link_path}
+                SYMBOLIC COPY_ON_ERROR)
+            return()
+        endif()
+    endforeach()
+    message(FATAL_ERROR
+        "Could not find ${header_dir_name} include directory from ${target_name}")
+endfunction()
+
+_taccap_link_dependency_header_dir(spdlog::spdlog_header_only spdlog)
+_taccap_link_dependency_header_dir(fmt::fmt fmt)
+target_include_directories(_taccap_native BEFORE PRIVATE
+    ${_taccap_dependency_include_dir})
+
 target_link_libraries(_taccap_native PRIVATE taccap_core)
 
 # In-tree development build: place the .so next to the Python sources so
