@@ -106,11 +106,11 @@ inline void prune_old_logs(const std::filesystem::path& dir,
 }
 
 // Storage for the console sink so external set_console_*() helpers can
-// reach it after logger() finished initializing.
-inline std::shared_ptr<spdlog::sinks::sink>& console_sink_holder() {
-    static std::shared_ptr<spdlog::sinks::sink> p;
-    return p;
-}
+// reach it after logger() finished initializing. Single definition lives in
+// cpp/src/log.cpp so every .so that includes this header shares one console
+// sink (an inline function-local static would be duplicated per .so under
+// -fvisibility-inlines-hidden).
+std::shared_ptr<spdlog::sinks::sink>& console_sink_holder();
 
 inline std::shared_ptr<spdlog::sinks::sink> try_make_file_sink() {
     namespace fs = std::filesystem;
@@ -135,44 +135,18 @@ inline std::shared_ptr<spdlog::sinks::sink> try_make_file_sink() {
 
 }  // namespace detail
 
-// Initialise the named spdlog logger if it isn't registered yet, then
-// return it. Looking up by name on every call (instead of caching in a
-// function-local static) is intentional: with -fvisibility-inlines-hidden
-// each .so that includes this header gets its OWN copy of the inline-
-// function static, and writes from the call_once lambda in one .so are
-// invisible to the outer function in the same .so (the symbol resolves
-// to a different storage location once the lambda is emitted as a
-// separately-linked function). The spdlog registry already holds the
-// canonical instance, so we lean on it instead of duplicating state.
-inline std::shared_ptr<spdlog::logger> logger() {
-    static std::once_flag flag;
-    std::call_once(flag, [] {
-        if (spdlog::get("xense.taccap")) return;
-
-        auto console_sink =
-            std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
-        console_sink->set_pattern(SPDLOG_PATTERN);
-        console_sink->set_level(spdlog::level::info);
-        detail::console_sink_holder() = console_sink;
-
-        std::vector<spdlog::sink_ptr> sinks{console_sink};
-        if (auto file_sink = detail::try_make_file_sink()) {
-            sinks.push_back(file_sink);
-        }
-        auto created = std::make_shared<spdlog::logger>(
-            "xense.taccap", sinks.begin(), sinks.end());
-        created->set_level(spdlog::level::debug);
-        created->flush_on(spdlog::level::warn);
-        try {
-            spdlog::register_logger(created);
-        } catch (const spdlog::spdlog_ex&) {
-            // Lost the race with another TU; the registry has whoever
-            // got there first — that's fine, our `created` will simply
-            // be dropped when this lambda returns.
-        }
-    });
-    return spdlog::get("xense.taccap");
-}
+// Return the process-wide "xense.taccap" logger (stderr color + per-session
+// file sink). Single definition in cpp/src/log.cpp: a cached, self-built
+// logger that does NOT touch spdlog's global registry.
+//
+// Deliberately registry-free: spdlog's registry singleton is emitted as a
+// STB_GNU_UNIQUE symbol that the dynamic linker merges process-wide. When a
+// DIFFERENT spdlog version is bundled in another loaded library (e.g.
+// xensesdk's libxense_c.so), register_logger()/get() then operate on a
+// mismatched-layout registry and `get("xense.taccap")` can return nullptr —
+// the first logger()->info() crashes. Caching our own logger and never
+// calling into the registry sidesteps that entirely.
+std::shared_ptr<spdlog::logger> logger();
 
 // Console-sink controls. The console sink takes the user-facing level
 // filter; the file sink is intentionally not exposed (stays at DEBUG +

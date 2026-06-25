@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.4] - 2026-06-26
 
+### Fixed
+- **Logger no longer crashes when another spdlog copy is loaded in-process.**
+  `xense::taccap::logger()` used to fetch the logger from spdlog's global
+  registry (`spdlog::get`), whose singleton is a process-wide `STB_GNU_UNIQUE`
+  symbol. When a consumer also loads a different spdlog version (e.g. the one
+  bundled in `xensesdk`'s `libxense_c.so`), the two share one mismatched-layout
+  registry and `get()` returns `nullptr` → the first `logger()->...()` call
+  segfaults. The logger is now built once and cached in `cpp/src/log.cpp`
+  without touching the registry, making it independent of any other spdlog in
+  the process.
+
 ### Removed
 - **Dropped the `libxensesdk` dependency and the C++ visuotactile path.** The
   `third_party/libxensesdk` git submodule, the `vision.hpp` alias header, and the

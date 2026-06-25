@@ -29,9 +29,11 @@ dependencies:
   # libopencv (C++ only) here. The Python cv2 binding is pinned via pip below
   # to opencv-python==4.12.0.88 to align with the rest of the XenseRobotics
   # Python toolchain (xense-flare etc.). spdlog (header-only) backs the shared
-  # logger; it pulls in fmt as a transitive dep.
+  # logger; it pulls in fmt as a transitive dep. The logger is registry-free
+  # (see cpp/src/log.cpp) so the spdlog version is not ABI-coupled to other
+  # spdlog copies in a consumer process; pinned for reproducibility.
   - libopencv=4.12.0
-  - spdlog=1.17.0
+  - spdlog=1.14.1
 
   # Testing
   - gtest=1.17.0

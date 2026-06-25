@@ -17,6 +17,7 @@ add_library(taccap_core SHARED
     src/follower_gripper.cpp
     src/control_loop.cpp
     src/ota.cpp
+    src/log.cpp
 )
 
 # Generate the version header into the build tree.
