@@ -46,6 +46,8 @@ enum class Cmd : uint8_t {
     SetSn           = 0x05,
     GetDevType      = 0x06,
     SetDevType      = 0x07,
+    Ws2812Set       = 0x0A,    // V1.9 — WS2812 base LED control, ws2812_set_t (7B)
+    Ws2812Effect    = 0x0B,    // V1.9 — WS2812 effect control, ws2812_effect_t (12B)
 
     // Sensor reads (0x10–0x1F)
     GetImu          = 0x10,
@@ -93,6 +95,8 @@ enum class Cmd : uint8_t {
     GetEskinConfig      = 0x65,
     SetGripperConfig    = 0x66,    // V1.7 — follower open/close limits (req 32B)
     GetGripperConfig    = 0x67,    // V1.7 — read follower config (resp 32B)
+    SetGripperAutoCalConfig = 0x68, // V1.9 — power-on auto-cal config (req 32B)
+    GetGripperAutoCalConfig = 0x69, // V1.9 — read auto-cal config (resp 32B)
 
     // OTA upgrade (0x70–0x7F) — added V1.3
     OtaStart            = 0x70,    // ota_start_t (12B)

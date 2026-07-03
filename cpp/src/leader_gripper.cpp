@@ -42,6 +42,7 @@ LeaderGripper::LeaderGripper(const Config& cfg)
       imu_(t_),
       encoder_(t_),
       key_(t_),
+      led_(t_),
       errors_(t_),
       ota_(t_) {
     // Read firmware version + SN once at construction time so the log

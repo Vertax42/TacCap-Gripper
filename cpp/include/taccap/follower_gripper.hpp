@@ -36,6 +36,7 @@
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/imu.hpp>
 #include <taccap/components/key.hpp>
+#include <taccap/components/led.hpp>
 #include <taccap/components/motor.hpp>
 #include <taccap/components/sensor_errors.hpp>
 #include <taccap/discovery.hpp>
@@ -93,6 +94,13 @@ public:
         std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
     void set_gripper_config(const protocol::GripperConfig& cfg);
 
+    // ---- Power-on auto-calibration config (V1.9 — Cmd 0x68/0x69) ------------
+    // When enabled, the firmware auto-calibrates on power-up (close-to-stall =>
+    // zero, open-to-stall => max_open). Read / write that config here.
+    protocol::GripperAutoCalConfig get_auto_cal_config(
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
+    void set_auto_cal_config(const protocol::GripperAutoCalConfig& cfg);
+
     // ---- Normalized gripper position (0 = closed, 1 = open) -----------------
     // Convenience layer over the motor + GripperConfig so callers work in a
     // normalized [0,1] position instead of raw shaft radians. NOTE: this is
@@ -119,6 +127,7 @@ public:
     void  reload_config();                                // re-read + rebuild converter
 
     Key&            key()            noexcept { return key_; }            // V1.4
+    Led&            led()            noexcept { return led_; }            // V1.9
     SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
     OtaSession&     ota()            noexcept { return ota_; }            // V1.3
     bus::Transport& transport()      noexcept { return t_; }
@@ -158,6 +167,7 @@ private:
     Encoder                         encoder_;
     Motor                           motor_;
     Key                             key_;       // V1.4
+    Led                             led_;       // V1.9
     SensorErrors                    errors_;    // V1.6
     OtaSession                      ota_;       // V1.3
     std::unique_ptr<Camera>         wrist_;

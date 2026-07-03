@@ -60,6 +60,7 @@ EncoderSample = _taccap_native.EncoderSample
 MotorStatusSample = _taccap_native.MotorStatusSample
 MotorProtocol = _taccap_native.MotorProtocol          # V1.7
 GripperConfig = _taccap_native.GripperConfig          # V1.7
+GripperAutoCalConfig = _taccap_native.GripperAutoCalConfig  # V1.9 power-on auto-cal
 GripperPosition = _taccap_native.GripperPosition      # raw rad <-> normalized [0,1]
 GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
 ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
@@ -71,6 +72,9 @@ IMU = _taccap_native.IMU
 Encoder = _taccap_native.Encoder
 Motor = _taccap_native.Motor
 Key = _taccap_native.Key
+Led = _taccap_native.Led                              # V1.9 WS2812 LED control
+Ws2812Mode = _taccap_native.Ws2812Mode                # V1.9
+Ws2812EffectType = _taccap_native.Ws2812EffectType    # V1.9
 SensorErrors = _taccap_native.SensorErrors
 Camera = _taccap_native.Camera
 OtaSession = _taccap_native.OtaSession
@@ -136,6 +140,7 @@ __all__ = [
     "MotorStatusSample",
     "MotorProtocol",
     "GripperConfig",
+    "GripperAutoCalConfig",
     "GripperPosition",
     "GripperObservation",
     "ControlLoop",
@@ -144,6 +149,9 @@ __all__ = [
     "IMU",
     "Encoder",
     "Motor",
+    "Led",
+    "Ws2812Mode",
+    "Ws2812EffectType",
     "Camera",
     # Aggregate + discovery
     "LeaderGripper",

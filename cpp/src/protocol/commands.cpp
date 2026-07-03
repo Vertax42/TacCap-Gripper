@@ -32,6 +32,8 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::SetSn:               return "SetSn";
         case Cmd::GetDevType:          return "GetDevType";
         case Cmd::SetDevType:          return "SetDevType";
+        case Cmd::Ws2812Set:           return "Ws2812Set";
+        case Cmd::Ws2812Effect:        return "Ws2812Effect";
 
         case Cmd::GetImu:              return "GetImu";
         case Cmd::GetEncoder:          return "GetEncoder";
@@ -75,6 +77,8 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::GetEskinConfig:      return "GetEskinConfig";
         case Cmd::SetGripperConfig:    return "SetGripperConfig";
         case Cmd::GetGripperConfig:    return "GetGripperConfig";
+        case Cmd::SetGripperAutoCalConfig: return "SetGripperAutoCalConfig";
+        case Cmd::GetGripperAutoCalConfig: return "GetGripperAutoCalConfig";
 
         case Cmd::OtaStart:            return "OtaStart";
         case Cmd::OtaWriteBlock:       return "OtaWriteBlock";

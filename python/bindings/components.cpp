@@ -18,6 +18,7 @@
 #include <taccap/components/key.hpp>
 #include <taccap/components/sensor_errors.hpp>
 #include <taccap/components/motor.hpp>
+#include <taccap/components/led.hpp>
 #include <taccap/control_loop.hpp>
 #include <taccap/follower_gripper.hpp>
 #include <taccap/leader_gripper.hpp>
@@ -212,6 +213,40 @@ void bind_components(py::module_& m) {
     key_state_mod.attr("LongPressDown")   = py::int_(xense::taccap::protocol::KeyState::LongPressDown);
     key_state_mod.attr("LongPressUp")     = py::int_(xense::taccap::protocol::KeyState::LongPressUp);
 
+    // ---- Led (WS2812, V1.9) --------------------------------------------
+    py::enum_<protocol::Ws2812Mode>(m, "Ws2812Mode")
+        .value("Off",       protocol::Ws2812Mode::Off)
+        .value("EffectSet", protocol::Ws2812Mode::EffectSet)
+        .value("Override",  protocol::Ws2812Mode::Override);
+    py::enum_<protocol::Ws2812EffectType>(m, "Ws2812EffectType")
+        .value("None_",       protocol::Ws2812EffectType::None)
+        .value("NormalSolid", protocol::Ws2812EffectType::NormalSolid)
+        .value("NormalBlink", protocol::Ws2812EffectType::NormalBlink)
+        .value("OtaBlink",    protocol::Ws2812EffectType::OtaBlink)
+        .value("FaultBlink",  protocol::Ws2812EffectType::FaultBlink)
+        .value("Demo",        protocol::Ws2812EffectType::Demo)
+        .value("ColorBlink",  protocol::Ws2812EffectType::ColorBlink)
+        .value("ColorBreathe",protocol::Ws2812EffectType::ColorBreathe)
+        .value("HsvCycle",    protocol::Ws2812EffectType::HsvCycle)
+        .value("ColorLerp",   protocol::Ws2812EffectType::ColorLerp);
+    py::class_<Led>(m, "Led")
+        .def("set", [](Led& self, protocol::Ws2812Mode mode, uint8_t r, uint8_t g,
+                       uint8_t b, uint8_t brightness, uint16_t blink_ms) {
+            py::gil_scoped_release gil;
+            self.set(mode, r, g, b, brightness, blink_ms);
+        }, py::arg("mode"), py::arg("r"), py::arg("g"), py::arg("b"),
+           py::arg("brightness") = 0, py::arg("blink_ms") = 0)
+        .def("off", [](Led& self) { py::gil_scoped_release gil; self.off(); })
+        .def("effect", [](Led& self, protocol::Ws2812EffectType eff, uint8_t r1,
+                          uint8_t g1, uint8_t b1, uint16_t period_ms, uint8_t r2,
+                          uint8_t g2, uint8_t b2, uint8_t param1, uint8_t param2) {
+            py::gil_scoped_release gil;
+            self.effect(eff, r1, g1, b1, period_ms, r2, g2, b2, param1, param2);
+        }, py::arg("effect"), py::arg("r1"), py::arg("g1"), py::arg("b1"),
+           py::arg("period_ms") = 1000, py::arg("r2") = 0, py::arg("g2") = 0,
+           py::arg("b2") = 0, py::arg("param1") = 0, py::arg("param2") = 0)
+        .def("effect_off", [](Led& self) { py::gil_scoped_release gil; self.effect_off(); });
+
     // ---- SensorErrorSample + SensorErrors (V1.6) -----------------------
     py::class_<SensorErrorSample>(m, "SensorErrorSample")
         .def_property_readonly("host_time", [](const SensorErrorSample& s) {
@@ -358,6 +393,35 @@ void bind_components(py::module_& m) {
             return std::string(buf);
         });
 
+    // ---- GripperAutoCalConfig (V1.9 power-on auto-cal) -------------------
+    py::class_<protocol::GripperAutoCalConfig>(m, "GripperAutoCalConfig")
+        .def(py::init([]() {
+            protocol::GripperAutoCalConfig c{};
+            c.magic   = protocol::GRIPPER_AUTO_CAL_MAGIC;
+            c.version = protocol::GRIPPER_AUTO_CAL_VERSION;
+            c.flags   = protocol::GripperAutoCalFlag::Valid;
+            return c;
+        }))
+        .def_readwrite("magic",                &protocol::GripperAutoCalConfig::magic)
+        .def_readwrite("version",              &protocol::GripperAutoCalConfig::version)
+        .def_readwrite("flags",                &protocol::GripperAutoCalConfig::flags)
+        .def_readwrite("close_stall_torque_nm", &protocol::GripperAutoCalConfig::close_stall_torque_nm)
+        .def_readwrite("open_stall_torque_nm",  &protocol::GripperAutoCalConfig::open_stall_torque_nm)
+        .def_readwrite("close_speed_rad_s",    &protocol::GripperAutoCalConfig::close_speed_rad_s)
+        .def_readwrite("open_speed_rad_s",     &protocol::GripperAutoCalConfig::open_speed_rad_s)
+        .def_readwrite("stall_hold_ms",        &protocol::GripperAutoCalConfig::stall_hold_ms)
+        .def_readwrite("startup_delay_ms",     &protocol::GripperAutoCalConfig::startup_delay_ms)
+        .def_readwrite("post_zero_delay_ms",   &protocol::GripperAutoCalConfig::post_zero_delay_ms)
+        .def_readwrite("close_confirm_count",  &protocol::GripperAutoCalConfig::close_confirm_count)
+        .def_readwrite("open_confirm_count",   &protocol::GripperAutoCalConfig::open_confirm_count)
+        .def("__repr__", [](const protocol::GripperAutoCalConfig& c) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "GripperAutoCalConfig(flags=0x%04x, close_torque=%.3f, open_torque=%.3f)",
+                c.flags, c.close_stall_torque_nm, c.open_stall_torque_nm);
+            return std::string(buf);
+        });
+
     // ---- GripperPosition: pure raw-rad <-> normalized [0,1] converter ------
     py::class_<GripperPosition>(m, "GripperPosition")
         .def(py::init<>())
@@ -412,14 +476,11 @@ void bind_components(py::module_& m) {
         .def_readonly("actual_torque",  &MotorStatusSample::actual_torque)
         .def_readonly("motor_temp_c",   &MotorStatusSample::motor_temp_c)
         .def_readonly("status",         &MotorStatusSample::status)
-        // V1.7 (zero when firmware sends the legacy 18-byte status):
-        .def_readonly("actual_current", &MotorStatusSample::actual_current)
+        // target_* / control_mode: correct on V1.9 firmware (31-byte status).
         .def_readonly("target_pos",     &MotorStatusSample::target_pos)
         .def_readonly("target_vel",     &MotorStatusSample::target_vel)
         .def_readonly("target_torque",  &MotorStatusSample::target_torque)
-        .def_readonly("target_current", &MotorStatusSample::target_current)
         .def_readonly("control_mode",   &MotorStatusSample::control_mode)
-        .def_readonly("current_source", &MotorStatusSample::current_source)
         .def("__repr__", [](const MotorStatusSample& s) {
             char buf[160];
             std::snprintf(buf, sizeof(buf),
@@ -686,6 +747,7 @@ void bind_components(py::module_& m) {
         .def_property_readonly("encoder",       [](LeaderGripper& g) -> Encoder&        { return g.encoder(); },       py::return_value_policy::reference_internal)
         .def_property_readonly("wrist_camera",  [](LeaderGripper& g) -> Camera&         { return g.wrist_camera(); },  py::return_value_policy::reference_internal)
         .def_property_readonly("key",           [](LeaderGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
+        .def_property_readonly("led",           [](LeaderGripper& g) -> Led&            { return g.led(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](LeaderGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](LeaderGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](LeaderGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
@@ -738,6 +800,7 @@ void bind_components(py::module_& m) {
         .def_property_readonly("motor",         [](FollowerGripper& g) -> Motor&          { return g.motor(); },         py::return_value_policy::reference_internal)
         .def_property_readonly("wrist_camera",  [](FollowerGripper& g) -> Camera&         { return g.wrist_camera(); },  py::return_value_policy::reference_internal)
         .def_property_readonly("key",           [](FollowerGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
+        .def_property_readonly("led",           [](FollowerGripper& g) -> Led&            { return g.led(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](FollowerGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](FollowerGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](FollowerGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
@@ -751,6 +814,16 @@ void bind_components(py::module_& m) {
                                       const protocol::GripperConfig& cfg) {
             py::gil_scoped_release gil;
             g.set_gripper_config(cfg);
+        }, py::arg("config"))
+        // Power-on auto-calibration config (Cmd 0x68/0x69).
+        .def("get_auto_cal_config", [](FollowerGripper& g, unsigned timeout_ms) {
+            py::gil_scoped_release gil;
+            return g.get_auto_cal_config(std::chrono::milliseconds(timeout_ms));
+        }, py::arg("timeout_ms") = 100u)
+        .def("set_auto_cal_config", [](FollowerGripper& g,
+                                       const protocol::GripperAutoCalConfig& cfg) {
+            py::gil_scoped_release gil;
+            g.set_auto_cal_config(cfg);
         }, py::arg("config"))
         // ---- Normalized position (0 = closed, 1 = open) -------------------
         // NOTE: normalized [0,1] — distinct from motor.set_position() (raw rad).

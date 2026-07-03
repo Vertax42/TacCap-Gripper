@@ -27,14 +27,12 @@ struct MotorStatusSample {
     float    actual_torque;     // Nm
     float    motor_temp_c;      // °C
     uint16_t status;            // protocol::MotorStatusBit::* bits
-    // V1.7 fields (zero on firmware that still sends the 18-byte status):
-    float    actual_current;    // A
+    // target_* / control_mode are correct on V1.9 firmware (31-byte status).
+    // (V1.9 dropped actual_current / target_current / current_source.)
     float    target_pos;        // rad   — last applied target
     float    target_vel;        // rad/s
     float    target_torque;     // Nm
-    float    target_current;    // A
     uint8_t  control_mode;      // protocol::MotorMode
-    uint8_t  current_source;    // 0 = torque-estimated, 1 = low-level iq
 
     protocol::MotorStatus raw;
 };
@@ -90,6 +88,13 @@ public:
     // there is no per-call protocol check in the hot path. Preconditions are
     // the caller's: enable() and a cleared fault. The only exception is
     // IoError if the transport has been stopped.
+    //
+    // V1.9 gate: while the firmware owns the motor (notably during power-on
+    // auto-calibration, if enabled), external control is refused — ACK commands
+    // (enable/set_*) NACK ErrorCode::SysBusy, and submit_* frames are silently
+    // dropped (no-ACK). There is no protocol query for this state; detect it by
+    // watching control_stats().applied_seq stop advancing (or the motor not
+    // moving) and hold off until auto-cal settles after power-on.
     void submit(const protocol::MotorImpedanceCtrl& c);  // primary (MIT hybrid)
     void submit(const protocol::MotorPosCtrl& c);
     void submit(const protocol::MotorVelCtrl& c);

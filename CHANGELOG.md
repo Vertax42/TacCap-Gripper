@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-03
+
+Sync to firmware protocol **V1.9** (`hw_v1.1.0` @ 94273b4).
+
+### Changed
+- **BREAKING (wire): `motor_status_t` shrank 40 → 31 bytes.** Firmware V1.9
+  dropped `actual_current` / `target_current` / `current_source`; the SDK's
+  `protocol::MotorStatus` and `MotorStatusSample` drop them too, and
+  `control_mode` now follows `target_torque` directly. The first 18 bytes
+  (`actual_pos`..`status`) are unchanged, so position / torque / status stay
+  correct across firmware versions — only `target_*` / `control_mode` require
+  V1.9 firmware (a V1.9 SDK reading an older 40-byte status gets the wrong
+  `target_*`). Decode targets the 31-byte layout.
+
+### Added
+- **Gripper power-on auto-calibration config** (`Cmd 0x68/0x69`). New
+  `GripperAutoCalConfig` (32 B) + `FollowerGripper::get_auto_cal_config()` /
+  `set_auto_cal_config()`, bound in Python. When enabled, the firmware
+  self-calibrates on power-up (close-to-stall ⇒ zero, open-to-stall ⇒
+  max_open), automating the manual zero + max_open capture.
+- **WS2812 LED control** (`Cmd 0x0A/0x0B`). New `Led` component
+  (`set()` / `off()` / `effect()` / `effect_off()`) on both `LeaderGripper` and
+  `FollowerGripper` (`g.led`), with `Ws2812Set` / `Ws2812Effect` payloads and
+  `Ws2812Mode` / `Ws2812EffectType` enums (blink / breathe / HSV / LERP +
+  presets). Bound in Python.
+- Documented the V1.9 external-control gate: while the firmware owns the motor
+  (e.g. power-on auto-cal), `enable`/`set_*` NACK `SysBusy` and `submit_*` are
+  silently dropped; there is no query for the state — watch
+  `control_stats().applied_seq`.
+
 ## [0.1.4] - 2026-06-26
 
 ### Fixed

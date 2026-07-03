@@ -31,6 +31,9 @@ std::vector<uint8_t> encode(const MotorVelCtrl& v)        { return encode_pod(v)
 std::vector<uint8_t> encode(const MotorTorqueCtrl& v)     { return encode_pod(v); }
 std::vector<uint8_t> encode(const MotorImpedanceCtrl& v)  { return encode_pod(v); }
 std::vector<uint8_t> encode(const GripperConfig& v)       { return encode_pod(v); }
+std::vector<uint8_t> encode(const GripperAutoCalConfig& v){ return encode_pod(v); }
+std::vector<uint8_t> encode(const Ws2812Set& v)           { return encode_pod(v); }
+std::vector<uint8_t> encode(const Ws2812Effect& v)        { return encode_pod(v); }
 std::vector<uint8_t> encode(const StreamConfig& v)        { return encode_pod(v); }
 std::vector<uint8_t> encode(const ImuConfig& v)           { return encode_pod(v); }
 std::vector<uint8_t> encode(const EncoderConfig& v)       { return encode_pod(v); }
@@ -106,10 +109,12 @@ EskinConfig decode_eskin_config(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<EskinConfig>(data, len, "EskinConfig");
 }
 MotorStatus decode_motor_status(const uint8_t* data, std::size_t len) {
-    // V1.7 grew motor_status_t 18 -> 40 bytes by APPENDING fields; the V1.6
-    // prefix (pos/vel/torque/temp/status) keeps identical offsets. Accept any
-    // length from the 18-byte prefix up, copying what's present, so the SDK
-    // works against both old and new follower firmware.
+    // The SDK targets the V1.9 31-byte motor_status_t. The first 18 bytes
+    // (pos/vel/torque/temp/status) share the layout of every prior version, so
+    // a >=18-byte read always yields correct pose/torque/status; the target_*/
+    // control_mode tail is only correct on V1.9 firmware (the older 40-byte
+    // layout had current fields in between — a V1.9 SDK reads its target_*
+    // from the wrong offsets there, which is the accepted trade-off).
     constexpr std::size_t kPrefix = 18;
     if (data == nullptr || len < kPrefix) {
         throw ProtocolError(
@@ -123,6 +128,10 @@ MotorStatus decode_motor_status(const uint8_t* data, std::size_t len) {
 
 GripperConfig decode_gripper_config(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<GripperConfig>(data, len, "GripperConfig");
+}
+
+GripperAutoCalConfig decode_gripper_auto_cal_config(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<GripperAutoCalConfig>(data, len, "GripperAutoCalConfig");
 }
 
 MotorControlStats decode_motor_control_stats(const uint8_t* data, std::size_t len) {

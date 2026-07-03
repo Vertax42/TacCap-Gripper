@@ -191,20 +191,21 @@ struct MotorImpedanceCtrl {
                           // estimates from the position delta. MIT protocol only.
 };
 
+// motor_status_t — V1.9 shrank this 40 -> 31 bytes by dropping the current
+// fields (actual_current / target_current / current_source). The first 18 bytes
+// (actual_pos..status) are byte-identical to the older layout, so position /
+// torque / status readings stay correct across firmware versions; only the
+// target_* / control_mode tail moved. The SDK targets the V1.9 (31-byte) layout.
 struct MotorStatus {
     float    actual_pos;      // rad
     float    actual_vel;      // rad/s
     float    actual_torque;   // Nm
     float    motor_temp;      // °C
     uint16_t status;          // MotorStatusBit::*
-    // ---- V1.7 additions (motor_status_t grew 18 -> 40 bytes) -------------
-    float    actual_current;  // A — measured iq, or torque-derived estimate
     float    target_pos;      // rad   — last applied target
     float    target_vel;      // rad/s
     float    target_torque;   // Nm    — target / feed-forward / clamp
-    float    target_current;  // A     — target / clamp
     uint8_t  control_mode;    // MotorMode of the last applied command
-    uint8_t  current_source;  // 0 = torque-estimated, 1 = low-level iq param
 };
 
 // ---- Follower (slave) gripper config (V1.7 — Cmd::*GripperConfig 0x66/0x67)
@@ -242,6 +243,76 @@ struct MotorControlStats {
     uint16_t target_age_ms;        // age of current target (ms)
     uint16_t reserved;
     float    target_update_hz;     // host target update rate
+};
+
+// ---- Follower power-on auto-calibration config (V1.9 — Cmd 0x68/0x69) -----
+// When Enable is set, the firmware auto-calibrates on power-up: it closes until
+// the motor stalls at close_stall_torque (that pose becomes zero / fully
+// closed), then opens until it stalls at open_stall_torque (that span becomes
+// max_open). This automates the manual "zero at close, capture max_open" flow.
+constexpr uint32_t GRIPPER_AUTO_CAL_MAGIC   = 0x4743414Cu;  // "GCAL"
+constexpr uint16_t GRIPPER_AUTO_CAL_VERSION = 0x0001u;
+namespace GripperAutoCalFlag {
+    constexpr uint16_t Valid  = 0x0001;  // config is valid
+    constexpr uint16_t Enable = 0x0002;  // run auto-cal on power-up
+}
+
+struct GripperAutoCalConfig {
+    uint32_t magic;                 // GRIPPER_AUTO_CAL_MAGIC
+    uint16_t version;               // GRIPPER_AUTO_CAL_VERSION
+    uint16_t flags;                 // GripperAutoCalFlag::* bits
+    float    close_stall_torque_nm; // close-to-zero stall torque (Nm)
+    float    open_stall_torque_nm;  // open-limit stall torque (Nm)
+    float    close_speed_rad_s;     // close speed (rad/s)
+    float    open_speed_rad_s;      // open speed (rad/s)
+    uint16_t stall_hold_ms;         // stall confirmation time (ms)
+    uint16_t startup_delay_ms;      // delay after power-on before auto-cal (ms)
+    uint16_t post_zero_delay_ms;    // delay after set-zero before opening (ms)
+    uint8_t  close_confirm_count;   // close stall samples before set-zero
+    uint8_t  open_confirm_count;    // open stall samples before saving max
+};
+
+// ---- WS2812 LED control (V1.9 — Cmd::Ws2812Set 0x0A / Ws2812Effect 0x0B) --
+enum class Ws2812Mode : uint8_t {
+    Off       = 0,   // all LEDs off
+    EffectSet = 1,   // set the effect-layer base color
+    Override  = 2,   // direct override color
+};
+
+struct Ws2812Set {
+    uint8_t  mode;        // Ws2812Mode
+    uint8_t  r;           // 0-255
+    uint8_t  g;           // 0-255
+    uint8_t  b;           // 0-255
+    uint8_t  brightness;  // 0-255 (0 = leave unchanged)
+    uint16_t blink_ms;    // blink half-period (ms); 0 = no blink
+};
+
+enum class Ws2812EffectType : uint8_t {
+    None         = 0,
+    NormalSolid  = 1,    // preset: solid green
+    NormalBlink  = 2,    // preset: blinking green
+    OtaBlink     = 3,    // preset: blinking blue
+    FaultBlink   = 4,    // preset: blinking red
+    Demo         = 5,
+    ColorBlink   = 10,   // custom color blink
+    ColorBreathe = 11,   // custom color breathe
+    HsvCycle     = 12,   // HSV hue cycle
+    ColorLerp    = 13,   // two-color LERP fade
+};
+
+struct Ws2812Effect {
+    uint8_t  effect;      // Ws2812EffectType
+    uint8_t  param1;      // effect param 1 (e.g. breathe min brightness)
+    uint8_t  param2;      // effect param 2 (e.g. breathe max brightness)
+    uint8_t  reserved;    // = 0
+    uint16_t period_ms;   // effect period (ms)
+    uint8_t  r1;          // color 1 / start color R
+    uint8_t  g1;
+    uint8_t  b1;
+    uint8_t  r2;          // color 2 / end color R (LERP only)
+    uint8_t  g2;
+    uint8_t  b2;
 };
 
 // ---- Stream config -------------------------------------------------------
@@ -434,9 +505,12 @@ static_assert(sizeof(MotorPosCtrl)       == 12);
 static_assert(sizeof(MotorVelCtrl)       == 12);
 static_assert(sizeof(MotorTorqueCtrl)    == 12);
 static_assert(sizeof(MotorImpedanceCtrl) == 20);  // V1.7 (+ feed-forward vel)
-static_assert(sizeof(MotorStatus)        == 40);  // V1.7 motor_status_t
+static_assert(sizeof(MotorStatus)        == 31);  // V1.9 motor_status_t (was 40)
 static_assert(sizeof(GripperConfig)      == 32);  // V1.7 gripper_config_t
 static_assert(sizeof(MotorControlStats)  == 48);  // V1.7 motor_control_stats
+static_assert(sizeof(GripperAutoCalConfig) == 32); // V1.9 gripper_auto_cal_config_t
+static_assert(sizeof(Ws2812Set)          == 7);   // V1.9 ws2812_set_t
+static_assert(sizeof(Ws2812Effect)       == 12);  // V1.9 ws2812_effect_t
 static_assert(sizeof(StreamConfig)       == 12);
 static_assert(sizeof(AckPayload)         == 4);
 // V1.4+

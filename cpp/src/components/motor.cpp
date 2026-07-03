@@ -32,14 +32,11 @@ MotorStatusSample Motor::decode(const std::uint8_t* payload, std::size_t len) {
     s.actual_torque  = s.raw.actual_torque;
     s.motor_temp_c   = s.raw.motor_temp;
     s.status         = s.raw.status;
-    // V1.7 fields (left 0 by decode_motor_status when firmware sends 18B).
-    s.actual_current = s.raw.actual_current;
+    // target_* / control_mode: correct on V1.9 (31B) firmware.
     s.target_pos     = s.raw.target_pos;
     s.target_vel     = s.raw.target_vel;
     s.target_torque  = s.raw.target_torque;
-    s.target_current = s.raw.target_current;
     s.control_mode   = s.raw.control_mode;
-    s.current_source = s.raw.current_source;
     return s;
 }
 

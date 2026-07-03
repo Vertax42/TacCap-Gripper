@@ -11,6 +11,7 @@ add_library(taccap_core SHARED
     src/components/camera.cpp
     src/components/motor.cpp
     src/components/key.cpp
+    src/components/led.cpp
     src/components/sensor_errors.cpp
     src/discovery.cpp
     src/leader_gripper.cpp

@@ -43,6 +43,7 @@ FollowerGripper::FollowerGripper(const Config& cfg)
       encoder_(t_),
       motor_(t_),
       key_(t_),
+      led_(t_),
       errors_(t_),
       ota_(t_) {
     // Mirror LeaderGripper: drain leftover DATA, then probe firmware
@@ -168,6 +169,24 @@ void FollowerGripper::set_gripper_config(const protocol::GripperConfig& cfg) {
     // Config just changed on the firmware — drop the cache so the next
     // position call rebuilds the converter from the new limits.
     pos_map_loaded_ = false;
+}
+
+protocol::GripperAutoCalConfig FollowerGripper::get_auto_cal_config(
+        std::chrono::milliseconds timeout) {
+    auto ack = t_.send_cmd(protocol::Cmd::GetGripperAutoCalConfig, {}, timeout);
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("FollowerGripper::get_auto_cal_config NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+    return protocol::decode_gripper_auto_cal_config(ack.data.data(), ack.data.size());
+}
+
+void FollowerGripper::set_auto_cal_config(const protocol::GripperAutoCalConfig& cfg) {
+    auto ack = t_.send_cmd(protocol::Cmd::SetGripperAutoCalConfig, protocol::encode(cfg));
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("FollowerGripper::set_auto_cal_config NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
 }
 
 // ---- Normalized gripper position (0 = closed, 1 = open) --------------------

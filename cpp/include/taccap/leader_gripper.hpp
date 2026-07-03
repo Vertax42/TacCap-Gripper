@@ -30,6 +30,7 @@
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/imu.hpp>
 #include <taccap/components/key.hpp>
+#include <taccap/components/led.hpp>
 #include <taccap/components/sensor_errors.hpp>
 #include <taccap/discovery.hpp>
 #include <taccap/error.hpp>
@@ -79,6 +80,7 @@ public:
     // constructed with open_cameras=true and the matching device path.
     Camera&         wrist_camera()   { return deref_(wrist_, "wrist camera",  "wrist_video"); }
     Key&            key()            noexcept { return key_; }            // V1.4
+    Led&            led()            noexcept { return led_; }            // V1.9
     SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
     OtaSession&     ota()            noexcept { return ota_; }            // V1.3
     bus::Transport& transport()      noexcept { return t_; }
@@ -109,6 +111,7 @@ private:
     IMU                             imu_;
     Encoder                         encoder_;
     Key                             key_;       // V1.4
+    Led                             led_;       // V1.9
     SensorErrors                    errors_;    // V1.6
     OtaSession                      ota_;       // V1.3
     std::unique_ptr<Camera>         wrist_;
