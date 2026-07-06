@@ -40,11 +40,12 @@ protocol but not yet validated on follower hardware.
 │  L4  AGGREGATE                                                         │
 │  ─────────────                                                         │
 │   LeaderGripper          aggregate object: owns Transport + IMU +      │
-│                          Encoder; lifecycle (start/stop_streaming).    │
+│                          Encoder + Key + Led; start/stop_streaming.    │
 │                          Discovery open() auto-finds by MCU serial.    │
-│                          Cameras/tactile are opt-in (open_cameras).    │
+│                          Wrist camera is opt-in (open_cameras).        │
 │                                                                        │
-│   FollowerGripper        (future: same layout + Motor; not in repo yet)│
+│   FollowerGripper        same + Motor + Led; normalized position       │
+│                          (0..1) and ControlLoop for realtime control.  │
 └────────────────────────────┬───────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼───────────────────────────────────────────┐
@@ -271,18 +272,24 @@ taccap-gripper/
                 Python: gil_scoped_acquire + numpy view via mat_to_numpy
 ```
 
-### 3.4 Tactile (visuotactile, libxense lite + Rectifier)
+### 3.4 Tactile (visuotactile) — moved out of this SDK (0.1.4)
+
+The C++ visuotactile path (`TactileSensor` / `TactileFrame` + the `libxensesdk`
+dependency) was **removed in 0.1.4**. Visuotactile (OG) capture + rectification
+now live at the Python level via the prebuilt `xensesdk` wheel; `xense.taccap`
+is the gripper-protocol + wrist-camera surface only. See the `xensesdk`
+package for OG sensor capture.
+
+### 3.5 Follower motor control (MIT force-position)
 
 ```
-  user → tactile.start(callback)
-        ▼
-  TactileSensor::start
-        libxense Sensor::start([this](xense::Frame raw) {
-            cv::Mat raw_mat   = clone(raw)
-            cv::Mat rect_mat  = Rectifier::process(raw)
-            cb(TactileFrame{ host_time, frame_index, raw_mat, rect_mat })
-        })
-                Python: numpy views for both raw and rectified
+  set_impedance(pos,kp,kd,ff)  --ACK-->  Cmd::MotorImpedanceCtrl (blocking)
+  submit_impedance(...)        --no ACK-> Cmd::MotorImpedanceCtrl (realtime)
+        │                                   firmware runs a 500 Hz control task
+        │                                   consuming the latest submitted target
+  FollowerGripper.set_position(0..1) --> GripperPosition -> raw rad -> submit
+  ControlLoop (bg thread @ hz) -------->  submit latest target; motor-status
+                                          STREAM -> thread-safe GripperObservation
 ```
 
 ---
@@ -338,12 +345,19 @@ g->start_streaming(/*imu_hz=*/100, /*encoder_hz=*/100);
 std::this_thread::sleep_for(5s);
 g->stop_streaming();
 
-// Wrist camera + tactile are opt-in — an external camera service owns the
-// V4L2 devices. Construct explicitly with open_cameras=true to drive them:
+// The wrist camera is opt-in — an external camera service usually owns the
+// V4L2 device. Construct explicitly with open_cameras=true to drive it:
 //   LeaderGripper::Config cfg; cfg.mcu_device = ...; cfg.wrist_video = ...;
-//   cfg.tactile_left_serial = ...; cfg.open_cameras = true;
+//   cfg.open_cameras = true;
 //   auto g = std::make_unique<LeaderGripper>(cfg);
-//   g->tactile_left().start(...); g->wrist_camera().start(...);
+//   g->wrist_camera().start(...);
+
+// Follower control (see follower_gripper.hpp / control_loop.hpp):
+//   auto f = xense::taccap::FollowerGripper::open();
+//   f->motor().enable();
+//   f->set_position(/*0..1*/ 0.5f, /*kp=*/8, /*kd=*/1);   // normalized, no-ACK
+//   xense::taccap::ControlLoop loop(*f, {.hz=200, .kp=8, .kd=1});
+//   loop.start(); loop.set_target(0.3f); auto obs = loop.observation();
 ```
 
 ### Python
@@ -426,8 +440,12 @@ will be implemented later:
 | Dataset recording (hdf5 / mcap, time alignment, episode markers) | a separate tool / script repo         |
 | ROS 2 node + hardware_interface package | `taccap_gripper_ros2` (separate repo) |
 | lerobot Robot adapter     | fork of `lerobot-xense feature/v5.1_dev` with a `taccap_gripper` Robot class |
-| Follower gripper + Motor  | `cpp/include/taccap/components/motor.hpp` + `follower_gripper.hpp` (this repo, future commits — guarded behind hardware availability) |
-| Higher-level orchestration (teleop, episode controller, replay, visualisation) | downstream applications |
+| Master→slave follow / teleop loop, grasp state machine (contact/latch), episode orchestration | downstream apps / `taccap_gripper_ros2` — this SDK gives the realtime primitives (`ControlLoop`, `submit_*`, normalized position), not the policy |
+| Higher-level orchestration (episode controller, replay, visualisation) | downstream applications |
+
+The follower motor stack **is** in this repo now (`Motor`, `FollowerGripper`,
+`GripperPosition`, `ControlLoop`, `Led`) and hardware-validated — what stays
+out is the *policy* layer above the primitives.
 
 Keeping this SDK narrow lets each downstream consumer pick exactly the
 hardware it needs (e.g. a ROS 2 node may want only IMU + Encoder DATA

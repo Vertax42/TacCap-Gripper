@@ -24,33 +24,41 @@ Both adapters consume this SDK; they do not reimplement device access.
 
 ## Status
 
-**v0.1.0 — first usable release.** Hardware-tested on bilateral TacCap
-gripper setups (left + right simultaneously, ~280 MB/s outbound).
+**v0.1.6 — leader sensing + follower control, hardware-validated.** Tested on
+bilateral leader setups (left + right, ~280 MB/s outbound) and on a real
+follower gripper (MIT force-position control, normalized grasp, LED, auto-cal).
 What's in:
 
 - TC-GU-01 protocol: **wire framing V1.8** (global byte stuffing) +
-  **command set V1.7** (OTA, MagCal, KeyStatus, sensor errors, motor /
-  CAN-id / gripper-config). Async transport with ACK matching, per-cmd
-  DATA subscribers. Follower-only V1.7 motor commands are implemented but
-  pending follower-hardware validation.
-- MCU sensor components: IMU @ 100 Hz, encoder @ 100 Hz, motor status;
-  plus an opt-in wrist UVC (@ 30 Hz) `Camera` class (off by default — owned
-  by an external camera service)
-- `LeaderGripper` / `FollowerGripper` aggregates, zero-config MCU
-  discovery (`scan_grippers` / `find_left` / `find_right` /
-  `find_leader` / `find_follower`)
-- Side **and** leader/follower role parsed from the firmware-burned SN
-  (TacCap scheme, e.g. `TCGU01A24Z0001m`) via `parse_serial()`; one MCU
-  board = one gripper
-- Python bindings on 3.10 + 3.12 (system py3.10 for ROS 2 Humble,
-  conda py3.12 for primary dev)
-- Single-instance spdlog logger shared with C++; per-session file
-  log under `~/.taccaplogs/`
-- Encoder zero calibration (`Encoder::set_zero`) with raw +
-  auto-clamped position exposure for negative drift
-- OTA firmware updates via `OtaSession`
-- Six example scripts including dual-gripper + Pico4-tracker
-  rerun visualisation
+  **command set V1.9**. Async transport with ACK matching, per-cmd DATA
+  subscribers.
+- **Follower motor control (MIT), validated on hardware.** `Motor` enable /
+  disable / clear-fault + four control modes (position / velocity / torque /
+  impedance). The MIT impedance frame *is* the force-position hybrid primitive
+  (kp/kd track position, feed-forward torque adds force). Two send paths:
+  blocking-ACK `set_*` and no-ACK `submit_*` for a host realtime loop up to the
+  firmware's 500 Hz control rate.
+- **Normalized gripper position** (`FollowerGripper.position()` /
+  `set_position(pos, kp, kd)`, 0 = closed, 1 = open) via `GripperPosition`,
+  plus **`ControlLoop`** — a C++ fixed-rate send/receive loop for embodied
+  control (`set_target(0..1)` + `observation()`, both non-blocking; obs from the
+  motor-status stream, not polling).
+- **V1.9 additions:** `motor_status_t` is 31 bytes; power-on auto-calibration
+  config (`get/set_auto_cal_config`); WS2812 `Led` control (`g.led`); private-
+  protocol single-parameter access (`get/set_private_param`, private-mode only).
+- MCU sensor components: IMU @ 100 Hz, encoder @ 100 Hz, motor status; opt-in
+  wrist UVC (@ 30 Hz) `Camera` (off by default — owned by an external service).
+- `LeaderGripper` / `FollowerGripper` aggregates, zero-config MCU discovery
+  (`scan_grippers` / `find_left` / `find_right` / `find_leader` /
+  `find_follower`). Side **and** role come from the firmware-burned SN only
+  (`Cmd::GetSn` / `parse_serial()`, e.g. `TCGU01A24Z0001m`), never the CH343
+  chip SN; `Side.Unknown` when neither firmware source answers.
+- Python bindings on 3.10 + 3.12 (system py3.10 for ROS 2 Humble, conda py3.12
+  for primary dev); single-instance spdlog logger shared with C++
+  (`~/.taccaplogs/`); OTA via `OtaSession`; encoder zero calibration.
+
+Visuotactile (OG) capture now lives at the Python level via the `xensesdk`
+wheel — `xense.taccap` is the gripper-protocol + wrist-camera surface only.
 
 Full per-commit changelog in [CHANGELOG.md](CHANGELOG.md).
 
@@ -138,7 +146,7 @@ What ends up where (editable build):
 ```
 python/xense/taccap/
 ├── _taccap_native.cpython-312-x86_64-linux-gnu.so   # pybind11 module
-└── libtaccap_core.so.0.1.4   (+ .so.0 symlink)      # SDK core
+└── libtaccap_core.so.0.1.6   (+ .so.0 symlink)      # SDK core
 ```
 
 These two are co-located on purpose — the rpath is set to `$ORIGIN`,
@@ -168,7 +176,7 @@ Output:
 
 ```
 build/
-├── cpp/libtaccap_core.so(.0)(.0.1.4)
+├── cpp/libtaccap_core.so(.0)(.0.1.6)
 ├── cpp/examples/leader_demo
 └── cpp/tests/...                # gtest binaries; run via `ctest`
 ```
@@ -186,8 +194,8 @@ CMake options (top-level `CMakeLists.txt:19-21`):
 ```bash
 # Python
 python -c "import xense.taccap as t; print(t.hello()); print(t.__version__)"
-# → taccap-gripper OK; version 0.1.4
-# → 0.1.4
+# → taccap-gripper OK; version 0.1.6
+# → 0.1.6
 
 # C++ tests (only if TACCAP_BUILD_TESTS=ON)
 ctest --test-dir build --output-on-failure
@@ -306,6 +314,74 @@ See `python/examples/calibrate.py` for the full interactive walkthrough
 (side selection by SN, pre/post drift display, full-open angle sanity
 check, live readout).
 
+### Follower gripper control (MIT force-position)
+
+The follower drives a FDCAN motor. Control is the **MIT impedance frame** — the
+force-position hybrid primitive: the `kp`/`kd` terms track a target position,
+the feed-forward torque adds a force component. The SDK exposes it three ways.
+
+```python
+import xense.taccap as t
+g = t.FollowerGripper.open()
+g.motor.clear_fault()
+g.motor.enable()                 # required before anything moves
+
+# Raw motor control (rad). set_* block on an ACK; submit_* are no-ACK (fire-
+# and-forget) for a host realtime loop up to the firmware's 500 Hz rate.
+g.motor.set_impedance(target_pos_rad=-0.5, kp_nm_per_rad=8, kd_nm_s_per_rad=1,
+                      feedforward_torque_nm=0.0)
+st = g.motor.read_status()       # actual_pos/vel/torque, target_*, control_mode
+```
+
+**Normalized position** — work in `[0, 1]` (0 = closed, 1 = open) instead of raw
+radians. Requires a calibrated gripper (`GripperConfig` Valid); throws otherwise.
+Note this is distinct from `g.motor.set_position()` (raw rad).
+
+```python
+print(g.position())                       # -> 0.97   (nearly open)
+g.set_position(0.5, kp=8, kd=1)           # go to 50% open (no-ACK, realtime)
+g.pos_to_rad(0.5), g.rad_to_pos(-0.59)    # explicit conversions
+```
+
+**`ControlLoop`** — a C++ background thread submits the latest normalized target
+at a fixed rate while the motor-status stream keeps a thread-safe observation
+fresh. Ideal for embodied policies: your loop only touches `set_target(0..1)`
+and `observation()`, both non-blocking (no GIL fights, no status polling).
+
+```python
+loop = t.ControlLoop(g, hz=200, kp=8, kd=1)
+loop.start()                              # seeds target = current pos (no jump)
+try:
+    while running:
+        obs = loop.observation()          # .position [0,1], .velocity, .torque, .age_ms
+        loop.set_target(policy(obs))      # your action, 0..1
+finally:
+    loop.stop()
+g.motor.disable()
+```
+
+> **Feedback rate.** The motor's `actual_*` telemetry refreshes at ~50–100 Hz
+> (firmware reads it back over CAN periodically). Read observations from the
+> **stream** (`ControlLoop` / `motor.on_status`), not by polling
+> `read_status()` — polling `GetMotorStatus` above ~100 Hz can stall the
+> firmware's refresh.
+
+**LEDs and power-on auto-calibration (V1.9):**
+
+```python
+g.led.set(t.Ws2812Mode.Override, 0, 255, 0, brightness=120)   # solid green
+g.led.effect(t.Ws2812EffectType.ColorBreathe, 0, 0, 255)      # blue breathe
+g.led.off()
+
+cfg = g.get_auto_cal_config()             # if enabled, the firmware self-zeros
+g.set_auto_cal_config(cfg)                # (close-to-stall) + captures max_open
+                                          # (open-to-stall) on power-up
+```
+
+Runnable demos: `python/examples/gripper_control_test.py` (interactive
+open/close via both `set_position` and `ControlLoop`) and
+`python/examples/motor_mit_control.py` (raw `submit_impedance` + health).
+
 ## Examples
 
 All scripts live under `python/examples/`. Enable C++ examples with
@@ -315,6 +391,8 @@ All scripts live under `python/examples/`. Enable C++ examples with
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rerun_dual_with_tracker.py`     | Dual-gripper IMU/encoder + Pico4 motion-tracker 6-DoF poses in one viewer. Requires [`xensevr_pc_service_sdk`](https://github.com/Vertax42/Xense-Pico-Teleop-Interface) and the XenseVR PC Service running. Use `--left-tracker-sn` / `--right-tracker-sn` to map tracker SNs to sides. (Cameras are owned by the external camera service and not shown here.)                                  |
 | `calibrate.py`                   | Per-SN encoder zero calibration CLI. Shows raw + cooked side-by-side, latches zero, sanity-checks max-open angle, then enters a live readout. See [Calibration](#calibration).                                                                                                                                                                                                              |
+| `gripper_control_test.py`        | Interactive follower open/close test — steps through positions via both one-shot `set_position(0..1)` and the realtime `ControlLoop`, reading position back. See [Follower gripper control](#follower-gripper-control-mit-force-position).                                                                                                                                                    |
+| `motor_mit_control.py`           | Primitive demo of the raw MIT submission API (`submit_impedance`) with the out-of-band health channel (`control_stats` / `read_status`).                                                                                                                                                                                                                                                    |
 | `ota_update.py`                  | Firmware OTA flashing CLI with progress + post-flash status probe. **Risky — wrong artefact bricks the MCU.**                                                                                                                                                                                                                                                                               |
 | `v4l2_probe.py`, `v4l2_sweep.py` | Manual V4L2 bringup probes for the wrist / OG cameras (discovery is MCU-only and no longer enumerates them). Also handy when a firmware SN isn't burned yet.                                                                                                                                                                                                                                  |
 | `leader_demo` (C++)              | Reports streaming rates for a single leader gripper over 5 seconds.                                                                                                                                                                                                                                                                                                                         |
