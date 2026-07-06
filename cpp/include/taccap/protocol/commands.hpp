@@ -79,6 +79,8 @@ enum class Cmd : uint8_t {
     MotorSetCanId       = 0x35,    // V1.7 — set motor CAN id (req 1B)
     MotorSwitchProtocol = 0x36,    // V1.7 — switch CAN protocol, persist to flash
     MotorGetProtocol    = 0x37,    // V1.7 — query CAN protocol (resp 1B MotorProtocol)
+    MotorGetPrivateParam = 0x38,   // V1.9+ — read one private-protocol param (req u16 index)
+    MotorSetPrivateParam = 0x39,   // V1.9+ — write one private-protocol param
     MotorPosCtrl        = 0x40,
     MotorVelCtrl        = 0x41,
     MotorTorqueCtrl     = 0x42,

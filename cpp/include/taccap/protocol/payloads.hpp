@@ -208,6 +208,25 @@ struct MotorStatus {
     uint8_t  control_mode;    // MotorMode of the last applied command
 };
 
+// ---- Private-protocol single-parameter access (V1.9+ — Cmd 0x38/0x39) -----
+// Only valid when the motor CAN protocol is Private; NACKs InvalidParam under
+// MIT. The firmware whitelists which index is readable / writable.
+namespace MotorPrivateParamType {
+    constexpr uint8_t U8  = 1;
+    constexpr uint8_t F32 = 2;
+}
+namespace MotorPrivateParamAccess {
+    constexpr uint8_t Read  = 0x01;
+    constexpr uint8_t Write = 0x02;
+}
+
+struct MotorPrivateParam {   // GET (0x38) response — 8 bytes
+    uint16_t index;
+    uint8_t  type;        // MotorPrivateParamType::*
+    uint8_t  access;      // MotorPrivateParamAccess::* bits
+    uint32_t raw_value;   // 4 raw bytes; reinterpret per `type` (u8 or f32)
+};
+
 // ---- Follower (slave) gripper config (V1.7 — Cmd::*GripperConfig 0x66/0x67)
 constexpr uint32_t GRIPPER_CONFIG_MAGIC   = 0x47525052u;  // "GRPR"
 constexpr uint16_t GRIPPER_CONFIG_VERSION = 0x0001u;
@@ -506,6 +525,7 @@ static_assert(sizeof(MotorVelCtrl)       == 12);
 static_assert(sizeof(MotorTorqueCtrl)    == 12);
 static_assert(sizeof(MotorImpedanceCtrl) == 20);  // V1.7 (+ feed-forward vel)
 static_assert(sizeof(MotorStatus)        == 31);  // V1.9 motor_status_t (was 40)
+static_assert(sizeof(MotorPrivateParam)  == 8);   // V1.9+ private-param GET resp
 static_assert(sizeof(GripperConfig)      == 32);  // V1.7 gripper_config_t
 static_assert(sizeof(MotorControlStats)  == 48);  // V1.7 motor_control_stats
 static_assert(sizeof(GripperAutoCalConfig) == 32); // V1.9 gripper_auto_cal_config_t

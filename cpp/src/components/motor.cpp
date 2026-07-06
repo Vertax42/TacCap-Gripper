@@ -156,6 +156,32 @@ protocol::MotorProtocol Motor::get_protocol() {
     return static_cast<protocol::MotorProtocol>(ack.data[0]);
 }
 
+protocol::MotorPrivateParam Motor::get_private_param(uint16_t index) {
+    const std::vector<uint8_t> req{static_cast<uint8_t>(index & 0xFF),
+                                   static_cast<uint8_t>((index >> 8) & 0xFF)};
+    auto ack = t_.send_cmd(protocol::Cmd::MotorGetPrivateParam, req);
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("Motor::get_private_param NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+    // On rejection (e.g. under MIT, or a non-whitelisted index) the firmware
+    // answers with a 1-byte error code instead of the 8-byte param; a
+    // successful read is the full 8 bytes.
+    if (ack.data.size() == 1) {
+        throw ProtocolError(std::string("Motor::get_private_param rejected: ") +
+            protocol::to_string(static_cast<protocol::ErrorCode>(ack.data[0])));
+    }
+    return protocol::decode_motor_private_param(ack.data.data(), ack.data.size());
+}
+
+void Motor::set_private_param(uint16_t index, uint32_t raw_value) {
+    std::vector<uint8_t> req(6);
+    req[0] = static_cast<uint8_t>(index & 0xFF);
+    req[1] = static_cast<uint8_t>((index >> 8) & 0xFF);
+    std::memcpy(req.data() + 2, &raw_value, 4);  // little-endian host == wire
+    send_or_throw(t_, protocol::Cmd::MotorSetPrivateParam, req, "set_private_param");
+}
+
 protocol::MotorControlStats Motor::control_stats(std::chrono::milliseconds timeout) {
     auto ack = t_.send_cmd(protocol::Cmd::GetMotorControlStats, {}, timeout);
     if (ack.is_nack) {

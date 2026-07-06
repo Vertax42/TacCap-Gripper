@@ -197,3 +197,20 @@ TEST(CodecV17, Ws2812EffectEncodeLayout) {
     EXPECT_EQ(w[6], 255u);   // r1
     EXPECT_EQ(w[11], 255u);  // b2
 }
+
+// ---- V1.9+: private-protocol single param GET response ---------------------
+TEST(CodecV17, MotorPrivateParamDecode) {
+    tp::MotorPrivateParam p{};
+    p.index = 0x0102; p.type = tp::MotorPrivateParamType::F32;
+    p.access = tp::MotorPrivateParamAccess::Read | tp::MotorPrivateParamAccess::Write;
+    float v = 3.5f; std::memcpy(&p.raw_value, &v, 4);
+    auto b = as_bytes(p);
+    ASSERT_EQ(b.size(), 8u);
+
+    auto d = tp::decode_motor_private_param(b.data(), b.size());
+    EXPECT_EQ(d.index, 0x0102u);
+    EXPECT_EQ(d.type, tp::MotorPrivateParamType::F32);
+    EXPECT_EQ(d.access, tp::MotorPrivateParamAccess::Read | tp::MotorPrivateParamAccess::Write);
+    float back; std::memcpy(&back, &d.raw_value, 4);
+    EXPECT_FLOAT_EQ(back, 3.5f);
+}

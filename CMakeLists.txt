@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(taccap_gripper VERSION 0.1.5 LANGUAGES CXX)
+project(taccap_gripper VERSION 0.1.6 LANGUAGES CXX)
 
 # ==============================================================================
 # Standards & global settings

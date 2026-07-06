@@ -73,6 +73,7 @@ EncoderConfig      decode_encoder_config(const uint8_t* data, std::size_t len);
 EskinHeader        decode_eskin_header(const uint8_t* data, std::size_t len);
 EskinConfig        decode_eskin_config(const uint8_t* data, std::size_t len);
 MotorStatus        decode_motor_status(const uint8_t* data, std::size_t len);
+MotorPrivateParam  decode_motor_private_param(const uint8_t* data, std::size_t len);  // V1.9+
 // V1.7 follower (slave) gripper
 GripperConfig      decode_gripper_config(const uint8_t* data, std::size_t len);
 GripperAutoCalConfig decode_gripper_auto_cal_config(const uint8_t* data, std::size_t len);  // V1.9

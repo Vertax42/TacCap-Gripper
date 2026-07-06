@@ -440,6 +440,23 @@ void bind_components(py::module_& m) {
             return std::string(buf);
         });
 
+    // ---- MotorPrivateParam (V1.9+ private-protocol param GET response) ----
+    py::class_<protocol::MotorPrivateParam>(m, "MotorPrivateParam")
+        .def_readonly("index",     &protocol::MotorPrivateParam::index)
+        .def_readonly("type",      &protocol::MotorPrivateParam::type)     // 1=u8, 2=f32
+        .def_readonly("access",    &protocol::MotorPrivateParam::access)   // 0x01=R, 0x02=W
+        .def_readonly("raw_value", &protocol::MotorPrivateParam::raw_value)
+        .def_property_readonly("as_float", [](const protocol::MotorPrivateParam& p) {
+            float f; std::memcpy(&f, &p.raw_value, 4); return f;
+        })
+        .def("__repr__", [](const protocol::MotorPrivateParam& p) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf),
+                "MotorPrivateParam(index=0x%04x, type=%u, access=0x%02x, raw=0x%08x)",
+                p.index, p.type, p.access, p.raw_value);
+            return std::string(buf);
+        });
+
     py::class_<protocol::MotorControlStats>(m, "MotorControlStats")
         .def_readonly("running",             &protocol::MotorControlStats::running)
         .def_readonly("mode",                &protocol::MotorControlStats::mode)
@@ -614,6 +631,14 @@ void bind_components(py::module_& m) {
         .def("get_protocol", [](Motor& self) {
             py::gil_scoped_release g; return self.get_protocol();
         })
+        // Private-protocol single-parameter access (Cmd 0x38/0x39). NACKs
+        // InvalidParam under MIT (the whole SDK assumes MIT).
+        .def("get_private_param", [](Motor& self, uint16_t index) {
+            py::gil_scoped_release g; return self.get_private_param(index);
+        }, py::arg("index"))
+        .def("set_private_param", [](Motor& self, uint16_t index, uint32_t raw_value) {
+            py::gil_scoped_release g; self.set_private_param(index, raw_value);
+        }, py::arg("index"), py::arg("raw_value"))
         .def("control_stats", [](Motor& self, unsigned timeout_ms) {
             py::gil_scoped_release g;
             return self.control_stats(std::chrono::milliseconds(timeout_ms));

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-06
+
+Sync to firmware `hw_v1.1.0` @ ab3f98c.
+
+### Added
+- **Private-protocol single-parameter access** (`Cmd 0x38/0x39`). New
+  `Motor::get_private_param(index)` / `set_private_param(index, raw_value)` and
+  `MotorPrivateParam` (8 B: index / type / access / raw_value), bound in Python.
+  Only valid when the motor runs the Private CAN protocol — under MIT (the SDK's
+  assumed mode) these NACK `InvalidParam`. The firmware whitelists index + R/W.
+
+### Notes
+- Firmware changed the *default* auto-cal speeds / confirm count (close 0.15→0.25,
+  open 0.20→0.35, confirm 3→1). These are firmware-side `#define`s applied on the
+  device; the SDK reads `GripperAutoCalConfig` from the device, so no SDK change.
+
 ## [0.1.5] - 2026-07-03
 
 Sync to firmware protocol **V1.9** (`hw_v1.1.0` @ 94273b4).

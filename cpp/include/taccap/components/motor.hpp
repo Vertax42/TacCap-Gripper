@@ -134,6 +134,12 @@ public:
     void              set_can_id(uint8_t can_id);              // Cmd 0x35
     void              switch_protocol(protocol::MotorProtocol);// Cmd 0x36 (persists)
     protocol::MotorProtocol get_protocol();                    // Cmd 0x37
+    // Private-protocol single-parameter access (Cmd 0x38/0x39). ONLY valid when
+    // the motor runs the Private CAN protocol — under MIT these NACK
+    // InvalidParam (-> ProtocolError). The firmware whitelists index + R/W. The
+    // 4-byte raw_value is interpreted per MotorPrivateParam::type (u8 / f32).
+    protocol::MotorPrivateParam get_private_param(uint16_t index);
+    void set_private_param(uint16_t index, uint32_t raw_value);
     protocol::MotorControlStats control_stats(                 // Cmd 0x51
         std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
 

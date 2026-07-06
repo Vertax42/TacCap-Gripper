@@ -130,6 +130,10 @@ GripperConfig decode_gripper_config(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<GripperConfig>(data, len, "GripperConfig");
 }
 
+MotorPrivateParam decode_motor_private_param(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<MotorPrivateParam>(data, len, "MotorPrivateParam");
+}
+
 GripperAutoCalConfig decode_gripper_auto_cal_config(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<GripperAutoCalConfig>(data, len, "GripperAutoCalConfig");
 }

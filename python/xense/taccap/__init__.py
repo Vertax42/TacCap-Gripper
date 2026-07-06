@@ -65,6 +65,7 @@ GripperPosition = _taccap_native.GripperPosition      # raw rad <-> normalized [
 GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
 ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
 MotorControlStats = _taccap_native.MotorControlStats  # V1.7
+MotorPrivateParam = _taccap_native.MotorPrivateParam  # V1.9+ private-protocol param
 KeySample = _taccap_native.KeySample
 SensorErrorSample = _taccap_native.SensorErrorSample
 CameraFrame = _taccap_native.CameraFrame
@@ -145,6 +146,7 @@ __all__ = [
     "GripperObservation",
     "ControlLoop",
     "MotorControlStats",
+    "MotorPrivateParam",
     "CameraFrame",
     "IMU",
     "Encoder",

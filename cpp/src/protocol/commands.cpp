@@ -62,6 +62,8 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::MotorSetCanId:       return "MotorSetCanId";
         case Cmd::MotorSwitchProtocol: return "MotorSwitchProtocol";
         case Cmd::MotorGetProtocol:    return "MotorGetProtocol";
+        case Cmd::MotorGetPrivateParam: return "MotorGetPrivateParam";
+        case Cmd::MotorSetPrivateParam: return "MotorSetPrivateParam";
         case Cmd::MotorPosCtrl:        return "MotorPosCtrl";
         case Cmd::MotorVelCtrl:        return "MotorVelCtrl";
         case Cmd::MotorTorqueCtrl:     return "MotorTorqueCtrl";
