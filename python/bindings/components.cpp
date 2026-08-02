@@ -45,8 +45,13 @@ double tp_to_seconds(std::chrono::steady_clock::time_point tp) {
 }
 
 // Wrap a std::array<float, 3> as a numpy float32 array of shape (3,).
+//
+// The shape MUST be spelled as a container. `py::array_t<float> arr(3)` picks
+// a different overload on pybind11 2.9 and yields a shape-(3,) array with
+// stride 0 — a broadcast view of element [0]. Every value written to p[1] and
+// p[2] lands on the same address, so `accel_mps2` read back as [x, x, x].
 py::array make_vec3(const std::array<float, 3>& v) {
-    py::array_t<float> arr(3);
+    py::array_t<float> arr(std::vector<py::ssize_t>{3});
     auto* p = arr.mutable_data();
     p[0] = v[0]; p[1] = v[1]; p[2] = v[2];
     return arr;
