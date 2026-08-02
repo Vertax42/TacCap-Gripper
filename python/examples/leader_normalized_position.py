@@ -33,6 +33,8 @@ import time
 
 from xense.taccap import LeaderGripper, ProtocolError, scan_grippers
 
+import _calib_flow
+
 
 def resolve_mcu_device(sn: str | None) -> str:
     grippers = scan_grippers()
@@ -74,12 +76,25 @@ def main() -> int:
             encoder_max_rad=args.encoder_max_rad,
         )
     except ProtocolError as e:
-        print(f"could not enable normalization: {e}", file=sys.stderr)
-        print("\nCalibrate the travel span first:\n"
-              "  python python/examples/fisheye_cal.py measure-encoder-max\n"
-              "or pass --encoder-max-rad to supply it from the host.",
-              file=sys.stderr)
-        return 1
+        # The SDK deliberately refuses rather than guessing — but this is an
+        # interactive tool, so walk the user through fixing it instead of just
+        # printing the error. (The library stays non-interactive: anything
+        # headless keeps getting the exception.)
+        print(f"\n{e}\n", file=sys.stderr)
+        try:
+            plain = LeaderGripper(mcu_device=device)
+        except Exception:
+            return 1
+        with plain as g:
+            try:
+                stored = _calib_flow.offer_calibration(g)
+            except (EOFError, KeyboardInterrupt):
+                print("\naborted.", file=sys.stderr)
+                return 1
+        if not stored:
+            return 1
+        _calib_flow.restart_notice()
+        return 0
 
     with gripper as g:
         span = g.position_map.max_open_rad

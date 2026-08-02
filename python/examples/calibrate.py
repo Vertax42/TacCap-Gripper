@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
 """
-Encoder zero calibration for a TacCap leader gripper.
+Encoder calibration for a TacCap leader gripper — zero + travel span.
 
 Pick which gripper to calibrate by its firmware SN (so when both sides
 are plugged in, you don't accidentally zero the wrong one). The script:
@@ -11,14 +11,18 @@ are plugged in, you don't accidentally zero the wrong one). The script:
   3. Asks you to hold the gripper FULLY CLOSED, then latches that pose
      as the new zero via Encoder::set_zero (wire Cmd::SetEncoderZero).
   4. Re-reads the encoder to confirm post-zero ≈ 0.
-  5. (Optional) Asks you to OPEN the gripper to its mechanical limit,
-     reads the angle, and sanity-checks against an expected range so
-     you catch mechanical / firmware-offset issues immediately.
+  5. Asks you to OPEN the gripper to its mechanical limit and STORES the
+     measured angle as the travel span (Cmd::EncoderMaxCal 0x2C). That
+     span is what LeaderGripper(normalize_position=True) divides by, so
+     until it is stored, normalized position is unavailable.
+
+Both records live in MCU flash and survive power cycles. Step 5 needs
+firmware >= V2.1 (leader 1.2.0); the script checks that up front, before
+step 3 writes anything, so an old gripper is never left half-calibrated.
 
 Usage:
-    python python/examples/calibrate.py SN000003                # right
-    python python/examples/calibrate.py SN000003 --skip-open-probe
-    python python/examples/calibrate.py SN000002 --expected-max-open-rad 1.5
+    python python/examples/calibrate.py TCGU01A28Z0023m
+    python python/examples/calibrate.py TCGU01A28Z0023m --skip-open-probe
 
 Tip: list available SNs with
     python -c "from xense.taccap import scan_grippers, Side; \\
@@ -34,13 +38,13 @@ import time
 
 from xense.taccap import LeaderGripper, Side, scan_grippers
 
-# Mechanical design baseline for TC-GU-01: the leader gripper opens to
-# roughly 1.7 rad (~97°) at the hard stop. Override with
-# --expected-max-open-rad if your sample varies (linkage tolerance,
-# different revision, etc.). Tolerance is intentionally wide — this is
-# a sanity bar, not a calibration metric.
-DEFAULT_EXPECTED_MAX_OPEN_RAD = 1.7
-DEFAULT_OPEN_TOLERANCE_RAD = 0.5
+import _calib_flow
+
+# No expected full-open angle is defined on purpose. The measured span IS
+# the calibration — it is what the mechanism does and what the SDK normalizes
+# against, so there is nothing to compare it to. The previous 1.7 rad "design
+# baseline" was stale and only produced false alarms: two units measured
+# 1.1582 and 1.1589 rad (66.4°), agreeing to 0.04°, both outside its band.
 
 # Tolerance for the "is the new zero actually zero" post-latch check.
 # Firmware latches what it sees the moment it processes the command, so
@@ -113,9 +117,7 @@ def _prompt(msg: str) -> None:
         sys.exit(_red("aborted."))
 
 
-def calibrate(sn: str, *, skip_open_probe: bool,
-              expected_max_open_rad: float,
-              open_tolerance_rad: float) -> int:
+def calibrate(sn: str, *, skip_open_probe: bool) -> int:
     eps = _resolve_sn(sn)
     side_str = "Left" if eps.side == Side.Left else "Right"
 
@@ -130,6 +132,18 @@ def calibrate(sn: str, *, skip_open_probe: bool,
     print()
 
     g = _open_gripper(eps)
+
+    # ---- 0. Pre-flight: can this firmware store a travel span? -------------
+    # Checked BEFORE step 2 latches a new zero into flash, so a pre-V2.1
+    # gripper is refused while it is still untouched rather than left with a
+    # new zero and no span. Skipped when the caller only wants the zero.
+    if not skip_open_probe:
+        _calib_flow.require_support(g)
+        existing = _calib_flow.read_encoder_max(g)
+        if existing is not None:
+            print(f"  existing span: {_bold(f'{existing:.4f} rad')} "
+                  f"({_rad_to_deg(existing):.2f}°) — will be overwritten")
+            print()
 
     # ---- 1. Current reading ------------------------------------------------
     cur_raw, cur_cooked = _read_positions_rad(g)
@@ -171,46 +185,53 @@ def calibrate(sn: str, *, skip_open_probe: bool,
         ))
     print()
 
-    # ---- 3. Optional: sanity-check max-open angle --------------------------
+    # ---- 3. Measure and STORE the full-open travel span --------------------
+    #
+    # There is no expected value to compare against. The measured span is the
+    # answer — it is what the mechanism actually does, and it is what the SDK
+    # normalizes against. (The old ±tolerance check against a 1.7 rad design
+    # figure only produced false alarms: two units measure ~1.158 rad.)
     if skip_open_probe:
-        print(_cyan("  --skip-open-probe set, done."))
+        print(_cyan("  --skip-open-probe set, encoder zero done."))
+        print(_yellow(
+            "  Note: the travel span was NOT measured, so normalized position "
+            "stays unavailable. Re-run without --skip-open-probe to store it."))
         return 0
 
     print(_yellow("Step 2/2: open the gripper to its MECHANICAL LIMIT."))
-    print(_yellow(
-        f"          Expected full-open angle ≈ {expected_max_open_rad:.2f} rad "
-        f"({_rad_to_deg(expected_max_open_rad):.0f}°), tolerance "
-        f"±{open_tolerance_rad:.2f} rad."
-    ))
     _prompt(_yellow("→ press [Enter] when fully open:"))
 
     open_raw, _ = _read_positions_rad(g)
     print(f"  fully-open reading: "
           f"{_bold(f'{open_raw:+.4f} rad')}  ({_rad_to_deg(open_raw):+.2f}°)")
-    deviation = abs(open_raw - expected_max_open_rad)
-    if deviation <= open_tolerance_rad:
-        print(_green(
-            f"  ✓ within expected range (|measured - expected| = "
-            f"{deviation:.3f} rad ≤ {open_tolerance_rad:.2f} rad)"
-        ))
-    else:
-        print(_yellow(
-            f"  ⚠ deviation {deviation:.3f} rad exceeds tolerance "
-            f"{open_tolerance_rad:.2f} rad. Possible causes: linkage "
-            "slipped, encoder direction flipped, or expected angle wrong "
-            "for this revision. Re-run with --expected-max-open-rad if you "
-            "know the real value."
-        ))
+
+    if open_raw <= 0.0:
+        print(_red(
+            f"  ✗ span is {open_raw:+.4f} rad — the encoder did not move in "
+            "the positive direction while opening. Either the zero did not "
+            "take or the gripper was not opened. Nothing stored."))
+        return 1
+
+    readback = _calib_flow.store_max(g, open_raw)
+    print(_green(f"  ✓ stored: max_rad = {readback:.4f} rad "
+                 f"({_rad_to_deg(readback):.2f}°)"))
+    print(_cyan("    normalized position is now available: "
+                "LeaderGripper(..., normalize_position=True)"))
+    _calib_flow.restart_notice()
     print()
 
     # ---- 4. Optional live readout for visual confirmation ------------------
-    print(_cyan("  Live encoder readout (10 Hz, raw | cooked; Ctrl+C to exit):"))
+    print(_cyan("  Live encoder readout (10 Hz, raw | cooked, position 0..1; "
+                "Ctrl+C to exit):"))
     try:
         while True:
             raw, cooked = _read_positions_rad(g)
+            # Normalize against the span we just stored, so the readout shows
+            # exactly what the SDK will report after a restart.
+            pos = min(max(cooked / readback, 0.0), 1.0)
             sys.stdout.write(
                 f"\r    raw={raw:+.4f} rad ({_rad_to_deg(raw):+6.2f}°) | "
-                f"cooked={cooked:+.4f} rad     "
+                f"cooked={cooked:+.4f} rad | position={pos:5.3f}     "
             )
             sys.stdout.flush()
             time.sleep(0.1)
@@ -232,29 +253,11 @@ def main() -> int:
     p.add_argument(
         "--skip-open-probe",
         action="store_true",
-        help="Skip the optional 'open to mechanical limit' sanity check.",
-    )
-    p.add_argument(
-        "--expected-max-open-rad",
-        type=float,
-        default=DEFAULT_EXPECTED_MAX_OPEN_RAD,
-        help=f"Expected full-open angle in rad "
-             f"(default {DEFAULT_EXPECTED_MAX_OPEN_RAD:.2f}).",
-    )
-    p.add_argument(
-        "--open-tolerance-rad",
-        type=float,
-        default=DEFAULT_OPEN_TOLERANCE_RAD,
-        help=f"Tolerance for the open-angle check in rad "
-             f"(default {DEFAULT_OPEN_TOLERANCE_RAD:.2f}).",
+        help="Only latch the encoder zero; do not measure or store the "
+             "travel span (leaves normalized position unavailable).",
     )
     args = p.parse_args()
-    return calibrate(
-        args.sn,
-        skip_open_probe=args.skip_open_probe,
-        expected_max_open_rad=args.expected_max_open_rad,
-        open_tolerance_rad=args.open_tolerance_rad,
-    )
+    return calibrate(args.sn, skip_open_probe=args.skip_open_probe)
 
 
 if __name__ == "__main__":

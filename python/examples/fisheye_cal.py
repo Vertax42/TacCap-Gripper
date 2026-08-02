@@ -58,6 +58,8 @@ from xense.taccap import (
     scan_grippers,
 )
 
+import _calib_flow
+
 _TTY = sys.stdout.isatty()
 
 
@@ -111,24 +113,10 @@ def open_gripper(args):
 # ---- show -------------------------------------------------------------------
 
 
-def firmware_version(gripper) -> str:
-    """Best-effort firmware version string, for the V2.0/V2.1 gating note."""
-    from xense.taccap import Cmd
-
-    try:
-        ack = gripper.transport.send_cmd(Cmd.GetVersion, b"", 500)
-        if len(ack.data) >= 4:
-            major, minor, patch, build = ack.data[:4]
-            return f"{major}.{minor}.{patch}.{build}"
-    except Exception:
-        pass
-    return "<unknown>"
-
-
 def cmd_show(args) -> int:
     with open_gripper(args) as g:
         cal = g.calibration
-        fw = firmware_version(g)
+        fw = _calib_flow.firmware_version(g)
         print(_bold(f"\nFirmware {fw}") +
               "  (fisheye needs >= V2.0, encoder-max >= V2.1: "
               "leader 1.2.0 / follower 1.1.0)")
@@ -235,47 +223,19 @@ def cmd_set_encoder_max(args) -> int:
 
 
 def cmd_measure_encoder_max(args) -> int:
-    import math
-
     if getattr(args, "follower", False):
         raise SystemExit("measure-encoder-max is leader-only")
 
     with open_gripper(args) as g:
-        print(_bold("\nStep 1 — hold the gripper FULLY CLOSED"))
-        input("  press Enter to latch that pose as the encoder zero... ")
-        g.encoder.set_zero()
-        after = g.encoder.read_once().position_rad
-        print(f"  post-zero reading: {after:+.4f} rad")
-        if abs(after) > 0.01:
-            print("  " + _yellow(
-                "warning: not close to 0 — the pose moved between the read "
-                "and the latch. Re-run if this looks wrong."))
+        stored = _calib_flow.guided_calibration(
+            g, assume_yes=args.yes)
+        if stored is None:
+            return 1
 
-        print(_bold("\nStep 2 — open the gripper to its mechanical limit"))
-        input("  press Enter to sample the full-open angle... ")
-        max_rad = g.encoder.read_once().position_rad
-        print(f"  full-open reading: {max_rad:.4f} rad "
-              f"({math.degrees(max_rad):.1f}°)")
-
-        if max_rad <= 0.0:
-            raise SystemExit(
-                "measured max_rad <= 0 — the encoder did not move in the "
-                "positive direction while opening. Check the zero step."
-            )
-
-        if not args.yes:
-            reply = input(f"\nWrite {max_rad:.4f} rad to MCU flash? [y/N] ")
-            if reply.strip().lower() not in ("y", "yes"):
-                print("aborted; nothing written.")
-                return 1
-
-        g.calibration.write_encoder_max_rad(max_rad)
-        readback = g.calibration.read_encoder_max_rad()
-
-    print(_green(f"\nwritten: max_rad = {readback:.4f} rad"))
-    print("Normalized position is now available:")
+    print("\nNormalized position is now available:")
     print("  g = LeaderGripper(mcu_device=..., normalize_position=True)")
     print("  g.encoder.read_once().position   # 0 = closed, 1 = open")
+    _calib_flow.restart_notice()
     return 0
 
 
