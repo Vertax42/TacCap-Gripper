@@ -54,6 +54,14 @@ std::vector<uint8_t> encode(const ImuMagCal&);
 std::vector<uint8_t> encode(const CalSetPayload&);
 std::vector<uint8_t> encode(const CalSetAllPayload&);
 
+// V2.0/V2.1 — Cmd::CameraFisheyeCal / Cmd::EncoderMaxCal multiplex read and
+// write on one command via a leading CalOp byte, so they get explicit builders
+// instead of an encode() overload (the same struct maps to two wire shapes).
+std::vector<uint8_t> encode_camera_fisheye_cal_read();                  // 1 byte
+std::vector<uint8_t> encode_camera_fisheye_cal_write(const CameraFisheyeCal&);  // 33 bytes
+std::vector<uint8_t> encode_encoder_max_cal_read();                     // 1 byte
+std::vector<uint8_t> encode_encoder_max_cal_write(float max_rad);       // 5 bytes
+
 // V1.3+ — OTA. write_block has a variable-length tail so we take the
 // data pointer + length explicitly rather than wrap them in a struct.
 std::vector<uint8_t> encode(const OtaStart&);
@@ -85,6 +93,10 @@ KeyStatusPayload   decode_key_status(const uint8_t* data, std::size_t len);
 ImuMagCal          decode_imu_mag_cal(const uint8_t* data, std::size_t len);
 // V1.5+
 CalGetResponse     decode_cal_get(const uint8_t* data, std::size_t len);
+// V2.0/V2.1 — read responses lead with the CalOp byte echoed back (Read), not
+// an error byte; these decoders verify that byte and strip it.
+CameraFisheyeCal   decode_camera_fisheye_cal(const uint8_t* data, std::size_t len);
+float              decode_encoder_max_cal(const uint8_t* data, std::size_t len);
 // V1.6+
 SensorErrorReport  decode_sensor_error(const uint8_t* data, std::size_t len);
 // V1.3 OTA

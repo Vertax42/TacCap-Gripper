@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware
+1.2.0, follower 1.1.0).
+
+### Added
+- **Fisheye camera calibration** (`Cmd 0x2B`). New `protocol::CameraFisheyeCal`
+  (32 B body: `fx, fy, cx, cy, k1..k4`) and a `Calibration` component reachable
+  as `g.calibration` on **both** leader and follower:
+  `read_fisheye()` / `write_fisheye()`. Bound in Python, where
+  `CameraFisheyeCal` also exposes OpenCV-shaped `.K` (3×3) and `.D` (4,)
+  numpy views for `cv2.fisheye.undistortImage`.
+- **Leader encoder max travel angle** (`Cmd 0x2C`, leader only). Same
+  component: `read_encoder_max_rad()` / `write_encoder_max_rad()`. The
+  follower NACKs `InvalidCmd` — it has no MT6816.
+- **`ErrorCode::CalNotSet` (0x60)** — the firmware returns this instead of
+  zeros when a calibration record has never been written, so "never
+  calibrated" is distinguishable from "calibrated to exactly 0". Both read
+  methods surface it as an empty `std::optional` / Python `None`; every other
+  error still throws `ProtocolError`.
+- **Normalized leader gripper position.** `EncoderSample` gains
+  `position` — the opening in `[0,1]` (0 = closed, 1 = fully open), derived
+  from the encoder-max calibration. `LeaderGripper::Config` gains
+  `normalize_position` (installs the converter on the `Encoder`, so one-shot
+  reads *and* streamed samples carry it) and `encoder_max_rad` (host-side
+  override that skips the firmware read — needed on pre-V2.1 firmware).
+  `LeaderGripper` also gains `position()` / `pos_to_rad()` / `rad_to_pos()` /
+  `position_map()` / `reload_position_map()`, mirroring `FollowerGripper`.
+- `Encoder::set_position_map()` / `clear_position_map()` /
+  `has_position_map()` / `position_map()`; `GripperPosition::from_travel()`
+  for calibration sources that aren't a `GripperConfig` record.
+- `python/examples/fisheye_cal.py` (show / set-fisheye / set-encoder-max /
+  guided `measure-encoder-max`) and
+  `python/examples/leader_normalized_position.py`.
+
+### Changed
+- `EncoderSample::position_rad` is **unchanged** — it still always reports
+  radians. Normalization adds the `position` field rather than repurposing an
+  existing one; `position` is NaN while no map is installed.
+
+### Notes
+- The firmware reports handler errors via
+  `protocol_send_response(seq, cmd, err, NULL, 0)`, which echoes the command
+  byte, so `bus::Transport` surfaces them as a "successful" 1-byte response
+  rather than a NACK. `Calibration` resolves that locally (its success
+  responses are 33 B / 5 B / `[0x00]`, so a non-zero 1-byte payload is
+  unambiguously an error). Transport semantics are unchanged; commands whose
+  legitimate success response *is* a single byte (`MotorGetCanId`,
+  `MotorGetProtocol`) would need per-command knowledge to disambiguate.
+- Firmware V2.1 also raised the auto-cal stall-torque defaults (0.22/0.20 →
+  0.35/0.35 Nm) and shortened `stall_hold_ms` (120 → 30) /
+  `post_zero_delay_ms` (100 → 30). `gripper_auto_cal_config_t` is still 32 B
+  and the SDK reads the config from the device, so no SDK change — but old
+  devices get migrated to the new defaults on flash.
+- Firmware V2.0 made the cal-result commands (`0x27`/`0x28`/`0x29`) available
+  on the follower as well as the leader.
+
 ## [0.1.6] - 2026-07-06
 
 Sync to firmware `hw_v1.1.0` @ ab3f98c.

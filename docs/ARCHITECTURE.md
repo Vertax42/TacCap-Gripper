@@ -19,12 +19,21 @@ adapters, the follower gripper with motor control — live in their own
 repositories and are out of scope here.
 
 **Protocol tracked:** wire framing **V1.8** (the body between HEAD and TAIL
-is byte-stuffed; CRC over the unstuffed HEAD..PAYLOAD) + command set **V1.7**
-(motor / CAN-id / gripper-config, plus motor_status_t / motor_impedance_ctrl_t
-growth). Discovery is MCU-only; cameras are owned by an external camera
-service. Side/role come from the firmware SN (`parse_serial`) with a
-GetDevType fallback. The follower-only V1.7 commands are implemented to the
-protocol but not yet validated on follower hardware.
+is byte-stuffed; CRC over the unstuffed HEAD..PAYLOAD) + command set **V2.1**
+(V1.7 motor / CAN-id / gripper-config plus motor_status_t /
+motor_impedance_ctrl_t growth; V1.9 WS2812 + private motor params; V2.0/V2.1
+fisheye-camera and leader-encoder-max calibration). Discovery is MCU-only;
+cameras are owned by an external camera service. Side/role come from the
+firmware SN (`parse_serial`) with a GetDevType fallback.
+
+**Firmware error wire path — a seam worth knowing.** The firmware reports
+handler errors with `protocol_send_response(seq, cmd, err, NULL, 0)`: the
+command byte is *echoed* (non-zero) and the payload is the single error byte.
+`bus::Transport` only treats the `cmd == 0` wire path as a NACK, so an echoed
+error arrives as a "successful" 1-byte response. Components whose success
+responses are never 1 byte (`Calibration`) resolve this locally; that is what
+makes `ErrorCode::CalNotSet` observable as an empty `std::optional` rather
+than silent success.
 
 ---
 

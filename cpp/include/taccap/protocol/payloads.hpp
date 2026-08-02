@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace xense::taccap::protocol {
@@ -291,6 +292,49 @@ struct GripperAutoCalConfig {
     uint8_t  open_confirm_count;    // open stall samples before saving max
 };
 
+// ---- Fisheye camera / leader-encoder calibration (V2.0 / V2.1) ------------
+//
+// Cmd::CameraFisheyeCal (0x2B) and Cmd::EncoderMaxCal (0x2C) are read/write
+// pairs multiplexed on one command: the request payload starts with a CalOp
+// byte, and a write appends the parameter body.
+//
+//   read  request : [op=Read]                              (1 byte)
+//   write request : [op=Write][body]                       (1 + sizeof(body))
+//   read  response: [op echo=Read][body]                   (1 + sizeof(body))
+//   write response: firmware's generic empty-response ACK
+//
+// NOTE the read *response* leads with the op byte echoed back (0x00), NOT an
+// error byte — the firmware packs camera_fisheye_cal_payload_t /
+// encoder_max_cal_payload_t verbatim. Reading a parameter that was never
+// written NACKs with ErrorCode::CalNotSet rather than returning zeros, so the
+// host can tell "uncalibrated" from "calibrated to exactly 0".
+//
+// The firmware stores both records in internal flash behind a magic/version
+// header and does not interpret them: no unit conversion, no range clamping,
+// only NaN/Inf rejection (plus max_rad > 0 for the encoder record).
+enum class CalOp : uint8_t {
+    Read  = 0x00,
+    Write = 0x01,
+};
+
+// Wire sizes of the full (op + body) request / read-response payloads. Mirror
+// firmware CAMERA_FISHEYE_CAL_FULL_SIZE / ENCODER_MAX_CAL_FULL_SIZE.
+constexpr std::size_t CAMERA_FISHEYE_CAL_FULL_SIZE = 33;
+constexpr std::size_t ENCODER_MAX_CAL_FULL_SIZE    = 5;
+
+// Body of Cmd::CameraFisheyeCal — firmware's `float params[8]`, named. The
+// order is fixed by the firmware and must not be reordered.
+struct CameraFisheyeCal {
+    float fx;   // params[0] — focal length x (px)
+    float fy;   // params[1] — focal length y (px)
+    float cx;   // params[2] — principal point x (px)
+    float cy;   // params[3] — principal point y (px)
+    float k1;   // params[4] — fisheye distortion coefficients
+    float k2;   // params[5]
+    float k3;   // params[6]
+    float k4;   // params[7]
+};
+
 // ---- WS2812 LED control (V1.9 — Cmd::Ws2812Set 0x0A / Ws2812Effect 0x0B) --
 enum class Ws2812Mode : uint8_t {
     Off       = 0,   // all LEDs off
@@ -531,6 +575,11 @@ static_assert(sizeof(MotorControlStats)  == 48);  // V1.7 motor_control_stats
 static_assert(sizeof(GripperAutoCalConfig) == 32); // V1.9 gripper_auto_cal_config_t
 static_assert(sizeof(Ws2812Set)          == 7);   // V1.9 ws2812_set_t
 static_assert(sizeof(Ws2812Effect)       == 12);  // V1.9 ws2812_effect_t
+// V2.0/V2.1 — body only; the wire payload prepends a CalOp byte, which is why
+// the FULL_SIZE constants are one larger.
+static_assert(sizeof(CameraFisheyeCal)   == 32);  // camera_fisheye_cal_payload_t.params
+static_assert(sizeof(CameraFisheyeCal) + 1 == CAMERA_FISHEYE_CAL_FULL_SIZE);
+static_assert(sizeof(float) + 1          == ENCODER_MAX_CAL_FULL_SIZE);
 static_assert(sizeof(StreamConfig)       == 12);
 static_assert(sizeof(AckPayload)         == 4);
 // V1.4+

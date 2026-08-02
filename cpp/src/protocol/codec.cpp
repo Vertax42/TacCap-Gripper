@@ -61,6 +61,58 @@ std::vector<uint8_t> encode_ota_write_block(uint32_t offset,
     return out;
 }
 
+// V2.0/V2.1 — CalOp-prefixed read/write builders. The body is memcpy'd at
+// offset 1, i.e. deliberately unaligned; the firmware does the same.
+namespace {
+
+std::vector<uint8_t> encode_cal_read_request() {
+    return {static_cast<uint8_t>(CalOp::Read)};
+}
+
+template <typename T>
+std::vector<uint8_t> encode_cal_write_request(const T& body) {
+    std::vector<uint8_t> out(1 + sizeof(T));
+    out[0] = static_cast<uint8_t>(CalOp::Write);
+    std::memcpy(out.data() + 1, &body, sizeof(T));
+    return out;
+}
+
+// Read responses lead with the op byte echoed back. Validate it and hand back
+// a pointer to the body.
+const uint8_t* cal_read_body(const uint8_t* data, std::size_t len,
+                             std::size_t full_size, const char* type_name) {
+    if (data == nullptr || len != full_size) {
+        throw ProtocolError(
+            std::string("decode ") + type_name + ": expected " +
+            std::to_string(full_size) + " bytes, got " + std::to_string(len));
+    }
+    if (data[0] != static_cast<uint8_t>(CalOp::Read)) {
+        throw ProtocolError(
+            std::string("decode ") + type_name + ": expected leading op byte " +
+            "0x00 (CalOp::Read), got 0x" +
+            std::to_string(static_cast<unsigned>(data[0])));
+    }
+    return data + 1;
+}
+
+}  // namespace
+
+std::vector<uint8_t> encode_camera_fisheye_cal_read() {
+    return encode_cal_read_request();
+}
+
+std::vector<uint8_t> encode_camera_fisheye_cal_write(const CameraFisheyeCal& v) {
+    return encode_cal_write_request(v);
+}
+
+std::vector<uint8_t> encode_encoder_max_cal_read() {
+    return encode_cal_read_request();
+}
+
+std::vector<uint8_t> encode_encoder_max_cal_write(float max_rad) {
+    return encode_cal_write_request(max_rad);
+}
+
 std::vector<uint8_t> encode_sn(const std::string& sn) {
     std::vector<uint8_t> out(sizeof(SnInfo), 0);
     const std::size_t n = std::min(sn.size(), static_cast<std::size_t>(16));
@@ -136,6 +188,22 @@ MotorPrivateParam decode_motor_private_param(const uint8_t* data, std::size_t le
 
 GripperAutoCalConfig decode_gripper_auto_cal_config(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<GripperAutoCalConfig>(data, len, "GripperAutoCalConfig");
+}
+
+CameraFisheyeCal decode_camera_fisheye_cal(const uint8_t* data, std::size_t len) {
+    const uint8_t* body = cal_read_body(data, len, CAMERA_FISHEYE_CAL_FULL_SIZE,
+                                        "CameraFisheyeCal");
+    CameraFisheyeCal out{};
+    std::memcpy(&out, body, sizeof(out));
+    return out;
+}
+
+float decode_encoder_max_cal(const uint8_t* data, std::size_t len) {
+    const uint8_t* body = cal_read_body(data, len, ENCODER_MAX_CAL_FULL_SIZE,
+                                        "EncoderMaxCal");
+    float out = 0.0f;
+    std::memcpy(&out, body, sizeof(out));
+    return out;
 }
 
 MotorControlStats decode_motor_control_stats(const uint8_t* data, std::size_t len) {

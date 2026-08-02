@@ -12,6 +12,7 @@ add_library(taccap_core SHARED
     src/components/motor.cpp
     src/components/key.cpp
     src/components/led.cpp
+    src/components/calibration.cpp
     src/components/sensor_errors.cpp
     src/discovery.cpp
     src/leader_gripper.cpp

@@ -26,6 +26,7 @@
 #pragma once
 
 #include <taccap/bus/transport.hpp>
+#include <taccap/components/calibration.hpp>
 #include <taccap/components/camera.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/imu.hpp>
@@ -34,9 +35,11 @@
 #include <taccap/components/sensor_errors.hpp>
 #include <taccap/discovery.hpp>
 #include <taccap/error.hpp>
+#include <taccap/gripper_position.hpp>
 #include <taccap/ota.hpp>
 
 #include <cerrno>
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -59,6 +62,27 @@ public:
         // populated) to have this gripper open it.
         bool        open_cameras        = false;
         Camera::Config wrist_cam_extra{};   // width/height/fps overrides
+
+        // ---- Normalized encoder position (0 = closed, 1 = open) ------------
+        // Off by default: every EncoderSample reports position_rad in radians
+        // and leaves .position NaN.
+        //
+        // When true, the constructor builds the raw-rad <-> [0,1] converter and
+        // installs it on the Encoder, so read_once() AND every on_data()
+        // subscriber additionally get .position in [0,1]. position_rad keeps
+        // reporting radians either way — normalization adds a field, it does
+        // not repurpose one.
+        //
+        // The travel span comes from the firmware's Cmd::EncoderMaxCal (0x2C,
+        // firmware >= V2.1 / leader 1.2.0). Construction THROWS when the
+        // firmware has no encoder-max calibration or is too old to answer —
+        // asking for normalization and silently not getting it would be worse.
+        // Set encoder_max_rad to bypass the firmware read entirely.
+        bool        normalize_position  = false;
+        // Override the max travel angle (rad) instead of reading it from the
+        // firmware. 0 (default) = read from firmware. Useful on pre-V2.1
+        // firmware, or to normalize against a span the host already knows.
+        float       encoder_max_rad     = 0.0f;
     };
 
     // Construct from explicit config (for tests, custom topologies).
@@ -82,8 +106,28 @@ public:
     Key&            key()            noexcept { return key_; }            // V1.4
     Led&            led()            noexcept { return led_; }            // V1.9
     SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
+    Calibration&    calibration()    noexcept { return cal_; }            // V2.0/V2.1
     OtaSession&     ota()            noexcept { return ota_; }            // V1.3
     bus::Transport& transport()      noexcept { return t_; }
+
+    // ---- Normalized gripper position (0 = closed, 1 = open) ----------------
+    // Mirror of the FollowerGripper surface, built on the leader's encoder-max
+    // calibration (Cmd::EncoderMaxCal 0x2C) instead of a follower
+    // GripperConfig. Encoder zero is the fully-closed pose (latch it with
+    // encoder().set_zero() while the gripper is held closed); the travel span
+    // to fully open is the calibrated max_rad.
+    //
+    // These work whether or not Config::normalize_position is set — that flag
+    // only controls whether EncoderSample::position is filled in. The map is
+    // loaded once on first use and cached; call reload_position_map() after
+    // re-calibrating. All of them throw ProtocolError when the gripper has no
+    // encoder-max calibration.
+    float position(                                       // read: raw -> [0,1]
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
+    float pos_to_rad(float position);                     // [0,1] -> raw rad
+    float rad_to_pos(float raw_rad);                      // raw rad -> [0,1]
+    const GripperPosition& position_map();                // cached converter (loads if needed)
+    void  reload_position_map();                          // re-read + rebuild converter
 
     // Streaming lifecycle.
     void start_streaming(unsigned imu_hz = 100, unsigned encoder_hz = 100);
@@ -106,6 +150,11 @@ private:
         return *p;
     }
 
+    // Load + cache the GripperPosition converter on first use, from
+    // Config::encoder_max_rad when set, otherwise from the firmware's
+    // encoder-max calibration. Throws ProtocolError when neither is available.
+    void ensure_position_map_();
+
     Config                          cfg_;
     bus::Transport                  t_;
     IMU                             imu_;
@@ -113,9 +162,12 @@ private:
     Key                             key_;       // V1.4
     Led                             led_;       // V1.9
     SensorErrors                    errors_;    // V1.6
+    Calibration                     cal_;       // V2.0/V2.1
     OtaSession                      ota_;       // V1.3
     std::unique_ptr<Camera>         wrist_;
     bool                            streaming_ = false;
+    GripperPosition                 pos_map_;             // raw<->position, cached
+    bool                            pos_map_loaded_ = false;
 };
 
 }  // namespace xense::taccap

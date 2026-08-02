@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <optional>
 
 namespace xense::taccap {
 
@@ -44,6 +45,7 @@ LeaderGripper::LeaderGripper(const Config& cfg)
       key_(t_),
       led_(t_),
       errors_(t_),
+      cal_(t_),
       ota_(t_) {
     // Read firmware version + SN once at construction time so the log
     // shows what the host is actually talking to. A best-effort
@@ -93,6 +95,19 @@ LeaderGripper::LeaderGripper(const Config& cfg)
         if (!cfg_.wrist_video.empty()) {
             wrist_ = std::make_unique<Camera>(make_wrist_config(cfg_));
         }
+    }
+
+    // Opt-in normalized encoder position. Resolve the travel span now so a
+    // misconfiguration surfaces at open() time rather than as silently-absent
+    // .position fields once a 100 Hz stream is already running.
+    if (cfg_.normalize_position) {
+        ensure_position_map_();
+        encoder_.set_position_map(pos_map_);
+        logger()->info(
+            "LeaderGripper: encoder position normalization on, "
+            "max_open={:.4f} rad (source: {})",
+            pos_map_.max_open_rad(),
+            cfg_.encoder_max_rad > 0.0f ? "config override" : "firmware EncoderMaxCal");
     }
 }
 
@@ -157,6 +172,83 @@ void LeaderGripper::stop_streaming() {
         // Best-effort: even if the MCU doesn't ACK we proceed; tearing down
         // the host-side resources is more important than a clean fw stop.
     }
+}
+
+// ---- Normalized gripper position (0 = closed, 1 = open) --------------------
+
+void LeaderGripper::ensure_position_map_() {
+    if (pos_map_loaded_) return;
+
+    // Explicit override wins and skips the firmware round-trip entirely — it
+    // is the escape hatch for firmware older than V2.1, which doesn't know
+    // Cmd::EncoderMaxCal at all.
+    if (cfg_.encoder_max_rad > 0.0f) {
+        pos_map_ = GripperPosition::from_travel(cfg_.encoder_max_rad);
+        pos_map_loaded_ = true;
+        return;
+    }
+
+    std::optional<float> max_rad;
+    try {
+        max_rad = cal_.read_encoder_max_rad();
+    } catch (const ProtocolError& e) {
+        // InvalidCmd here means pre-V2.1 firmware (or follower hardware);
+        // either way the caller needs Config::encoder_max_rad.
+        throw ProtocolError(
+            std::string("LeaderGripper: cannot read the encoder max travel "
+                        "angle (Cmd::EncoderMaxCal 0x2C, firmware >= V2.1) — ") +
+            e.what() +
+            ". Set Config::encoder_max_rad to supply the span from the host "
+            "instead.");
+    }
+    if (!max_rad) {
+        throw ProtocolError(
+            "LeaderGripper: the encoder max travel angle has never been "
+            "calibrated (firmware returned CalNotSet) — normalized position is "
+            "unavailable. Hold the gripper fully closed and call "
+            "encoder().set_zero(), then open it fully and write the observed "
+            "position_rad via calibration().write_encoder_max_rad(). Or set "
+            "Config::encoder_max_rad to supply the span from the host.");
+    }
+
+    auto m = GripperPosition::from_travel(*max_rad);
+    if (!m.valid()) {
+        throw ProtocolError(
+            "LeaderGripper: firmware reported a non-positive encoder max "
+            "travel angle (" + std::to_string(*max_rad) + " rad)");
+    }
+    pos_map_ = m;
+    pos_map_loaded_ = true;
+}
+
+void LeaderGripper::reload_position_map() {
+    pos_map_loaded_ = false;
+    ensure_position_map_();
+    // Keep a normalization-enabled Encoder in sync with the reloaded span,
+    // otherwise streamed .position values would keep using the stale one.
+    if (cfg_.normalize_position) {
+        encoder_.set_position_map(pos_map_);
+    }
+}
+
+const GripperPosition& LeaderGripper::position_map() {
+    ensure_position_map_();
+    return pos_map_;
+}
+
+float LeaderGripper::pos_to_rad(float position) {
+    ensure_position_map_();
+    return pos_map_.to_rad(position);
+}
+
+float LeaderGripper::rad_to_pos(float raw_rad) {
+    ensure_position_map_();
+    return pos_map_.to_position(raw_rad);
+}
+
+float LeaderGripper::position(std::chrono::milliseconds timeout) {
+    ensure_position_map_();
+    return pos_map_.to_position(encoder_.read_once(timeout).position_rad);
 }
 
 }  // namespace xense::taccap

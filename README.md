@@ -30,7 +30,7 @@ follower gripper (MIT force-position control, normalized grasp, LED, auto-cal).
 What's in:
 
 - TC-GU-01 protocol: **wire framing V1.8** (global byte stuffing) +
-  **command set V1.9**. Async transport with ACK matching, per-cmd DATA
+  **command set V2.1**. Async transport with ACK matching, per-cmd DATA
   subscribers.
 - **Follower motor control (MIT), validated on hardware.** `Motor` enable /
   disable / clear-fault + four control modes (position / velocity / torque /
@@ -43,9 +43,19 @@ What's in:
   plus **`ControlLoop`** — a C++ fixed-rate send/receive loop for embodied
   control (`set_target(0..1)` + `observation()`, both non-blocking; obs from the
   motor-status stream, not polling).
+- **Normalized leader position** — `LeaderGripper(..., normalize_position=True)`
+  fills `EncoderSample.position` with the opening in `[0,1]` (0 = closed,
+  1 = open) on one-shot reads *and* on every streamed sample, using the
+  firmware's encoder-max calibration. `position_rad` keeps reporting radians.
+  Same `position()` / `pos_to_rad()` / `rad_to_pos()` surface as the follower.
 - **V1.9 additions:** `motor_status_t` is 31 bytes; power-on auto-calibration
   config (`get/set_auto_cal_config`); WS2812 `Led` control (`g.led`); private-
   protocol single-parameter access (`get/set_private_param`, private-mode only).
+- **V2.0/V2.1 additions:** `Calibration` component (`g.calibration`) for the
+  two flash-persisted calibration records — fisheye camera intrinsics +
+  distortion (leader *and* follower) and the leader's encoder max travel angle.
+  Never-calibrated records read back as `None` (firmware `CalNotSet`), not
+  zeros.
 - MCU sensor components: IMU @ 100 Hz, encoder @ 100 Hz, motor status; opt-in
   wrist UVC (@ 30 Hz) `Camera` (off by default — owned by an external service).
 - `LeaderGripper` / `FollowerGripper` aggregates, zero-config MCU discovery
@@ -314,6 +324,67 @@ See `python/examples/calibrate.py` for the full interactive walkthrough
 (side selection by SN, pre/post drift display, full-open angle sanity
 check, live readout).
 
+### Normalized leader position (0 = closed, 1 = open)
+
+`normalize_position=True` reads the firmware's encoder-max calibration
+(`Cmd::EncoderMaxCal`, firmware ≥ V2.1) at open() time and installs the
+converter on the encoder, so every sample carries `.position` in `[0,1]`:
+
+```python
+g = LeaderGripper(mcu_device=dev, normalize_position=True)
+
+s = g.encoder.read_once()
+s.position_rad      # 0.65  — always radians, meaning never changes
+s.position          # 0.50  — normalized; float('nan') when the flag is off
+
+g.position()        # 0.50  — one-shot read + convert
+g.pos_to_rad(1.0)   # 1.30  — full open, in raw radians
+g.rad_to_pos(0.325) # 0.25
+
+# Streamed samples are normalized too, including subscribers registered
+# before the map existed.
+g.encoder.on_data(lambda s: print(s.position))
+g.start_streaming(imu_hz=0, encoder_hz=100)
+```
+
+The travel span is the encoder shaft angle at full open, measured from the
+encoder zero (fully closed) — so **zero the encoder first**, then store the
+span. `measure-encoder-max` walks both steps:
+
+```bash
+python python/examples/fisheye_cal.py measure-encoder-max
+```
+
+Construction raises `ProtocolError` when the span has never been calibrated
+(the firmware answers `CalNotSet` rather than returning a bogus zero) or when
+the firmware predates V2.1. Pass `encoder_max_rad=<rad>` to supply the span
+from the host and skip the firmware read entirely.
+
+`position()` / `pos_to_rad()` / `rad_to_pos()` / `position_map` work without
+the flag — it only controls whether `EncoderSample.position` gets filled in.
+Call `reload_position_map()` after re-calibrating.
+
+### Fisheye camera calibration
+
+Fisheye intrinsics + distortion live in MCU flash and are readable from both
+leader and follower:
+
+```python
+cal = g.calibration.read_fisheye()     # None when never calibrated
+if cal is not None:
+    undistorted = cv2.fisheye.undistortImage(img, cal.K, cal.D)
+
+from xense.taccap import CameraFisheyeCal
+g.calibration.write_fisheye(CameraFisheyeCal(
+    fx=320.5, fy=321.0, cx=319.5, cy=240.2,
+    k1=-0.031, k2=0.0072, k3=-0.0013, k4=0.0002))
+```
+
+The firmware stores the values verbatim — no unit conversion, no clamping,
+only NaN/Inf rejection. `python/examples/fisheye_cal.py show` prints both
+records; `set-fisheye --from-npz` loads `K`/`D` straight from an OpenCV
+calibration file.
+
 ### Follower gripper control (MIT force-position)
 
 The follower drives a FDCAN motor. Control is the **MIT impedance frame** — the
@@ -393,6 +464,8 @@ All scripts live under `python/examples/`. Enable C++ examples with
 | `calibrate.py`                   | Per-SN encoder zero calibration CLI. Shows raw + cooked side-by-side, latches zero, sanity-checks max-open angle, then enters a live readout. See [Calibration](#calibration).                                                                                                                                                                                                              |
 | `gripper_control_test.py`        | Interactive follower open/close test — steps through positions via both one-shot `set_position(0..1)` and the realtime `ControlLoop`, reading position back. See [Follower gripper control](#follower-gripper-control-mit-force-position).                                                                                                                                                    |
 | `motor_mit_control.py`           | Primitive demo of the raw MIT submission API (`submit_impedance`) with the out-of-band health channel (`control_stats` / `read_status`).                                                                                                                                                                                                                                                    |
+| `fisheye_cal.py`                 | Read/write the flash-persisted calibration records (V2.0/V2.1): `show`, `set-fisheye` (flags or an OpenCV `.npz` holding `K`/`D`), `set-encoder-max`, and `measure-encoder-max` — the guided close-zero → open-sample → store flow that unlocks normalized leader position.                                                                                                                     |
+| `leader_normalized_position.py`  | Streams a leader gripper's opening as `0..1` via `normalize_position=True`, with a live bar. Needs the encoder-max record (or `--encoder-max-rad` to bypass the firmware read).                                                                                                                                                                                                              |
 | `ota_update.py`                  | Firmware OTA flashing CLI with progress + post-flash status probe. **Risky — wrong artefact bricks the MCU.**                                                                                                                                                                                                                                                                               |
 | `v4l2_probe.py`, `v4l2_sweep.py` | Manual V4L2 bringup probes for the wrist / OG cameras (discovery is MCU-only and no longer enumerates them). Also handy when a firmware SN isn't burned yet.                                                                                                                                                                                                                                  |
 | `leader_demo` (C++)              | Reports streaming rates for a single leader gripper over 5 seconds.                                                                                                                                                                                                                                                                                                                         |
@@ -484,6 +557,27 @@ The script:
 The firmware latches whatever raw count it sees the moment it
 processes the command, so the gripper must already be at the target
 pose before pressing Enter.
+
+### Flash-persisted calibration records (V2.0 / V2.1)
+
+Two records live in MCU flash behind `g.calibration`, independent of the
+encoder zero above (which is latched in RAM by `Cmd::SetEncoderZero`):
+
+| Record | Command | Scope | Accessor |
+| --- | --- | --- | --- |
+| Fisheye camera `fx, fy, cx, cy, k1..k4` | `0x2B` | leader + follower | `read_fisheye()` / `write_fisheye()` |
+| Encoder max travel angle (rad) | `0x2C` | **leader only** | `read_encoder_max_rad()` / `write_encoder_max_rad()` |
+
+Both survive power cycles. A record that was never written reads back as
+`None` — the firmware answers `ErrorCode.CalNotSet` instead of returning
+zeros, so "never calibrated" is distinguishable from "calibrated to exactly
+0". Every other firmware error still raises `ProtocolError`; on a follower or
+on pre-V2.1 firmware the encoder-max methods raise with `InvalidCmd`.
+
+```bash
+python python/examples/fisheye_cal.py show                  # print both records
+python python/examples/fisheye_cal.py measure-encoder-max   # guided: zero, open, store
+```
 
 ## Logging
 

@@ -9,9 +9,13 @@
 // and any host-side Python implementation are secondary.
 //
 // Tracked firmware protocol: **wire framing V1.8** (global byte stuffing, see
-// bus/frame.cpp) + **command set V1.7** (motor / CAN-id / gripper-config
-// commands; motor_status_t / motor_impedance_ctrl_t struct growth). The
-// follower-only V1.7 commands are implemented but not yet hardware-validated.
+// bus/frame.cpp) + **command set V2.1** (V1.7 motor / CAN-id / gripper-config
+// commands; V1.9 WS2812 + private motor params; V2.0/V2.1 fisheye-camera and
+// leader-encoder-max calibration). The follower-only V1.7 commands are
+// implemented but not yet hardware-validated.
+//
+// Firmware builds carrying command set V2.1: leader (master) 1.2.0,
+// follower (slave) 1.1.0.
 
 #pragma once
 
@@ -69,6 +73,8 @@ enum class Cmd : uint8_t {
     SetAllCalResult     = 0x28,    // V1.5 — bulk write cal mask, cal_set_all_payload_t
     GetCalResult        = 0x29,    // V1.5 — read cal-success mask, cal_get_response_t
     SensorErrorReport   = 0x2A,    // V1.6 — DATA-stream-only, sensor_error_report_t (8B)
+    CameraFisheyeCal    = 0x2B,    // V2.0 — fisheye intrinsics+distortion R/W (leader + follower)
+    EncoderMaxCal       = 0x2C,    // V2.1 — leader encoder max travel angle R/W (leader only)
 
     // Motor (0x30–0x4F)
     MotorEnable         = 0x30,
@@ -121,6 +127,10 @@ enum class ErrorCode : uint8_t {
     SensorOffline   = 0x20,
     SysBusy         = 0x30,
     SeqMismatch     = 0x40,
+    // V2.0 — a calibration parameter was read before it was ever written.
+    // Distinguishes "never calibrated" from "calibrated to exactly zero";
+    // returned by Cmd::CameraFisheyeCal / Cmd::EncoderMaxCal reads.
+    CalNotSet       = 0x60,
     // OTA error band (V1.3+) — only returned by Cmd::Ota* NACKs.
     OtaBusy         = 0x50,
     OtaNotStarted   = 0x51,

@@ -6,7 +6,9 @@
 #include <taccap/protocol/codec.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace xense::taccap {
 
@@ -34,6 +36,9 @@ EncoderSample Encoder::decode(const std::uint8_t* payload, std::size_t len) {
     s.velocity_rad_s     = s.raw.velocity_rad_s;
     s.status             = s.raw.status;
     s.seq                = s.raw.seq;
+    // Normalization is a per-instance setting, so the static decoder leaves
+    // `position` unset; normalize() fills it when a map is installed.
+    s.position           = std::numeric_limits<float>::quiet_NaN();
     return s;
 }
 
@@ -48,7 +53,48 @@ EncoderSample Encoder::read_once(std::chrono::milliseconds timeout) {
     return s;
 }
 
+void Encoder::set_position_map(const GripperPosition& map) {
+    if (!map.valid()) {
+        throw ProtocolError(
+            "Encoder::set_position_map: converter is not valid (travel span "
+            "<= 0) — the gripper must be calibrated before normalized "
+            "positions mean anything");
+    }
+    std::lock_guard<std::mutex> lk(pos_map_mu_);
+    pos_map_ = map;
+}
+
+void Encoder::clear_position_map() {
+    std::lock_guard<std::mutex> lk(pos_map_mu_);
+    pos_map_ = GripperPosition{};
+}
+
+bool Encoder::has_position_map() const {
+    std::lock_guard<std::mutex> lk(pos_map_mu_);
+    return pos_map_.valid();
+}
+
+GripperPosition Encoder::position_map() const {
+    std::lock_guard<std::mutex> lk(pos_map_mu_);
+    return pos_map_;
+}
+
 void Encoder::normalize(EncoderSample& s) const {
+    // Clamp first, then normalize, so `position` is derived from the same
+    // user-facing value as position_rad (both bottom out at fully closed).
+    clamp_negative_(s);
+
+    GripperPosition map;
+    {
+        std::lock_guard<std::mutex> lk(pos_map_mu_);
+        map = pos_map_;
+    }
+    if (map.valid()) {
+        s.position = map.to_position(s.position_rad);
+    }
+}
+
+void Encoder::clamp_negative_(EncoderSample& s) const {
     if (s.position_rad >= 0.0f) return;
 
     if (s.position_rad < kNegPositionWarnThreshold) {

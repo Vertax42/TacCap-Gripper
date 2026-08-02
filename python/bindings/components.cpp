@@ -12,6 +12,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/functional.h>
 
+#include <taccap/components/calibration.hpp>
 #include <taccap/components/imu.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/camera.hpp>
@@ -27,6 +28,7 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
 
 namespace py = pybind11;
 
@@ -128,6 +130,11 @@ void bind_components(py::module_& m) {
         // so calibration / diagnostic tooling can still see the drift.
         .def_readonly("position_rad",     &EncoderSample::position_rad)
         .def_readonly("velocity_rad_s",   &EncoderSample::velocity_rad_s)
+        // Normalized opening in [0, 1] (0 = fully closed, 1 = fully open).
+        // float('nan') unless the Encoder has a position map installed —
+        // LeaderGripper(normalize_position=True) does that automatically.
+        // position_rad stays in radians either way.
+        .def_readonly("position",         &EncoderSample::position)
         .def_property_readonly("raw_position_rad",
                                [](const EncoderSample& s) { return s.raw.position_rad; })
         .def_property_readonly("raw_velocity_rad_s",
@@ -135,10 +142,12 @@ void bind_components(py::module_& m) {
         .def_readonly("status",           &EncoderSample::status)
         .def_readonly("seq",              &EncoderSample::seq)
         .def("__repr__", [](const EncoderSample& s) {
-            char buf[160];
+            char buf[192];
             std::snprintf(buf, sizeof(buf),
-                "EncoderSample(seq=%u, pos=%.4frad (raw=%.4f), vel=%.4frad/s)",
-                s.seq, s.position_rad, s.raw.position_rad, s.velocity_rad_s);
+                "EncoderSample(seq=%u, pos=%.4frad (raw=%.4f), vel=%.4frad/s, "
+                "position=%.4f)",
+                s.seq, s.position_rad, s.raw.position_rad, s.velocity_rad_s,
+                s.position);
             return std::string(buf);
         });
 
@@ -422,10 +431,109 @@ void bind_components(py::module_& m) {
             return std::string(buf);
         });
 
+    // ---- CameraFisheyeCal (V2.0 — Cmd::CameraFisheyeCal 0x2B) -------------
+    py::class_<protocol::CameraFisheyeCal>(m, "CameraFisheyeCal")
+        .def(py::init([]() { return protocol::CameraFisheyeCal{}; }))
+        .def(py::init([](float fx, float fy, float cx, float cy,
+                         float k1, float k2, float k3, float k4) {
+                 return protocol::CameraFisheyeCal{fx, fy, cx, cy, k1, k2, k3, k4};
+             }),
+             py::arg("fx"), py::arg("fy"), py::arg("cx"), py::arg("cy"),
+             py::arg("k1") = 0.0f, py::arg("k2") = 0.0f,
+             py::arg("k3") = 0.0f, py::arg("k4") = 0.0f)
+        .def_readwrite("fx", &protocol::CameraFisheyeCal::fx)
+        .def_readwrite("fy", &protocol::CameraFisheyeCal::fy)
+        .def_readwrite("cx", &protocol::CameraFisheyeCal::cx)
+        .def_readwrite("cy", &protocol::CameraFisheyeCal::cy)
+        .def_readwrite("k1", &protocol::CameraFisheyeCal::k1)
+        .def_readwrite("k2", &protocol::CameraFisheyeCal::k2)
+        .def_readwrite("k3", &protocol::CameraFisheyeCal::k3)
+        .def_readwrite("k4", &protocol::CameraFisheyeCal::k4)
+        // OpenCV-shaped views: cv2.fisheye.undistortImage(img, K, D).
+        .def_property_readonly("K", [](const protocol::CameraFisheyeCal& c) {
+            py::array_t<double> a(std::vector<py::ssize_t>{3, 3});
+            auto* p = a.mutable_data();
+            p[0] = c.fx; p[1] = 0.0;  p[2] = c.cx;
+            p[3] = 0.0;  p[4] = c.fy; p[5] = c.cy;
+            p[6] = 0.0;  p[7] = 0.0;  p[8] = 1.0;
+            return a;
+        }, "3x3 camera matrix as float64 numpy array (OpenCV K).")
+        .def_property_readonly("D", [](const protocol::CameraFisheyeCal& c) {
+            // Shape must be spelled as a container: array_t<double>(4) picks
+            // the wrong overload on pybind11 2.9 and yields a stride-0 view.
+            py::array_t<double> a(std::vector<py::ssize_t>{4});
+            auto* p = a.mutable_data();
+            p[0] = c.k1; p[1] = c.k2; p[2] = c.k3; p[3] = c.k4;
+            return a;
+        }, "4x1 fisheye distortion vector as float64 numpy array (OpenCV D).")
+        .def("__repr__", [](const protocol::CameraFisheyeCal& c) {
+            char buf[224];
+            std::snprintf(buf, sizeof(buf),
+                "CameraFisheyeCal(fx=%.3f, fy=%.3f, cx=%.3f, cy=%.3f, "
+                "k=[%.5f, %.5f, %.5f, %.5f])",
+                c.fx, c.fy, c.cx, c.cy, c.k1, c.k2, c.k3, c.k4);
+            return std::string(buf);
+        });
+
+    // ---- Calibration (V2.0/V2.1 firmware-persisted calibration records) ----
+    py::class_<Calibration>(m, "Calibration")
+        .def("read_fisheye",
+             [](Calibration& self, unsigned timeout_ms) -> py::object {
+                 std::optional<protocol::CameraFisheyeCal> v;
+                 {
+                     py::gil_scoped_release nogil;
+                     v = self.read_fisheye(std::chrono::milliseconds(timeout_ms));
+                 }
+                 if (!v) return py::none();
+                 return py::cast(*v);
+             },
+             py::arg("timeout_ms") = 200,
+             "Read the fisheye intrinsics + distortion persisted in MCU flash. "
+             "Returns None when the firmware has never been calibrated "
+             "(ErrorCode.CalNotSet); raises ProtocolError on any other NACK.")
+        .def("write_fisheye",
+             [](Calibration& self, const protocol::CameraFisheyeCal& cal,
+                unsigned timeout_ms) {
+                 py::gil_scoped_release nogil;
+                 self.write_fisheye(cal, std::chrono::milliseconds(timeout_ms));
+             },
+             py::arg("cal"), py::arg("timeout_ms") = 500,
+             "Persist fisheye parameters to MCU flash (survives power cycles). "
+             "NaN/Inf values are rejected by the firmware.")
+        .def("read_encoder_max_rad",
+             [](Calibration& self, unsigned timeout_ms) -> py::object {
+                 std::optional<float> v;
+                 {
+                     py::gil_scoped_release nogil;
+                     v = self.read_encoder_max_rad(std::chrono::milliseconds(timeout_ms));
+                 }
+                 if (!v) return py::none();
+                 return py::float_(*v);
+             },
+             py::arg("timeout_ms") = 200,
+             "Leader only. Read the encoder shaft angle (rad) at full open, "
+             "measured from the encoder zero (fully closed). Returns None when "
+             "never calibrated. Raises ProtocolError(InvalidCmd) on a follower "
+             "or on firmware older than V2.1.")
+        .def("write_encoder_max_rad",
+             [](Calibration& self, float max_rad, unsigned timeout_ms) {
+                 py::gil_scoped_release nogil;
+                 self.write_encoder_max_rad(max_rad, std::chrono::milliseconds(timeout_ms));
+             },
+             py::arg("max_rad"), py::arg("timeout_ms") = 500,
+             "Leader only. Persist the full-open shaft angle (rad) to MCU "
+             "flash. Firmware rejects NaN/Inf and max_rad <= 0.");
+
     // ---- GripperPosition: pure raw-rad <-> normalized [0,1] converter ------
     py::class_<GripperPosition>(m, "GripperPosition")
         .def(py::init<>())
         .def(py::init<const protocol::GripperConfig&>(), py::arg("config"))
+        .def_static("from_travel", &GripperPosition::from_travel,
+                    py::arg("max_rad"), py::arg("min_rad") = 0.0f,
+                    py::arg("reverse") = false,
+                    "Build from an explicit travel span instead of a "
+                    "GripperConfig — this is how the leader gripper's map is "
+                    "built from its EncoderMaxCal value.")
         .def_property_readonly("valid",        &GripperPosition::valid)
         .def_property_readonly("max_open_rad", &GripperPosition::max_open_rad)
         .def_property_readonly("min_open_rad", &GripperPosition::min_open_rad)
@@ -530,7 +638,18 @@ void bind_components(py::module_& m) {
             py::arg("timeout_ms") = 500u,
             "Latch the current encoder reading as the new zero position. "
             "The gripper must already be held at the desired zero pose "
-            "(e.g. fully closed) before calling. Raises on NACK / timeout.");
+            "(e.g. fully closed) before calling. Raises on NACK / timeout.")
+        .def("set_position_map", &Encoder::set_position_map, py::arg("position_map"),
+             "Install the raw-rad -> [0,1] converter that fills "
+             "EncoderSample.position. Applies to read_once() and to every "
+             "already-registered on_data() subscriber. Raises ProtocolError if "
+             "the map is not valid.")
+        .def("clear_position_map", &Encoder::clear_position_map,
+             "Remove the converter; EncoderSample.position goes back to nan.")
+        .def_property_readonly("has_position_map", &Encoder::has_position_map)
+        .def_property_readonly("position_map", &Encoder::position_map,
+             "Copy of the installed converter; .valid is False when none is "
+             "installed.");
 
     // ---- Motor ----------------------------------------------------------
     py::class_<Motor>(m, "Motor")
@@ -738,7 +857,8 @@ void bind_components(py::module_& m) {
     py::class_<LeaderGripper>(m, "LeaderGripper")
         .def(py::init([](const std::string& mcu, const std::string& wrist,
                          uint32_t baud, unsigned ack_ms, unsigned retries,
-                         bool open_cameras) {
+                         bool open_cameras, bool normalize_position,
+                         float encoder_max_rad) {
                 LeaderGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
@@ -746,6 +866,8 @@ void bind_components(py::module_& m) {
                 cfg.ack_timeout_ms       = ack_ms;
                 cfg.max_retries          = retries;
                 cfg.open_cameras         = open_cameras;
+                cfg.normalize_position   = normalize_position;
+                cfg.encoder_max_rad      = encoder_max_rad;
                 py::gil_scoped_release gil;
                 return std::make_unique<LeaderGripper>(cfg);
              }),
@@ -755,11 +877,26 @@ void bind_components(py::module_& m) {
              py::arg("baudrate")            = 3'000'000u,
              py::arg("ack_timeout_ms")      = 200u,
              py::arg("max_retries")         = 1u,
-             py::arg("open_cameras")        = false)
-        .def_static("open", []() {
+             py::arg("open_cameras")        = false,
+             // Normalized encoder position: fills EncoderSample.position with
+             // the opening in [0,1] (0=closed, 1=open) on read_once() and on
+             // every streamed sample. position_rad keeps reporting radians.
+             // Raises at construction if the firmware has no encoder-max
+             // calibration and encoder_max_rad isn't supplied.
+             py::arg("normalize_position")  = false,
+             py::arg("encoder_max_rad")     = 0.0f)
+        .def_static("open", [](bool normalize_position, float encoder_max_rad) {
             py::gil_scoped_release gil;
-            return LeaderGripper::open();   // returns unique_ptr<LeaderGripper>
-        })
+            if (!normalize_position && encoder_max_rad <= 0.0f) {
+                return LeaderGripper::open();  // returns unique_ptr<LeaderGripper>
+            }
+            auto eps = discovery::find_one();
+            LeaderGripper::Config cfg{};
+            cfg.mcu_device         = eps.mcu_device;
+            cfg.normalize_position = normalize_position;
+            cfg.encoder_max_rad    = encoder_max_rad;
+            return std::make_unique<LeaderGripper>(cfg);
+        }, py::arg("normalize_position") = false, py::arg("encoder_max_rad") = 0.0f)
         .def("start_streaming", [](LeaderGripper& self, unsigned imu_hz, unsigned enc_hz) {
             py::gil_scoped_release gil;
             self.start_streaming(imu_hz, enc_hz);
@@ -774,9 +911,39 @@ void bind_components(py::module_& m) {
         .def_property_readonly("key",           [](LeaderGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("led",           [](LeaderGripper& g) -> Led&            { return g.led(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](LeaderGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("calibration",   [](LeaderGripper& g) -> Calibration&    { return g.calibration(); },   py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](LeaderGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](LeaderGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
         .def_property_readonly("is_streaming",  &LeaderGripper::is_streaming)
+
+        // ---- Normalized position (0 = closed, 1 = open) ------------------
+        // Available regardless of the normalize_position flag — that flag only
+        // controls whether EncoderSample.position gets filled in. All of these
+        // raise ProtocolError when the gripper has no encoder-max calibration.
+        .def("position", [](LeaderGripper& g, unsigned timeout_ms) {
+                py::gil_scoped_release gil;
+                return g.position(std::chrono::milliseconds(timeout_ms));
+            }, py::arg("timeout_ms") = 100u,
+            "Read the encoder and return the opening normalized to [0,1].")
+        .def("pos_to_rad", [](LeaderGripper& g, float p) {
+                py::gil_scoped_release gil;
+                return g.pos_to_rad(p);
+            }, py::arg("position"))
+        .def("rad_to_pos", [](LeaderGripper& g, float r) {
+                py::gil_scoped_release gil;
+                return g.rad_to_pos(r);
+            }, py::arg("raw_rad"))
+        .def_property_readonly("position_map", [](LeaderGripper& g) {
+                py::gil_scoped_release gil;
+                return g.position_map();
+            }, "Cached raw-rad <-> [0,1] converter (loads on first access).")
+        .def("reload_position_map", [](LeaderGripper& g) {
+                py::gil_scoped_release gil;
+                g.reload_position_map();
+            },
+            "Re-read the encoder-max calibration and rebuild the converter. "
+            "Call after write_encoder_max_rad() or a re-zero.")
+
         .def("__enter__", [](LeaderGripper& g) -> LeaderGripper& { return g; })
         .def("__exit__",  [](LeaderGripper& g, py::object, py::object, py::object) {
             py::gil_scoped_release gil;
@@ -827,6 +994,7 @@ void bind_components(py::module_& m) {
         .def_property_readonly("key",           [](FollowerGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("led",           [](FollowerGripper& g) -> Led&            { return g.led(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](FollowerGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("calibration",   [](FollowerGripper& g) -> Calibration&    { return g.calibration(); },   py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](FollowerGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](FollowerGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
         .def_property_readonly("is_streaming",  &FollowerGripper::is_streaming)

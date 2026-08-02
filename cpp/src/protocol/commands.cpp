@@ -53,6 +53,8 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::SetAllCalResult:     return "SetAllCalResult";
         case Cmd::GetCalResult:        return "GetCalResult";
         case Cmd::SensorErrorReport:   return "SensorErrorReport";
+        case Cmd::CameraFisheyeCal:    return "CameraFisheyeCal";
+        case Cmd::EncoderMaxCal:       return "EncoderMaxCal";
 
         case Cmd::MotorEnable:         return "MotorEnable";
         case Cmd::MotorDisable:        return "MotorDisable";
@@ -104,6 +106,7 @@ const char* to_string(ErrorCode e) noexcept {
         case ErrorCode::SensorOffline:  return "SensorOffline";
         case ErrorCode::SysBusy:        return "SysBusy";
         case ErrorCode::SeqMismatch:    return "SeqMismatch";
+        case ErrorCode::CalNotSet:      return "CalNotSet";
         case ErrorCode::OtaBusy:        return "OtaBusy";
         case ErrorCode::OtaNotStarted:  return "OtaNotStarted";
         case ErrorCode::OtaOffsetErr:   return "OtaOffsetErr";

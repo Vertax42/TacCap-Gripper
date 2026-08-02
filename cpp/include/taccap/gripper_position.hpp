@@ -16,7 +16,10 @@
 //
 // Hardware-free and header-only: the realtime upper layer can use it directly
 // without opening a gripper. Construct from a GripperConfig read via
-// FollowerGripper::get_gripper_config() (Cmd::GetGripperConfig 0x67).
+// FollowerGripper::get_gripper_config() (Cmd::GetGripperConfig 0x67), or from
+// a bare travel span via from_travel() — that is how the LEADER builds its map,
+// since the leader's calibration is a single max travel angle read through
+// Cmd::EncoderMaxCal (0x2C) rather than a full GripperConfig record.
 
 #pragma once
 
@@ -37,6 +40,22 @@ public:
           dir_((cfg.flags & protocol::GripperConfigFlag::Reverse) ? -1.0f : 1.0f),
           valid_((cfg.flags & protocol::GripperConfigFlag::Valid) != 0 &&
                  cfg.max_open_rad > cfg.min_open_rad) {}
+
+    // Build from an explicit travel span, for calibration sources that aren't a
+    // GripperConfig record — chiefly the leader's Cmd::EncoderMaxCal (0x2C)
+    // max travel angle, which carries no flags and no reverse bit (the leader
+    // encoder counts positive as it opens away from its zero).
+    //
+    // Valid iff max_rad > min_rad, matching the GripperConfig constructor.
+    static GripperPosition from_travel(float max_rad, float min_rad = 0.0f,
+                                       bool reverse = false) noexcept {
+        GripperPosition p;
+        p.max_open_ = max_rad;
+        p.min_open_ = min_rad;
+        p.dir_      = reverse ? -1.0f : 1.0f;
+        p.valid_    = max_rad > min_rad;
+        return p;
+    }
 
     // Valid only when the firmware config is marked Valid and the travel span is
     // positive — otherwise the gripper isn't calibrated and a normalized

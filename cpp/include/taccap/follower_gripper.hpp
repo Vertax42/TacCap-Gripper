@@ -32,6 +32,7 @@
 #pragma once
 
 #include <taccap/bus/transport.hpp>
+#include <taccap/components/calibration.hpp>
 #include <taccap/components/camera.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/imu.hpp>
@@ -129,6 +130,9 @@ public:
     Key&            key()            noexcept { return key_; }            // V1.4
     Led&            led()            noexcept { return led_; }            // V1.9
     SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
+    // Fisheye camera calibration works on the follower too; the encoder-max
+    // methods are leader-only and NACK with InvalidCmd here.
+    Calibration&    calibration()    noexcept { return cal_; }            // V2.0
     OtaSession&     ota()            noexcept { return ota_; }            // V1.3
     bus::Transport& transport()      noexcept { return t_; }
 
@@ -169,6 +173,7 @@ private:
     Key                             key_;       // V1.4
     Led                             led_;       // V1.9
     SensorErrors                    errors_;    // V1.6
+    Calibration                     cal_;       // V2.0
     OtaSession                      ota_;       // V1.3
     std::unique_ptr<Camera>         wrist_;
     bool                            streaming_ = false;

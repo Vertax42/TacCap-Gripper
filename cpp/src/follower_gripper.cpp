@@ -45,6 +45,7 @@ FollowerGripper::FollowerGripper(const Config& cfg)
       key_(t_),
       led_(t_),
       errors_(t_),
+      cal_(t_),
       ota_(t_) {
     // Mirror LeaderGripper: drain leftover DATA, then probe firmware
     // version + SN once at construction time so the log shows what the
