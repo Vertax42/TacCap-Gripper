@@ -32,6 +32,19 @@ What's in:
 - TC-GU-01 protocol: **wire framing V1.8** (global byte stuffing) +
   **command set V2.1**. Async transport with ACK matching, per-cmd DATA
   subscribers.
+
+> **Firmware you need.** Command set V2.1 ships in **leader 1.2.0** /
+> **follower 1.1.0** (firmware repo `hw_v1.1.0` @ `f5dd086`). Check with
+> `python python/examples/fisheye_cal.py show`, which prints the version and
+> whether each V2.0/V2.1 command answers.
+>
+> The SDK stays usable on older firmware — everything up to command set V1.9
+> behaves identically. Only the V2.0/V2.1 calibration commands are affected,
+> and they fail loudly with `ProtocolError(InvalidCmd)` rather than silently
+> misbehaving. `LeaderGripper(..., encoder_max_rad=<rad>)` supplies the travel
+> span from the host when the firmware cannot store it.
+>
+> To build and flash: see [Firmware / PC GUI reference repos](#firmware--pc-gui-reference-repos).
 - **Follower motor control (MIT), validated on hardware.** `Motor` enable /
   disable / clear-fault + four control modes (position / velocity / torque /
   impedance). The MIT impedance frame *is* the force-position hybrid primitive
@@ -202,14 +215,24 @@ CMake options (top-level `CMakeLists.txt:19-21`):
 ### 6. Verify
 
 ```bash
-# Python
-python -c "import xense.taccap as t; print(t.hello()); print(t.__version__)"
+# Python — note `env -u PYTHONPATH`, see the note below
+env -u PYTHONPATH python -c "import xense.taccap as t; print(t.hello()); print(t.__version__)"
 # → taccap-gripper OK; version 0.1.6
 # → 0.1.6
+
+# Python tests (hardware-free cases always run; IMU cases skip without a gripper)
+env -u PYTHONPATH pytest python/tests
 
 # C++ tests (only if TACCAP_BUILD_TESTS=ON)
 ctest --test-dir build --output-on-failure
 ```
+
+> **If `xense.taccap` resolves somewhere unexpected, check `PYTHONPATH`.**
+> Stacked conda activations can export another env's `site-packages` into
+> *every* interpreter, which then shadows this repo with whatever editable
+> install lives there — you end up testing a different checkout without any
+> error. `env -u PYTHONPATH python -c "import xense.taccap as t; print(t.__file__)"`
+> tells you which tree you are actually running.
 
 ### 7. Rebuild / clean
 
@@ -461,7 +484,7 @@ All scripts live under `python/examples/`. Enable C++ examples with
 | Script                           | What it does                                                                                                                                                                                                                                                                                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rerun_dual_with_tracker.py`     | Dual-gripper IMU/encoder + Pico4 motion-tracker 6-DoF poses in one viewer. Requires [`xensevr_pc_service_sdk`](https://github.com/Vertax42/Xense-Pico-Teleop-Interface) and the XenseVR PC Service running. Use `--left-tracker-sn` / `--right-tracker-sn` to map tracker SNs to sides. (Cameras are owned by the external camera service and not shown here.)                                  |
-| `calibrate.py`                   | Per-SN encoder zero calibration CLI. Shows raw + cooked side-by-side, latches zero, sanity-checks max-open angle, then enters a live readout. See [Calibration](#calibration).                                                                                                                                                                                                              |
+| `calibrate.py`                   | Per-SN encoder calibration CLI — latches the zero **and stores the measured travel span** (`Cmd::EncoderMaxCal`), which is what unlocks normalized position. Shows raw + cooked side-by-side, then a live `raw \| cooked \| position 0..1` readout. Checks firmware support before writing anything. See [Calibration](#calibration).                                                          |
 | `gripper_control_test.py`        | Interactive follower open/close test — steps through positions via both one-shot `set_position(0..1)` and the realtime `ControlLoop`, reading position back. See [Follower gripper control](#follower-gripper-control-mit-force-position).                                                                                                                                                    |
 | `motor_mit_control.py`           | Primitive demo of the raw MIT submission API (`submit_impedance`) with the out-of-band health channel (`control_stats` / `read_status`).                                                                                                                                                                                                                                                    |
 | `fisheye_cal.py`                 | Read/write the flash-persisted calibration records (V2.0/V2.1): `show`, `set-fisheye` (flags or an OpenCV `.npz` holding `K`/`D`), `set-encoder-max`, and `measure-encoder-max` — the guided close-zero → open-sample → store flow that unlocks normalized leader position.                                                                                                                     |
@@ -534,25 +557,39 @@ absorbs this two ways:
   logger emits a rate-limited warning (1 / s per `Encoder` instance)
   pointing at calibration or mechanical issues.
 
-To actually re-zero the gripper, run `calibrate.py` against the SN
-you want to fix:
+To calibrate a gripper, run `calibrate.py` against the SN you want to fix:
 
 ```bash
-python python/examples/calibrate.py TCGU01A24A0002m   # right leader gripper
+python python/examples/calibrate.py TCGU01A28Z0023m   # left leader gripper
 ```
 
 The script:
 
 1. Resolves the firmware SN to the right `mcu_device`.
-2. Prints the current encoder reading (both `raw` and clamped) so the
+2. **Pre-flight:** checks the firmware implements `Cmd::EncoderMaxCal`
+   (0x2C). This runs *before* anything is written — step 4 persists a new
+   zero, so a pre-V2.1 gripper is refused while still untouched rather than
+   left half-calibrated with a new zero and no span.
+3. Prints the current encoder reading (both `raw` and clamped) so the
    existing drift is visible.
-3. Prompts "hold the gripper **FULLY CLOSED**, press [Enter]".
-4. Sends `Cmd::SetEncoderZero`, re-reads, validates that the new raw
-   reading is within tolerance (default ± 0.01 rad).
-5. Optional `Step 2/2` — probe the mechanical full-open angle and
-   compare against the expected envelope (default 1.7 rad ≈ 97°,
-   tunable with `--expected-max-open-rad`).
-6. Live 10 Hz readout (`raw | cooked`) until Ctrl+C.
+4. Prompts "hold the gripper **FULLY CLOSED**, press [Enter]", sends
+   `Cmd::SetEncoderZero`, re-reads, and validates the new raw reading is
+   within ± 0.01 rad.
+5. Prompts "open to the **MECHANICAL LIMIT**, press [Enter]" and **stores**
+   the measured angle as the travel span (`Cmd::EncoderMaxCal`). That span
+   is what `normalize_position=True` divides by.
+6. Live 10 Hz readout (`raw | cooked | position 0..1`) until Ctrl+C.
+
+There is deliberately **no expected full-open angle** to check against. The
+measured span *is* the calibration — it is whatever the mechanism does, and
+it is what the SDK normalizes by. (An earlier 1.7 rad "design baseline" was
+stale and fired false alarms on healthy hardware: three measurements across
+two units gave 1.1582 / 1.1589 / 1.1486 rad, i.e. ~66°.) The only checks
+left are the ones that catch a genuinely broken measurement — a non-positive
+span, a zero that did not take, a write that did not stick.
+
+`--skip-open-probe` latches only the zero; normalized position then stays
+unavailable until the span is measured.
 
 The firmware latches whatever raw count it sees the moment it
 processes the command, so the gripper must already be at the target
@@ -560,8 +597,10 @@ pose before pressing Enter.
 
 ### Flash-persisted calibration records (V2.0 / V2.1)
 
-Two records live in MCU flash behind `g.calibration`, independent of the
-encoder zero above (which is latched in RAM by `Cmd::SetEncoderZero`):
+Two more records live in MCU flash behind `g.calibration`. Note the encoder
+zero above is **also** flash-persisted — `cmd_handler_set_encoder_zero` calls
+`storage_write_encoder_calibration()`, so none of these need a power cycle
+and none of them are lost on reboot:
 
 | Record | Command | Scope | Accessor |
 | --- | --- | --- | --- |
@@ -663,6 +702,52 @@ What's where:
 - `tc-gu-01-pc/core/protocol.py` + `core/serial_worker.py` — Python
   reference implementation of the same wire protocol; useful as a
   cross-check when debugging the C++ codec.
+
+### Building the firmware (Ubuntu) and flashing it over OTA
+
+The firmware builds with a plain Makefile — no CubeIDE needed. `GRIPPER` is
+mandatory; it selects `-DENABLE_MASTER_GRIPPER` / `-DENABLE_SLAVE_GRIPPER`,
+which is what splits the command table and the version constant.
+
+```bash
+sudo apt install gcc-arm-none-eabi
+
+cd third_party/firmware/tc-gu-01
+env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=master -j"$(nproc)"
+env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=slave  -j"$(nproc)"
+# -> build/master/tc-gu-01-master.bin   (leader 1.2.0)
+# -> build/slave/tc-gu-01-slave.bin     (follower 1.1.0)
+```
+
+> **`env -u CFLAGS ...` is load-bearing.** The `taccap` conda env exports host
+> x86 build flags (`-march=nocona -mtune=haswell -isystem <env>/include`), and
+> the firmware Makefile uses `CFLAGS +=`, so they get appended to the ARM
+> cross-compile and it fails with `unrecognized -march target: nocona`.
+> `conda deactivate` works too.
+
+Then flash over the wire — no SWD probe. The plain `.bin` is the OTA artifact:
+the image always links at `0x08000000`, and the firmware writes it to the
+inactive bank and uses the STM32H5 bank swap, so one build serves both banks.
+
+```bash
+python python/examples/ota_update.py \
+    third_party/firmware/tc-gu-01/build/master/tc-gu-01-master.bin \
+    --side left --target-version 1.2.0.0
+```
+
+Notes:
+
+- **`make` succeeding does not mean it will flash.** The linker script declares
+  the full 2048K, but OTA caps a single bank at 456 KB — check
+  `ls -l build/*/tc-gu-01-*.bin` (current builds: master 116,884 B, slave
+  149,256 B, i.e. 25% / 32% of the cap).
+- Flash the artifact matching the *role*, not the side. A gripper's role is the
+  `m` / `s` suffix on its firmware SN; both leaders take the `master` build.
+- `make download` is Windows-only (`STM32_Programmer_CLI.exe`, and it flashes
+  the `.elf`). On Ubuntu use the OTA path above.
+- `Cmd::GetVersion` returns the **compiled-in** constant, not the OTA bank
+  metadata, so `--target-version` is bookkeeping only — the version you read
+  back afterwards is proof of what actually got flashed.
 
 ## Documentation
 

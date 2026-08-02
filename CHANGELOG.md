@@ -41,6 +41,20 @@ Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware
   `python/examples/leader_normalized_position.py`.
 
 ### Fixed
+- **Python IMU vectors returned the x component three times.**
+  `ImuSample.accel_mps2` / `.gyro_radps` / `.mag_uT` came back as `[x, x, x]`:
+  `make_vec3` built its array with `py::array_t<float> arr(3)`, which on
+  pybind11 2.9 picks a different overload and yields a shape-(3,) array with
+  **stride 0** — a broadcast view of element [0], so the writes to `p[1]` and
+  `p[2]` landed on the same address. No error, no crash, just silently wrong
+  data on every Python IMU read, including the ROS 2 node, rerun
+  visualisation and dataset recording. The C++ side was never affected.
+  Pre-existing, and independent of the V2.1 work — reproduced on a gripper
+  still running the old firmware. Verified on two units: before
+  `accel=[9.561, 9.561, 9.561]` (|a| = 16.56), after
+  `accel=[9.660, 0.020, -2.412]` (|a| = 9.96 ≈ g). Same overload trap as
+  `CameraFisheyeCal.D`; `make_vec3` was the last remaining instance.
+  **Downstream consumers should update** — this changes the data they see.
 - **A failed OTA reported success.** `OtaSession` only checked
   `ack.is_nack`, but firmware handler errors take the echoed-cmd path
   (`protocol_send_response(seq, cmd, err, NULL, 0)` — command byte intact,
@@ -94,6 +108,20 @@ Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware
 - `EncoderSample::position_rad` is **unchanged** — it still always reports
   radians. Normalization adds the `position` field rather than repurposing an
   existing one; `position` is NaN while no map is installed.
+- **`calibrate.py` now stores the travel span instead of checking it.** It
+  used to compare the measured full-open angle against a 1.7 rad "design
+  baseline" and warn on deviation, while never storing the value anywhere
+  (it predates `Cmd::EncoderMaxCal`). Both halves were wrong: the span *is*
+  the calibration, and the baseline was stale — three measurements across two
+  units gave 1.1582 / 1.1589 / 1.1486 rad (~66°), all outside its ±0.5 band.
+  `--expected-max-open-rad` and `--open-tolerance-rad` are **removed**; step 2
+  now persists the measurement, and the firmware-capability probe runs
+  *before* the zero is latched so a pre-V2.1 gripper is never left
+  half-calibrated. New shared `python/examples/_calib_flow.py` backs
+  `calibrate.py`, `fisheye_cal.py` and `leader_normalized_position.py`; the
+  latter now offers the guided flow when it finds no calibration at startup.
+  It lives in `examples/`, not the package: it prompts on stdin, and the SDK
+  must stay usable headless.
 - **`LeaderGripper.__exit__` / `FollowerGripper.__exit__` now stop the
   transport**, not just the stream, so the reader thread and its callbacks are
   gone at the end of the `with` block. A gripper used after its `with` block

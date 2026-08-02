@@ -18,6 +18,15 @@ carries deep background; this file is *house rules*.
   `static_assert(sizeof(...) == N)` lines in
   `cpp/include/taccap/protocol/payloads.hpp` — they fail the build the
   instant firmware-side layout drifts.
+- Linking the test binary can fail with `undefined reference to
+  curl_*@CURL_OPENSSL_4` / `__cxa_call_terminate` — that is the
+  `lerobot-xense` conda env leaking through `LD_LIBRARY_PATH`. Build with
+  `env -u LD_LIBRARY_PATH cmake --build build`.
+
+## Build & test (Python)
+- `pytest python/tests` — hardware-free cases always run; the IMU cases skip
+  when no gripper is connected. Guards against zero-stride numpy views (see
+  `test_numpy_views.py`); `py::array_t<T> a(n)` is a trap on pybind11 2.9.
 
 ## Build & install (Python wheel)
 - conda env `taccap` (py3.12, primary dev env):
@@ -26,6 +35,12 @@ carries deep background; this file is *house rules*.
   `/usr/bin/python3 -m pip install --user --no-build-isolation .`
 - Examples are off by default; enable with `-DTACCAP_BUILD_EXAMPLES=ON`.
 - Active conda env's python: `/home/ubuntu/miniforge3/envs/taccap/bin/python`.
+- **Always run Python with `env -u PYTHONPATH`.** The shell stacks `taccap` on
+  top of `lerobot-xense`, whose activation exports
+  `PYTHONPATH=<lerobot-xense>/lib/python3.12/site-packages`. That injects its
+  editable install of `xense.taccap` — pinned to whatever commit the
+  `lerobot-xense` submodule sits at — into *every* interpreter, so you silently
+  test old code. With `PYTHONPATH` cleared, `taccap` resolves to this repo.
 
 ## Hardware smoke test (when a gripper is plugged in)
 ```bash
