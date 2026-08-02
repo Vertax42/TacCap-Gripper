@@ -8,6 +8,7 @@ add_executable(taccap_unit_tests
     test_codec_v17.cpp
     test_codec_v21.cpp
     test_calibration_pty.cpp
+    test_ota_retry_pty.cpp
     test_python_compat.cpp
     test_stuff.cpp
     test_transport.cpp

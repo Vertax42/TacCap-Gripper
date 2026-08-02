@@ -36,14 +36,27 @@ whether the interpreter is finalizing and drops the event if so. The
 gripper `__exit__` handlers call `transport().stop()` so a `with` block leaves
 nothing running.
 
-**Firmware error wire path — a seam worth knowing.** The firmware reports
-handler errors with `protocol_send_response(seq, cmd, err, NULL, 0)`: the
-command byte is *echoed* (non-zero) and the payload is the single error byte.
-`bus::Transport` only treats the `cmd == 0` wire path as a NACK, so an echoed
-error arrives as a "successful" 1-byte response. Components whose success
-responses are never 1 byte (`Calibration`) resolve this locally; that is what
-makes `ErrorCode::CalNotSet` observable as an empty `std::optional` rather
-than silent success.
+**Firmware error wire path — a seam worth knowing.** Only handler *dispatch*
+failures take the `cmd == 0` wire path that `AckResponse::is_nack` detects. A
+handler that returns non-OK goes through `protocol_send_response(seq, cmd,
+err, NULL, 0)`: the command byte is *echoed* and the error is the whole
+payload, which is indistinguishable at the transport layer from a legitimate
+1-byte success response. `bus::ack_error_code()` resolves the ambiguity in
+favour of "error", so it is only valid for commands whose success payload is
+never a single non-zero byte — true for `Cmd::Ota*` and the V2.0 calibration
+commands, **not** for `MotorGetCanId` / `MotorGetProtocol`, whose success
+payload is exactly one meaningful non-zero byte. Transport semantics are
+deliberately unchanged; call sites opt in.
+
+**Retry is not free — `bus::RetryMode`.** `send_cmd` retries on ACK timeout.
+By default (`NewSeq`) each attempt gets a fresh seq, which is right for
+idempotent commands but fatal for ones the firmware must not run twice: the
+OTA write path demands strictly sequential offsets and fails the whole session
+on a repeat. `RetryMode::SameSeq` reuses the seq so the firmware recognises
+the repeat and replays its cached response (`protocol_resend_cached_response`)
+rather than re-entering the handler. It relies on the firmware caching exactly
+one request, so nothing else may share the transport between attempts — fine
+for the single-threaded OTA flow, which is the only user.
 
 ---
 

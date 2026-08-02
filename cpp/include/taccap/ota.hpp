@@ -90,12 +90,20 @@ public:
     // failure. Designed for unit tests and recovery flows; high-level
     // `update_*()` is what 95% of callers want.
 
+    // OtaStart does real work on the follower before it answers: firmware
+    // >= V2.1 stops the motor and switches it to MIT inside the handler
+    // (feedback confirm 300 ms + CAN-id probes + parameter waits + two flash
+    // writes), which can run well past a second. Hence the generous default —
+    // a premature timeout here costs the whole update, because the retry
+    // finds the session already open and gets OtaBusy.
     void start(uint32_t firmware_size, uint32_t firmware_crc32,
                const TargetVersion& target,
-               std::chrono::milliseconds timeout = std::chrono::milliseconds{1000});
+               std::chrono::milliseconds timeout = std::chrono::milliseconds{5000});
 
+    // Every 8th block fills a sector buffer and triggers an 8 KB erase +
+    // program, so a block ACK is occasionally much slower than the rest.
     void write_block(uint32_t offset, const uint8_t* data, uint16_t length,
-                     std::chrono::milliseconds timeout = std::chrono::milliseconds{500});
+                     std::chrono::milliseconds timeout = std::chrono::milliseconds{1000});
 
     void verify(std::chrono::milliseconds timeout = std::chrono::milliseconds{2000});
 

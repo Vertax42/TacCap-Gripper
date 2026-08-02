@@ -41,6 +41,34 @@ Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware
   `python/examples/leader_normalized_position.py`.
 
 ### Fixed
+- **A failed OTA reported success.** `OtaSession` only checked
+  `ack.is_nack`, but firmware handler errors take the echoed-cmd path
+  (`protocol_send_response(seq, cmd, err, NULL, 0)` — command byte intact,
+  error as the whole payload), which the transport surfaces as a
+  "successful" 1-byte response. A rejected `OtaWriteBlock` therefore did not
+  throw: the loop wrote every remaining block, `verify()` and `apply()`
+  swallowed their errors too, and `update_from_file()` returned normally on a
+  firmware that had aborted the session. Nothing was bricked — the firmware
+  refuses to swap banks — but the host lied about it. All OTA calls now go
+  through the new `bus::ack_error_code()`.
+- **Host retry could kill an otherwise fine OTA.** `Transport::send_cmd`
+  allocated a fresh seq per retry attempt, so a merely-slow `OtaWriteBlock`
+  ACK caused the same offset to be re-sent as a brand-new request. The
+  firmware demands strictly sequential offsets and marks the whole session
+  failed on a repeat (`ota_driver.c` — `offset != bytes_written` ⇒
+  `OTA_STATE_ERROR`). New `bus::RetryMode::SameSeq` reuses the seq so the
+  firmware recognises the repeat and replays its cached response instead of
+  re-running the handler — which is exactly what firmware V2.1's
+  `protocol_resend_cached_response` was added for, and which the SDK could
+  never reach while it bumped the seq. `OtaSession` uses it for every
+  command; `RetryMode::NewSeq` stays the default everywhere else, so no other
+  call site changes behaviour.
+- **`OtaStart` could time out on the follower.** Firmware >= V2.1 stops the
+  motor and switches it to MIT inside the handler (300 ms feedback confirm +
+  CAN-id probes + parameter waits + two flash writes), which can exceed the
+  old 1000 ms default; the retry then found the session already open and got
+  `OtaBusy`. Default raised to 5000 ms, and `write_block` 500 → 1000 ms
+  (every 8th block triggers an 8 KB erase + program).
 - **Process abort at interpreter shutdown** (`FATAL: exception not rethrown`)
   when a Python `on_data` / `on_status` subscriber was still registered at
   exit. The transport reader thread is a plain `std::thread` that nothing

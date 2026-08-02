@@ -29,16 +29,37 @@ Transport::~Transport() {
 
 // ---- public API -----------------------------------------------------------
 
+protocol::ErrorCode ack_error_code(const AckResponse& ack) noexcept {
+    if (ack.is_nack) return ack.error_code;
+    // Echoed-cmd error path: protocol_send_response(seq, cmd, err, NULL, 0)
+    // packs the error as the whole payload with the command byte intact.
+    if (ack.data.size() == 1 && ack.data[0] != 0) {
+        return static_cast<protocol::ErrorCode>(ack.data[0]);
+    }
+    return protocol::ErrorCode::Ok;
+}
+
 AckResponse Transport::send_cmd(protocol::Cmd cmd,
                                 const std::vector<uint8_t>& payload,
-                                std::chrono::milliseconds timeout) {
+                                std::chrono::milliseconds timeout,
+                                RetryMode retry) {
     if (!running_.load(std::memory_order_acquire)) {
         throw IoError("send_cmd on stopped transport", EBADF);
     }
     const auto t = (timeout.count() == 0) ? cfg_.ack_timeout : timeout;
 
+    uint8_t seq           = 0;
+    bool    seq_allocated = false;
+
     for (unsigned attempt = 0; attempt <= cfg_.max_retries; ++attempt) {
-        const uint8_t seq = next_seq_.fetch_add(1, std::memory_order_relaxed);
+        // SameSeq keeps the first attempt's seq for every retry so the
+        // firmware recognises the repeat and replays its cached response
+        // rather than running a non-idempotent handler twice. Allocating
+        // lazily keeps NewSeq's wire behaviour byte-for-byte unchanged.
+        if (!seq_allocated || retry == RetryMode::NewSeq) {
+            seq           = next_seq_.fetch_add(1, std::memory_order_relaxed);
+            seq_allocated = true;
+        }
         std::future<AckResponse> fut;
         {
             std::lock_guard<std::mutex> lk(pending_mu_);

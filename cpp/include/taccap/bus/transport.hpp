@@ -53,6 +53,44 @@ struct AckResponse {
                                       // success, [err_code] on NACK)
 };
 
+// Recover the firmware's error code from a response, including the echoed-cmd
+// path that `is_nack` cannot see.
+//
+// Only handler *dispatch* failures take the cmd==0 wire path. A handler that
+// returns non-OK goes through protocol_send_response(seq, cmd, err, NULL, 0),
+// which echoes the command byte and packs the error as a single payload byte
+// — indistinguishable at the transport layer from a legitimate 1-byte
+// success response.
+//
+// This resolves the ambiguity in favour of "error", so it is ONLY valid for
+// commands whose successful response is never a single non-zero byte. That
+// holds for Cmd::Ota* (success is [0x00] or an 8-byte OtaStatus) and for the
+// V2.0 calibration commands (success is [0x00], 33 B or 5 B). It does NOT
+// hold for Cmd::MotorGetCanId / Cmd::MotorGetProtocol, whose success payload
+// is exactly one meaningful non-zero byte — never use this for those.
+protocol::ErrorCode ack_error_code(const AckResponse& ack) noexcept;
+
+// How send_cmd allocates the sequence number across retry attempts.
+enum class RetryMode : uint8_t {
+    // Every attempt gets a fresh seq. Correct for idempotent commands, and
+    // the historical behaviour.
+    NewSeq,
+    // Every attempt reuses the first seq. Use for commands the firmware must
+    // NOT execute twice: the firmware keeps the last request's seq/cmd/payload
+    // hash plus its real response, and replays that response for a byte-
+    // identical repeat instead of re-running the handler (see
+    // protocol_resend_cached_response in protocol_handler.c).
+    //
+    // This matters for Cmd::OtaWriteBlock above all: the firmware demands
+    // strictly sequential offsets and marks the whole session failed on a
+    // repeat, so a NewSeq retry after a merely-slow ACK would kill an
+    // otherwise fine update.
+    //
+    // The firmware caches exactly one request, so nothing else may be sent on
+    // this transport between attempts — true for the single-threaded OTA flow.
+    SameSeq,
+};
+
 class Transport {
 public:
     using DataCallback   = std::function<void(const Frame&)>;
@@ -94,7 +132,8 @@ public:
     // IoError on transport failure.
     AckResponse send_cmd(protocol::Cmd cmd,
                          const std::vector<uint8_t>& payload = {},
-                         std::chrono::milliseconds timeout = std::chrono::milliseconds{0});
+                         std::chrono::milliseconds timeout = std::chrono::milliseconds{0},
+                         RetryMode retry = RetryMode::NewSeq);
 
     // Send CMD_NO_ACK fire-and-forget.
     void send_cmd_no_ack(protocol::Cmd cmd,

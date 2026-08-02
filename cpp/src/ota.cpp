@@ -50,6 +50,29 @@ uint32_t crc32_iso_hdlc(const uint8_t* data, std::size_t len) noexcept {
 
 // ---- OtaSession -----------------------------------------------------------
 
+namespace {
+
+// Every OTA command is non-idempotent (OtaStart twice → OtaBusy; a repeated
+// OtaWriteBlock offset fails the whole session), so retries must reuse the
+// seq and let the firmware replay its cached response.
+constexpr auto kOtaRetry = bus::RetryMode::SameSeq;
+
+// Throw unless the firmware reported success. Checking ack.is_nack alone is
+// not enough: a handler that returns non-OK echoes the command byte and packs
+// the error as a single payload byte, which the transport reports as a
+// "successful" 1-byte response. No OTA command has a legitimate 1-byte
+// non-zero success payload (success is [0x00], or an 8-byte OtaStatus), so
+// bus::ack_error_code resolves it correctly here.
+void throw_if_error(const bus::AckResponse& ack, const char* what,
+                    const std::string& detail = {}) {
+    const auto err = bus::ack_error_code(ack);
+    if (err == protocol::ErrorCode::Ok) return;
+    throw ProtocolError(std::string("OtaSession::") + what + " NACK: " +
+                        protocol::to_string(err) + detail);
+}
+
+}  // namespace
+
 OtaSession::OtaSession(bus::Transport& transport) : t_(transport) {}
 
 void OtaSession::start(uint32_t firmware_size, uint32_t firmware_crc32,
@@ -63,56 +86,42 @@ void OtaSession::start(uint32_t firmware_size, uint32_t firmware_crc32,
     pl.target_patch   = target.patch;
     pl.target_build   = target.build;
     auto ack = t_.send_cmd(protocol::Cmd::OtaStart,
-                           protocol::encode(pl), timeout);
-    if (ack.is_nack) {
-        throw ProtocolError(std::string("OtaSession::start NACK: ") +
-                            protocol::to_string(ack.error_code));
-    }
+                           protocol::encode(pl), timeout, kOtaRetry);
+    throw_if_error(ack, "start");
 }
 
 void OtaSession::write_block(uint32_t offset, const uint8_t* data,
                              uint16_t length,
                              std::chrono::milliseconds timeout) {
     auto wire = protocol::encode_ota_write_block(offset, data, length);
-    auto ack = t_.send_cmd(protocol::Cmd::OtaWriteBlock, wire, timeout);
-    if (ack.is_nack) {
-        throw ProtocolError(std::string("OtaSession::write_block NACK: ") +
-                            protocol::to_string(ack.error_code) +
-                            " (offset=" + std::to_string(offset) +
-                            ", length=" + std::to_string(length) + ")");
-    }
+    auto ack = t_.send_cmd(protocol::Cmd::OtaWriteBlock, wire, timeout,
+                           kOtaRetry);
+    throw_if_error(ack, "write_block",
+                   " (offset=" + std::to_string(offset) +
+                   ", length=" + std::to_string(length) + ")");
 }
 
 void OtaSession::verify(std::chrono::milliseconds timeout) {
-    auto ack = t_.send_cmd(protocol::Cmd::OtaVerify, {}, timeout);
-    if (ack.is_nack) {
-        throw ProtocolError(std::string("OtaSession::verify NACK: ") +
-                            protocol::to_string(ack.error_code));
-    }
+    auto ack = t_.send_cmd(protocol::Cmd::OtaVerify, {}, timeout, kOtaRetry);
+    throw_if_error(ack, "verify");
 }
 
 void OtaSession::apply(std::chrono::milliseconds timeout) {
-    auto ack = t_.send_cmd(protocol::Cmd::OtaApply, {}, timeout);
-    if (ack.is_nack) {
-        throw ProtocolError(std::string("OtaSession::apply NACK: ") +
-                            protocol::to_string(ack.error_code));
-    }
+    auto ack = t_.send_cmd(protocol::Cmd::OtaApply, {}, timeout, kOtaRetry);
+    throw_if_error(ack, "apply");
 }
 
 void OtaSession::abort(std::chrono::milliseconds timeout) noexcept {
     // Best-effort: any failure here is recoverable by a fresh
     // start() or by hard-resetting the MCU, so don't propagate.
     try {
-        t_.send_cmd(protocol::Cmd::OtaAbort, {}, timeout);
+        t_.send_cmd(protocol::Cmd::OtaAbort, {}, timeout, kOtaRetry);
     } catch (...) {}
 }
 
 protocol::OtaStatus OtaSession::get_status(std::chrono::milliseconds timeout) {
-    auto ack = t_.send_cmd(protocol::Cmd::OtaGetStatus, {}, timeout);
-    if (ack.is_nack) {
-        throw ProtocolError(std::string("OtaSession::get_status NACK: ") +
-                            protocol::to_string(ack.error_code));
-    }
+    auto ack = t_.send_cmd(protocol::Cmd::OtaGetStatus, {}, timeout, kOtaRetry);
+    throw_if_error(ack, "get_status");
     return protocol::decode_ota_status(ack.data.data(), ack.data.size());
 }
 
