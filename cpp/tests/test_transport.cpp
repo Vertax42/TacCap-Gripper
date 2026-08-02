@@ -185,6 +185,66 @@ TEST(Transport, UnsubscribeStopsCallback) {
     EXPECT_EQ(count.load(), 1);
 }
 
+// stop() must drop subscriptions before joining the reader, so no callback
+// can be entered once shutdown has begun and every callback object is
+// destroyed on the caller's thread. The Python bindings depend on this: their
+// callback destructor takes the GIL, and running it on the reader thread
+// during interpreter teardown aborts the process.
+TEST(Transport, StopDropsSubscribersAndDestroysThemOnCaller) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+
+    std::atomic<int> count{0};
+    // Records the thread that destroyed the captured state — i.e. where the
+    // real binding's GIL-acquiring deleter would have run.
+    struct ThreadWitness {
+        std::thread::id* out;
+        ~ThreadWitness() { *out = std::this_thread::get_id(); }
+    };
+    std::thread::id destroyed_on{};
+
+    {
+        tb::Transport host(base_config(pty.slave_path()));
+        auto witness = std::make_shared<ThreadWitness>(ThreadWitness{&destroyed_on});
+        host.subscribe(tp::Cmd::GetEncoder,
+                       [&count, witness](const tb::Frame&) { ++count; });
+
+        pty.send_data(1, tp::Cmd::GetEncoder, std::vector<uint8_t>(16, 0));
+        const auto end = std::chrono::steady_clock::now() +
+                         std::chrono::milliseconds(500);
+        while (std::chrono::steady_clock::now() < end && count.load() < 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        ASSERT_GE(count.load(), 1) << "subscriber never fired before stop()";
+
+        host.stop();
+        EXPECT_EQ(destroyed_on, std::this_thread::get_id())
+            << "callback state must be destroyed on the thread calling stop(), "
+               "not on the reader thread";
+
+        // A frame arriving after stop() must not reach the callback. (The
+        // reader is joined by now, so this only reaches the kernel buffer.)
+        const int after_stop = count.load();
+        pty.send_data(2, tp::Cmd::GetEncoder, std::vector<uint8_t>(16, 0));
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        EXPECT_EQ(count.load(), after_stop);
+    }
+}
+
+// A double stop() must not double-drop the subscribers (they are already
+// gone) or trip over the empty vector. Complements StopIsIdempotent below,
+// which covers the reader/join half of idempotency.
+TEST(Transport, RepeatedStopWithSubscribersIsSafe) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    tb::Transport host(base_config(pty.slave_path()));
+    host.subscribe(tp::Cmd::GetEncoder, [](const tb::Frame&) {});
+    host.subscribe(tp::Cmd::GetImu,     [](const tb::Frame&) {});
+    host.stop();
+    host.stop();          // and ~Transport makes a third
+    EXPECT_FALSE(host.is_running());
+}
+
 TEST(Transport, SendCmdNoAckDoesNotBlock) {
     Pty pty;
     ASSERT_GE(pty.master(), 0);

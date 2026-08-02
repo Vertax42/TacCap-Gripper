@@ -26,6 +26,16 @@ fisheye-camera and leader-encoder-max calibration). Discovery is MCU-only;
 cameras are owned by an external camera service. Side/role come from the
 firmware SN (`parse_serial`) with a GetDevType fallback.
 
+**Worker threads outlive Python.** The transport reader and the camera
+capture thread are plain `std::thread`s — nothing stops them when the Python
+interpreter finalizes. Two rules keep that from aborting the process:
+`Transport::stop()` drops subscriptions *before* joining the reader (so
+callbacks die on the caller's thread, never on the reader during teardown),
+and every binding that calls into Python from a worker thread first checks
+whether the interpreter is finalizing and drops the event if so. The
+gripper `__exit__` handlers call `transport().stop()` so a `with` block leaves
+nothing running.
+
 **Firmware error wire path — a seam worth knowing.** The firmware reports
 handler errors with `protocol_send_response(seq, cmd, err, NULL, 0)`: the
 command byte is *echoed* (non-zero) and the payload is the single error byte.

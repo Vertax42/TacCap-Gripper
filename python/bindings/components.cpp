@@ -52,6 +52,27 @@ py::array make_vec3(const std::array<float, 3>& v) {
     return arr;
 }
 
+// True once the interpreter is finalizing or already gone.
+//
+// Worker threads (the transport reader, the camera capture thread) are plain
+// std::threads: nothing stops them at interpreter shutdown, and a Transport
+// that the user never stopped explicitly is often still reading when
+// Py_Finalize runs. Touching Python from such a thread afterwards aborts the
+// process inside PyGILState_Ensure — the "FATAL: exception not rethrown" you
+// get when a late DATA frame lands during teardown. (The firmware keeps
+// flushing queued frames for a while after StopStream, so this is easy to
+// hit in practice, not a theoretical race.)
+//
+// _Py_IsFinalizing() is private-but-stable across CPython 3.7-3.12 and became
+// public Py_IsFinalizing() in 3.13.
+bool interpreter_gone() noexcept {
+#if PY_VERSION_HEX >= 0x030D0000
+    return Py_IsFinalizing() != 0 || Py_IsInitialized() == 0;
+#else
+    return _Py_IsFinalizing() != 0 || Py_IsInitialized() == 0;
+#endif
+}
+
 // Wrap a py::function in a shared_ptr whose deleter acquires the GIL.
 // Background: the per-component callback wrappers below capture the
 // shared_ptr into the C++ callback lambda. The last shared_ptr ref dies
@@ -63,9 +84,30 @@ std::shared_ptr<py::function> make_gil_safe_callback(py::function pycb) {
     return std::shared_ptr<py::function>(
         new py::function(std::move(pycb)),
         [](py::function* p) {
+            if (interpreter_gone()) {
+                // Deliberately leak: the interpreter owns this object's
+                // memory and is tearing down anyway. Decref'ing now would
+                // abort the process.
+                return;
+            }
             py::gil_scoped_acquire gil;
             delete p;
         });
+}
+
+// Invoke a Python subscriber callback from a C++ worker thread. Skips the
+// call entirely once the interpreter is gone — dropping a late event is the
+// only safe option at that point. Exceptions never escape into the worker.
+template <typename Fn>
+void call_into_python(const char* what, Fn&& fn) noexcept {
+    if (interpreter_gone()) return;
+    py::gil_scoped_acquire acq;
+    try {
+        fn();
+    } catch (py::error_already_set& e) {
+        e.discard_as_unraisable(what);
+    } catch (...) {
+    }
 }
 
 // Wrap a cv::Mat (BGR8 expected) as a (H, W, 3) uint8 numpy array. This
@@ -168,11 +210,8 @@ void bind_components(py::module_& m) {
         .def("on_data", [](IMU& self, py::function pycb) {
             auto cb = make_gil_safe_callback(std::move(pycb));
             return self.on_data([cb](const ImuSample& s) {
-                py::gil_scoped_acquire acq;
-                try { (*cb)(s); }
-                catch (py::error_already_set& e) {
-                    e.discard_as_unraisable("xense.taccap.IMU callback");
-                } catch (...) {}
+                call_into_python("xense.taccap.IMU callback",
+                                 [&] { (*cb)(s); });
             });
         }, py::arg("callback"))
         .def("off", &IMU::off, py::arg("subscription_id"))
@@ -205,11 +244,8 @@ void bind_components(py::module_& m) {
         .def("on_event", [](Key& self, py::function pycb) {
             auto cb = make_gil_safe_callback(std::move(pycb));
             return self.on_event([cb](const KeySample& s) {
-                py::gil_scoped_acquire acq;
-                try { (*cb)(s); }
-                catch (py::error_already_set& e) {
-                    e.discard_as_unraisable("xense.taccap.Key callback");
-                } catch (...) {}
+                call_into_python("xense.taccap.Key callback",
+                                 [&] { (*cb)(s); });
             });
         }, py::arg("callback"))
         .def("off", &Key::off, py::arg("subscription_id"));
@@ -276,11 +312,8 @@ void bind_components(py::module_& m) {
         .def("on_report", [](SensorErrors& self, py::function pycb) {
             auto cb = make_gil_safe_callback(std::move(pycb));
             return self.on_report([cb](const SensorErrorSample& s) {
-                py::gil_scoped_acquire acq;
-                try { (*cb)(s); }
-                catch (py::error_already_set& e) {
-                    e.discard_as_unraisable("xense.taccap.SensorErrors callback");
-                } catch (...) {}
+                call_into_python("xense.taccap.SensorErrors callback",
+                                 [&] { (*cb)(s); });
             });
         }, py::arg("callback"))
         .def("off", &SensorErrors::off, py::arg("subscription_id"));
@@ -319,11 +352,8 @@ void bind_components(py::module_& m) {
             if (!on_progress.is_none()) {
                 auto pycb = make_gil_safe_callback(py::function(on_progress));
                 cb = [pycb](uint32_t wr, uint32_t tot) {
-                    py::gil_scoped_acquire acq;
-                    try { (*pycb)(wr, tot); }
-                    catch (py::error_already_set& e) {
-                        e.discard_as_unraisable("OtaSession progress");
-                    } catch (...) {}
+                    call_into_python("OtaSession progress",
+                                     [&] { (*pycb)(wr, tot); });
                 };
             }
             py::gil_scoped_release gil;
@@ -343,11 +373,8 @@ void bind_components(py::module_& m) {
             if (!on_progress.is_none()) {
                 auto pycb = make_gil_safe_callback(py::function(on_progress));
                 cb = [pycb](uint32_t wr, uint32_t tot) {
-                    py::gil_scoped_acquire acq;
-                    try { (*pycb)(wr, tot); }
-                    catch (py::error_already_set& e) {
-                        e.discard_as_unraisable("OtaSession progress");
-                    } catch (...) {}
+                    call_into_python("OtaSession progress",
+                                     [&] { (*pycb)(wr, tot); });
                 };
             }
             py::gil_scoped_release gil;
@@ -623,11 +650,8 @@ void bind_components(py::module_& m) {
         .def("on_data", [](Encoder& self, py::function pycb) {
             auto cb = make_gil_safe_callback(std::move(pycb));
             return self.on_data([cb](const EncoderSample& s) {
-                py::gil_scoped_acquire acq;
-                try { (*cb)(s); }
-                catch (py::error_already_set& e) {
-                    e.discard_as_unraisable("xense.taccap.Encoder callback");
-                } catch (...) {}
+                call_into_python("xense.taccap.Encoder callback",
+                                 [&] { (*cb)(s); });
             });
         }, py::arg("callback"))
         .def("off", &Encoder::off, py::arg("subscription_id"))
@@ -728,13 +752,13 @@ void bind_components(py::module_& m) {
             return self.read_status(std::chrono::milliseconds(timeout_ms));
         }, py::arg("timeout_ms") = 100)
         .def("on_status", [](Motor& self, py::function pycb) {
-            auto cb = std::make_shared<py::function>(std::move(pycb));
+            // make_gil_safe_callback, not a bare make_shared: the last
+            // reference can die on the transport reader thread, which holds
+            // no GIL.
+            auto cb = make_gil_safe_callback(std::move(pycb));
             return self.on_status([cb](const MotorStatusSample& s) {
-                py::gil_scoped_acquire acq;
-                try { (*cb)(s); }
-                catch (py::error_already_set& e) {
-                    e.discard_as_unraisable("xense.taccap.Motor callback");
-                } catch (...) {}
+                call_into_python("xense.taccap.Motor callback",
+                                 [&] { (*cb)(s); });
             });
         }, py::arg("callback"))
         .def("off", &Motor::off, py::arg("subscription_id"))
@@ -783,11 +807,8 @@ void bind_components(py::module_& m) {
         .def("start", [](Camera& self, py::function pycb) {
             auto cb = make_gil_safe_callback(std::move(pycb));
             self.start([cb](const CameraFrame& f) {
-                py::gil_scoped_acquire acq;
-                try { (*cb)(f); }
-                catch (py::error_already_set& e) {
-                    e.discard_as_unraisable("xense.taccap.Camera callback");
-                } catch (...) {}
+                call_into_python("xense.taccap.Camera callback",
+                                 [&] { (*cb)(f); });
             });
         }, py::arg("callback"))
         .def("stop", [](Camera& self) {
@@ -948,6 +969,11 @@ void bind_components(py::module_& m) {
         .def("__exit__",  [](LeaderGripper& g, py::object, py::object, py::object) {
             py::gil_scoped_release gil;
             g.stop_streaming();
+            // Also tear the link down, so callbacks and the reader thread are
+            // gone by the end of the `with` block rather than lingering until
+            // interpreter shutdown. Leaving them alive is what let a late DATA
+            // frame call into a finalized interpreter.
+            g.transport().stop();
         });
 
     // ---- FollowerGripper ------------------------------------------------
@@ -1052,6 +1078,9 @@ void bind_components(py::module_& m) {
         .def("__exit__",  [](FollowerGripper& g, py::object, py::object, py::object) {
             py::gil_scoped_release gil;
             g.stop_streaming();
+            // See LeaderGripper::__exit__ — drop the reader thread and its
+            // callbacks here rather than at interpreter shutdown.
+            g.transport().stop();
         });
 
     // ---- GripperObservation ---------------------------------------------

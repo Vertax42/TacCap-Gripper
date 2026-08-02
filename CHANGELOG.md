@@ -40,10 +40,38 @@ Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware
   guided `measure-encoder-max`) and
   `python/examples/leader_normalized_position.py`.
 
+### Fixed
+- **Process abort at interpreter shutdown** (`FATAL: exception not rethrown`)
+  when a Python `on_data` / `on_status` subscriber was still registered at
+  exit. The transport reader thread is a plain `std::thread` that nothing
+  stops at teardown, so a DATA frame arriving after `Py_Finalize` — easy to
+  hit, because the firmware keeps flushing queued frames for a while after
+  `StopStream` — called into a finalized interpreter and aborted inside
+  `PyGILState_Ensure`. Pre-existing; reproduced at 0.1.6 with none of the
+  V2.1 work applied. Three parts:
+  - `bus::Transport::stop()` now drops all subscriptions **before** joining
+    the reader, so no callback can be entered once shutdown has begun and
+    every callback object is destroyed on the caller's thread. The callbacks
+    are destroyed outside `sub_mu_` — their destructors take the GIL, and
+    holding the subscription mutex across that invites a lock-order inversion
+    against the reader.
+  - The Python binding's callback wrappers and the GIL-acquiring `shared_ptr`
+    deleter now check for a finalizing/finalized interpreter and drop the
+    late event (the deleter leaks the object rather than aborting — the
+    interpreter is tearing down anyway).
+  - `Motor.on_status` used a bare `make_shared` instead of the GIL-safe
+    wrapper every other component uses — the exact hazard. Fixed.
+
 ### Changed
 - `EncoderSample::position_rad` is **unchanged** — it still always reports
   radians. Normalization adds the `position` field rather than repurposing an
   existing one; `position` is NaN while no map is installed.
+- **`LeaderGripper.__exit__` / `FollowerGripper.__exit__` now stop the
+  transport**, not just the stream, so the reader thread and its callbacks are
+  gone at the end of the `with` block. A gripper used after its `with` block
+  now raises `IoError("send_cmd on stopped transport")` instead of appearing
+  to work; re-entering a `with` block on the same object is no longer
+  supported. This matches `ControlLoop.__exit__`, which already stopped.
 
 ### Notes
 - The firmware reports handler errors via

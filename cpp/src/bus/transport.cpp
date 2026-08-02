@@ -119,14 +119,31 @@ bool Transport::is_running() const noexcept {
     return running_.load(std::memory_order_acquire);
 }
 
+void Transport::clear_subs_() noexcept {
+    std::vector<Sub> doomed;
+    {
+        std::lock_guard<std::mutex> lk(sub_mu_);
+        doomed.swap(subs_);
+    }
+    // `doomed` destructs here, with sub_mu_ released: the Python bindings'
+    // callback destructor acquires the GIL, and the reader thread may be
+    // holding the GIL inside a callback while it waits for sub_mu_.
+}
+
 void Transport::stop() noexcept {
     if (!running_.exchange(false, std::memory_order_acq_rel)) {
         // Already stopped — make sure the reader (if it's still alive due to
         // an earlier failure path) is joined.
         if (reader_.joinable()) reader_.join();
+        clear_subs_();
         return;
     }
     stop_requested_.store(true, std::memory_order_release);
+    // Drop subscriptions BEFORE the join. handle_data_ snapshots subs_ under
+    // the lock, so once this returns the reader can no longer enter a
+    // callback, and the callback objects die here on the caller's thread
+    // instead of on the reader during teardown.
+    clear_subs_();
     if (reader_.joinable()) reader_.join();
     fail_pending_("transport stopped");
 }

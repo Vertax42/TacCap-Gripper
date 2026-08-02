@@ -106,7 +106,13 @@ public:
     void unsubscribe(SubscriptionId id);
 
     bool is_running() const noexcept;
-    void stop() noexcept;   // graceful, idempotent
+
+    // Graceful, idempotent shutdown. Drops all subscriptions BEFORE joining
+    // the reader thread, so no callback can be entered once stop() has begun
+    // and every callback object is destroyed on the calling thread rather
+    // than on the reader. That ordering matters for the Python bindings,
+    // whose callback destructor takes the GIL.
+    void stop() noexcept;
 
     Stats stats() const noexcept;
 
@@ -130,6 +136,12 @@ private:
     // Fail every pending ACK with the given error message. Called on
     // reader exit and on stop().
     void fail_pending_(const std::string& reason) noexcept;
+
+    // Drop every subscription. The callbacks are destroyed OUTSIDE sub_mu_ —
+    // a callback destructor may take arbitrary locks (the Python binding's
+    // takes the GIL), and holding the subscription mutex across that would
+    // invite a lock-order inversion against the reader thread.
+    void clear_subs_() noexcept;
 
     Config         cfg_;
     SerialBus      serial_;
