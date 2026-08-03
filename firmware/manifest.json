@@ -1,7 +1,6 @@
 {
   "protocol": "V2.1",
   "source": {
-    "repo": "git@192.168.110.140:xense/tc-gu-01.git",
     "branch": "hw_v1.1.0",
     "commit": "f5dd08603ec5f9e38b563551295a188a9eebbd68"
   },

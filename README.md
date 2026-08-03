@@ -676,22 +676,20 @@ taccap-gripper/
 
 The wire protocol this SDK speaks is defined by the firmware that runs
 on the gripper's STM32H562 MCU. The protocol PDF + Python prototype
-(in PyQt) live in two upstream repos on the company GitLab that we
-**read but don't ship** — they have separate release cadences and
-build toolchains and shouldn't be linked into this SDK's git history.
+(in PyQt) live in two **internal** repos that we **read but don't
+ship** — they have separate release cadences and build toolchains and
+shouldn't be linked into this SDK's git history. Ask the firmware team
+for access if you are working on the wire format.
 
-```
-# Optional but recommended for any work that touches the wire format:
-mkdir -p third_party/firmware
-cd third_party/firmware
-git clone -b master git@192.168.110.140:xense/tc-gu-01.git      # STM32 firmware
-git clone -b master git@192.168.110.140:xense/tc-gu-01-pc.git   # PyQt GUI
-```
+If you have them, clone into `third_party/firmware/tc-gu-01` and
+`third_party/firmware/tc-gu-01-pc`: both paths are in `.gitignore`, so
+they sit next to the SDK for easy `grep` / IDE discovery but never
+appear in `git status`.
 
-Both paths are listed in `.gitignore` — they live next to the SDK for
-easy `grep` / IDE discovery but never appear in `git status`.
+You do **not** need either to flash a gripper — the released images ship
+in [`firmware/`](firmware/).
 
-What's where:
+What's in them:
 
 - `tc-gu-01/App/protocol/protocol_cmd.h` + `protocol_data.h` — canonical
   command enum + POD payload layouts. The SDK's

@@ -26,9 +26,9 @@ compile_commands.json
 Thumbs.db
 
 # Project — reference clones of the upstream firmware + PC GUI repos.
-# Tracked in their own git histories (gitlab.../xense/tc-gu-01[-pc].git),
-# NOT as submodules — this SDK only depends on the wire protocol they
-# define, not on their build artefacts. Clone-on-demand for development;
+# Tracked in their own (internal) git histories, NOT as submodules — this
+# SDK only depends on the wire protocol they define, not on their build
+# artefacts. Clone-on-demand for development;
 # see README.md "Firmware / PC GUI reference repos".
 /third_party/firmware/
 
