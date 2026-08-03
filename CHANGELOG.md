@@ -7,8 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-03
+
 Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware
 1.2.0, follower 1.1.0).
+
+Validated on two leader grippers flashed from source to 1.2.0.0 over OTA.
+
+> **Downstream on pybind11 2.x should update.** The Python IMU vector fix
+> below changes the data affected consumers read — `accel_mps2` /
+> `gyro_radps` / `mag_uT` were returning the x component three times. It only
+> bites builds made against **pybind11 2.9**, which here means the system
+> py3.10 wheel used by ROS 2 Humble; conda py3.12 builds (pybind11 3.0.x)
+> resolved the overload correctly and were never affected. Check yours with
+> `python -c "from xense.taccap import ...; print(sample.accel_mps2.strides)"`
+> — `(0,)` means affected, `(4,)` means fine.
 
 ### Added
 - **Fisheye camera calibration** (`Cmd 0x2B`). New `protocol::CameraFisheyeCal`
@@ -47,8 +60,14 @@ Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware
   pybind11 2.9 picks a different overload and yields a shape-(3,) array with
   **stride 0** — a broadcast view of element [0], so the writes to `p[1]` and
   `p[2]` landed on the same address. No error, no crash, just silently wrong
-  data on every Python IMU read, including the ROS 2 node, rerun
-  visualisation and dataset recording. The C++ side was never affected.
+  data on every Python IMU read.
+  **Scope: builds made against pybind11 2.9 only.** Here that is the system
+  py3.10 wheel (ROS 2 Humble); the conda py3.12 builds use pybind11 3.0.x,
+  which resolves the overload correctly — verified against a pre-fix 3.0.4
+  build that reported correct per-axis strides. The C++ side was never
+  affected either way. Spelling the shape as a container makes it correct on
+  every pybind11 version rather than relying on which one happens to be
+  installed.
   Pre-existing, and independent of the V2.1 work — reproduced on a gripper
   still running the old firmware. Verified on two units: before
   `accel=[9.561, 9.561, 9.561]` (|a| = 16.56), after

@@ -24,14 +24,10 @@ Both adapters consume this SDK; they do not reimplement device access.
 
 ## Status
 
-**v0.1.6 — leader sensing + follower control, hardware-validated.** Tested on
-bilateral leader setups (left + right, ~280 MB/s outbound) and on a real
-follower gripper (MIT force-position control, normalized grasp, LED, auto-cal).
-What's in:
-
-- TC-GU-01 protocol: **wire framing V1.8** (global byte stuffing) +
-  **command set V2.1**. Async transport with ACK matching, per-cmd DATA
-  subscribers.
+**v0.1.7 — firmware V2.1 sync, hardware-validated.** Tested on bilateral
+leader setups (left + right, ~280 MB/s outbound, both flashed to leader
+1.2.0) and on a real follower gripper (MIT force-position control, normalized
+grasp, LED, auto-cal).
 
 > **Firmware you need.** Command set V2.1 ships in **leader 1.2.0** /
 > **follower 1.1.0** (firmware repo `hw_v1.1.0` @ `f5dd086`). Check with
@@ -45,6 +41,12 @@ What's in:
 > span from the host when the firmware cannot store it.
 >
 > To build and flash: see [Firmware / PC GUI reference repos](#firmware--pc-gui-reference-repos).
+
+What's in:
+
+- TC-GU-01 protocol: **wire framing V1.8** (global byte stuffing) +
+  **command set V2.1**. Async transport with ACK matching, per-cmd DATA
+  subscribers.
 - **Follower motor control (MIT), validated on hardware.** `Motor` enable /
   disable / clear-fault + four control modes (position / velocity / torque /
   impedance). The MIT impedance frame *is* the force-position hybrid primitive
@@ -169,7 +171,7 @@ What ends up where (editable build):
 ```
 python/xense/taccap/
 ├── _taccap_native.cpython-312-x86_64-linux-gnu.so   # pybind11 module
-└── libtaccap_core.so.0.1.6   (+ .so.0 symlink)      # SDK core
+└── libtaccap_core.so.0.1.7   (+ .so.0 symlink)      # SDK core
 ```
 
 These two are co-located on purpose — the rpath is set to `$ORIGIN`,
@@ -199,7 +201,7 @@ Output:
 
 ```
 build/
-├── cpp/libtaccap_core.so(.0)(.0.1.6)
+├── cpp/libtaccap_core.so(.0)(.0.1.7)
 ├── cpp/examples/leader_demo
 └── cpp/tests/...                # gtest binaries; run via `ctest`
 ```
@@ -217,8 +219,8 @@ CMake options (top-level `CMakeLists.txt:19-21`):
 ```bash
 # Python — note `env -u PYTHONPATH`, see the note below
 env -u PYTHONPATH python -c "import xense.taccap as t; print(t.hello()); print(t.__version__)"
-# → taccap-gripper OK; version 0.1.6
-# → 0.1.6
+# → taccap-gripper OK; version 0.1.7
+# → 0.1.7
 
 # Python tests (hardware-free cases always run; IMU cases skip without a gripper)
 env -u PYTHONPATH pytest python/tests
