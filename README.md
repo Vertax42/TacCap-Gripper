@@ -486,7 +486,7 @@ All scripts live under `python/examples/`. Enable C++ examples with
 | Script                           | What it does                                                                                                                                                                                                                                                                                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rerun_dual_with_tracker.py`     | Dual-gripper IMU/encoder + Pico4 motion-tracker 6-DoF poses in one viewer. Requires [`xensevr_pc_service_sdk`](https://github.com/Vertax42/Xense-Pico-Teleop-Interface) and the XenseVR PC Service running. Use `--left-tracker-sn` / `--right-tracker-sn` to map tracker SNs to sides. (Cameras are owned by the external camera service and not shown here.)                                  |
-| `calibrate.py`                   | Per-SN encoder calibration CLI — latches the zero **and stores the measured travel span** (`Cmd::EncoderMaxCal`), which is what unlocks normalized position. Shows raw + cooked side-by-side, then a live `raw \| cooked \| position 0..1` readout. Checks firmware support before writing anything. See [Calibration](#calibration).                                                          |
+| `calibrate.py`                   | Per-gripper encoder calibration CLI, selected by `left` / `right` (or an explicit SN) — latches the zero **and stores the measured travel span** (`Cmd::EncoderMaxCal`), which is what unlocks normalized position. Shows raw + cooked side-by-side, then a live `raw \| cooked \| position 0..1` readout. Checks firmware support before writing anything. See [Calibration](#calibration).                                                          |
 | `gripper_control_test.py`        | Interactive follower open/close test — steps through positions via both one-shot `set_position(0..1)` and the realtime `ControlLoop`, reading position back. See [Follower gripper control](#follower-gripper-control-mit-force-position).                                                                                                                                                    |
 | `motor_mit_control.py`           | Primitive demo of the raw MIT submission API (`submit_impedance`) with the out-of-band health channel (`control_stats` / `read_status`).                                                                                                                                                                                                                                                    |
 | `fisheye_cal.py`                 | Read/write the flash-persisted calibration records (V2.0/V2.1): `show`, `set-fisheye` (flags or an OpenCV `.npz` holding `K`/`D`), `set-encoder-max`, and `measure-encoder-max` — the guided close-zero → open-sample → store flow that unlocks normalized leader position.                                                                                                                     |
@@ -559,15 +559,20 @@ absorbs this two ways:
   logger emits a rate-limited warning (1 / s per `Encoder` instance)
   pointing at calibration or mechanical issues.
 
-To calibrate a gripper, run `calibrate.py` against the SN you want to fix:
+To calibrate a gripper, run `calibrate.py` against the side you want to fix
+(or its SN, if you'd rather be explicit):
 
 ```bash
-python python/examples/calibrate.py TCGU01A28Z0023m   # left leader gripper
+python python/examples/calibrate.py left               # by side
+python python/examples/calibrate.py TCGU01A28Z0023m    # by firmware SN
 ```
 
 The script:
 
-1. Resolves the firmware SN to the right `mcu_device`.
+1. Resolves `left`/`right` (or the SN you passed) to one `mcu_device`, and
+   prints the firmware SN it picked plus every gripper it can see, so the
+   pick is verifiable. Side comes from the firmware-burned SN read over the
+   wire (`Cmd::GetSn`), not the CH343 chip serial.
 2. **Pre-flight:** checks the firmware implements `Cmd::EncoderMaxCal`
    (0x2C). This runs *before* anything is written — step 4 persists a new
    zero, so a pre-V2.1 gripper is refused while still untouched rather than

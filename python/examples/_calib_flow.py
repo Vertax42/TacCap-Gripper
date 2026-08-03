@@ -229,7 +229,7 @@ def offer_calibration(gripper, *, fw_version: str | None = None,
         reply = input("  Calibrate now? [Y/n] ")
         if reply.strip().lower() in ("n", "no"):
             print("  Skipped. Run this later:\n"
-                  "      python python/examples/calibrate.py <SN>")
+                  "      python python/examples/calibrate.py <left|right|SN>")
             return False
     return guided_calibration(gripper, fw_version=fw_version,
                               assume_yes=assume_yes) is not None

@@ -3,10 +3,13 @@
 """
 Encoder calibration for a TacCap leader gripper — zero + travel span.
 
-Pick which gripper to calibrate by its firmware SN (so when both sides
-are plugged in, you don't accidentally zero the wrong one). The script:
+Pick which gripper to calibrate by side — ``left`` / ``right`` — or, if
+you prefer to be explicit, by its firmware SN. Either way exactly one
+gripper is selected, so with both sides plugged in you cannot
+accidentally zero the wrong one. The script:
 
-  1. Resolves the SN to mcu / wrist-camera / tactile endpoints.
+  1. Resolves the side (or SN) to one endpoint and prints the firmware SN
+     it picked, so what got calibrated is on the record.
   2. Opens the LeaderGripper and prints the current encoder reading.
   3. Asks you to hold the gripper FULLY CLOSED, then latches that pose
      as the new zero via Encoder::set_zero (wire Cmd::SetEncoderZero).
@@ -21,8 +24,13 @@ firmware >= V2.1 (leader 1.2.0); the script checks that up front, before
 step 3 writes anything, so an old gripper is never left half-calibrated.
 
 Usage:
-    python python/examples/calibrate.py TCGU01A28Z0023m
-    python python/examples/calibrate.py TCGU01A28Z0023m --skip-open-probe
+    python python/examples/calibrate.py left
+    python python/examples/calibrate.py right --skip-open-probe
+    python python/examples/calibrate.py TCGU01A28Z0023m   # explicit SN
+
+Side comes from the firmware-burned SN read over the wire (Cmd::GetSn),
+not from the CH343 USB chip serial — the same rule the rest of the stack
+uses, so ``left`` here is the same gripper ``left`` means everywhere else.
 
 Tip: list available SNs with
     python -c "from xense.taccap import scan_grippers, Side; \\
@@ -67,27 +75,69 @@ def _rad_to_deg(r: float) -> float:
     return r * 180.0 / math.pi
 
 
-def _resolve_sn(sn: str):
+# Accepted spellings of the side selector. Anything else on the command
+# line is treated as a literal firmware SN, so the two forms can never
+# collide (Xense SNs start with "TCGU01…").
+_SIDE_ALIASES = {
+    "left": Side.Left,
+    "l": Side.Left,
+    "right": Side.Right,
+    "r": Side.Right,
+}
+
+
+def _side_str(side) -> str:
+    return {Side.Left: "Left", Side.Right: "Right"}.get(side, "Unknown")
+
+
+def _listing(all_eps) -> str:
+    return (
+        ", ".join(f"{e.firmware_sn} ({_side_str(e.side)})" for e in all_eps)
+        or "(none)"
+    )
+
+
+def _resolve_target(target: str):
+    """Resolve ``left``/``right`` (or a literal firmware SN) to one endpoint.
+
+    Side is whatever the firmware SN says (``scan_grippers()`` reads it over
+    the wire via Cmd::GetSn) — deliberately not the CH343 chip serial, which
+    is unrelated to which hand the gripper is.
+    """
     all_eps = scan_grippers()
-    matches = [e for e in all_eps if e.firmware_sn == sn]
+    side = _SIDE_ALIASES.get(target.strip().lower())
+    by_side = side is not None
+
+    if by_side:
+        matches = [e for e in all_eps if e.side == side]
+        what = f"side={_side_str(side)}"
+    else:
+        matches = [e for e in all_eps if e.firmware_sn == target]
+        what = f"firmware SN={target!r}"
+
     if not matches:
-        listing = (
-            ", ".join(
-                f"{e.firmware_sn} ({'L' if e.side == Side.Left else 'R'})"
-                for e in all_eps
-            )
-            or "(none)"
+        hint = (
+            ""
+            if by_side
+            else "\n       (you can also just pass 'left' or 'right')"
         )
         sys.exit(
-            f"error: no gripper with firmware SN={sn!r} is plugged in.\n"
-            f"       currently visible: {listing}"
+            f"error: no gripper matching {what} is plugged in.\n"
+            f"       currently visible: {_listing(all_eps)}{hint}"
         )
     if len(matches) > 1:
+        if by_side:
+            sys.exit(
+                f"error: {len(matches)} plugged-in grippers report "
+                f"{what} — their firmware SNs are "
+                f"{', '.join(e.firmware_sn for e in matches)}. Fix the "
+                "burned SNs, or pass the SN you want explicitly."
+            )
         sys.exit(
-            f"error: {len(matches)} grippers report SN={sn!r} — firmware-SN "
-            "collision, check firmware burning."
+            f"error: {len(matches)} grippers report SN={target!r} — "
+            "firmware-SN collision, check firmware burning."
         )
-    return matches[0]
+    return matches[0], by_side, all_eps
 
 
 def _open_gripper(eps) -> LeaderGripper:
@@ -117,18 +167,23 @@ def _prompt(msg: str) -> None:
         sys.exit(_red("aborted."))
 
 
-def calibrate(sn: str, *, skip_open_probe: bool) -> int:
-    eps = _resolve_sn(sn)
-    side_str = "Left" if eps.side == Side.Left else "Right"
+def calibrate(target: str, *, skip_open_probe: bool) -> int:
+    eps, by_side, all_eps = _resolve_target(target)
 
     print()
     print(_cyan("=" * 64))
     print(_cyan(f"  TacCap leader-gripper encoder calibration"))
     print(_cyan("=" * 64))
+    print(f"  requested    : {_bold(target)}"
+          f"{'  (resolved by side)' if by_side else ''}")
     print(f"  firmware SN  : {_bold(eps.firmware_sn)}")
-    print(f"  side         : {_bold(side_str)}")
+    print(f"  side         : {_bold(_side_str(eps.side))}")
     print(f"  mcu serial   : {eps.mcu_serial}")
     print(f"  mcu device   : {eps.mcu_device}")
+    if by_side:
+        # Show the whole scan when the SN was chosen for the user — it is
+        # the only way they can tell the pick was the one they meant.
+        print(f"  visible      : {_listing(all_eps)}")
     print()
 
     g = _open_gripper(eps)
@@ -247,8 +302,11 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
-        "sn",
-        help="Firmware SN of the leader gripper to calibrate (e.g. SN000003).",
+        "target",
+        metavar="left|right|SN",
+        help="Which leader gripper to calibrate: 'left' / 'right' (the "
+             "firmware SN is looked up and printed for you), or an explicit "
+             "firmware SN such as TCGU01A28Z0023m.",
     )
     p.add_argument(
         "--skip-open-probe",
@@ -257,7 +315,7 @@ def main() -> int:
              "travel span (leaves normalized position unavailable).",
     )
     args = p.parse_args()
-    return calibrate(args.sn, skip_open_probe=args.skip_open_probe)
+    return calibrate(args.target, skip_open_probe=args.skip_open_probe)
 
 
 if __name__ == "__main__":
