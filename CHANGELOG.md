@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`calibrate.py` selects the gripper by side**: `calibrate.py left` /
+  `calibrate.py right` instead of hunting for a firmware SN first. The SN is
+  resolved from `scan_grippers()` (side comes from the burned SN read over the
+  wire, `Cmd::GetSn`) and printed in the header along with every gripper the
+  scan saw, so the pick is verifiable before anything reaches flash. Two
+  grippers reporting the same side is an error naming both SNs, never a guess.
+  Passing an explicit firmware SN still works unchanged.
+
 ## [0.1.7] - 2026-08-03
 
 Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware
