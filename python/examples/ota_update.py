@@ -36,6 +36,7 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -133,7 +134,75 @@ def _cmd_get_status(g: LeaderGripper) -> int:
     return 0
 
 
-def _cmd_update(args: argparse.Namespace, g: LeaderGripper) -> int:
+def _dim(t: str) -> str:
+    return f"\033[2m{t}\033[0m" if sys.stdout.isatty() else t
+
+
+def _load_manifest() -> dict:
+    """Read firmware/manifest.json if it is there. Absent is fine."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "..", "..", "firmware", "manifest.json")
+    try:
+        with open(path, "rb") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _check_role(fw_bytes: bytes, firmware_sn: str, force: bool) -> int:
+    """Refuse to flash an image built for the other role.
+
+    A gripper's role is the last character of its firmware SN, NOT which hand
+    it is on — two grippers on opposite sides of a rig are often both masters.
+    Flashing the wrong role's image bricks the MCU and needs an SWD probe to
+    recover, so this is worth blocking rather than warning about.
+
+    Identification is by CRC32 against firmware/manifest.json, so it only
+    fires for our released images; a hand-built or third-party .bin is
+    unidentifiable and passes through with a note.
+    """
+    manifest = _load_manifest()
+    images = manifest.get("images", {})
+    if not images or not firmware_sn:
+        return 0
+
+    # Compare as integers, not strings: "0x...".upper() also uppercases the
+    # "x" in the prefix, so a string compare silently never matches.
+    def _crc_of(meta) -> int:
+        try:
+            return int(str(meta.get("crc32", "")), 16)
+        except ValueError:
+            return -1
+
+    crc = crc32_iso_hdlc(fw_bytes)
+    matched = next((role for role, meta in images.items()
+                    if _crc_of(meta) == crc), None)
+    if matched is None:
+        print(f"  role check  : {_dim('image not in manifest, cannot verify')}")
+        return 0
+
+    want = images[matched].get("sn_suffix", "")
+    have = firmware_sn[-1:]
+    if have == want:
+        print(f"  role check  : OK — {matched} image, SN ends {have!r}")
+        return 0
+
+    other = next((r for r, m in images.items() if m.get("sn_suffix") == have),
+                 "unknown")
+    msg = (f"[ROLE MISMATCH] this is the {matched.upper()} image "
+           f"(expects SN ending {want!r}), but {firmware_sn} ends {have!r} "
+           f"— it is a {other.upper()}.")
+    if not force:
+        print(f"\n{msg}\n"
+              f"Flashing the wrong role bricks the MCU and needs an SWD probe "
+              f"to recover.\nUse firmware/tc-gu-01-{other}.bin instead, or "
+              f"--force if you really mean it.", file=sys.stderr)
+        return 1
+    print(f"\n{msg}\n--force given, proceeding anyway.", file=sys.stderr)
+    return 0
+
+
+def _cmd_update(args: argparse.Namespace, g: LeaderGripper, eps) -> int:
     fw_path = args.firmware
     if not os.path.isfile(fw_path):
         print(f"[ERROR] firmware file not found: {fw_path}", file=sys.stderr)
@@ -154,6 +223,8 @@ def _cmd_update(args: argparse.Namespace, g: LeaderGripper) -> int:
     print(f"  size         : {_format_size(fw_size)}")
     print(f"  CRC32        : 0x{crc:08X}")
     print(f"  target ver   : {target.major}.{target.minor}.{target.patch}.{target.build}")
+    if _check_role(fw_bytes, getattr(eps, "firmware_sn", "") or "", args.force):
+        return 1
     print()
 
     if not args.yes:
@@ -208,6 +279,9 @@ def main(argv=None) -> int:
                    help="Suppress per-block progress bar")
     p.add_argument("--yes", "-y", action="store_true",
                    help="Skip the interactive confirmation prompt")
+    p.add_argument("--force", action="store_true",
+                   help="flash even if the image's role does not match the "
+                        "gripper's firmware SN (bricks the MCU if wrong)")
     p.add_argument("--get-status", action="store_true",
                    help="Print current firmware-side OTA state machine + exit")
     args = p.parse_args(argv)
@@ -232,7 +306,7 @@ def main(argv=None) -> int:
         finally:
             del g
 
-    rc = _cmd_update(args, g)
+    rc = _cmd_update(args, g, eps)
     # Don't try to stop_streaming / clean shutdown — after OtaApply the
     # firmware is rebooting and any wire command will time out, which
     # would dirty the output. Let Python tear the gripper down on exit.

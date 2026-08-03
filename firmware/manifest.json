@@ -1,0 +1,24 @@
+{
+  "protocol": "V2.1",
+  "source": {
+    "repo": "git@192.168.110.140:xense/tc-gu-01.git",
+    "branch": "hw_v1.1.0",
+    "commit": "f5dd08603ec5f9e38b563551295a188a9eebbd68"
+  },
+  "images": {
+    "master": {
+      "file": "tc-gu-01-master.bin",
+      "version": "1.2.0.0",
+      "size_bytes": 116884,
+      "crc32": "0xACB8F971",
+      "sn_suffix": "m"
+    },
+    "slave": {
+      "file": "tc-gu-01-slave.bin",
+      "version": "1.1.0.0",
+      "size_bytes": 149256,
+      "crc32": "0xE27FAD49",
+      "sn_suffix": "s"
+    }
+  }
+}
