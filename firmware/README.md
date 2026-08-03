@@ -46,7 +46,9 @@ pip install -e .          # or however you install this SDK
 python python/examples/fisheye_cal.py show
 
 # 2. Flash. --side picks the gripper; the image must match the ROLE.
-python python/examples/ota_update.py firmware/tc-gu-01-master.bin \
+#    Naming the image is enough — the script looks here for it, so this
+#    line also works from a parent repo that vendors this one.
+python python/examples/ota_update.py tc-gu-01-master.bin \
     --side left --target-version 1.2.0.0
 
 # 3. Confirm — GetVersion returns the compiled-in constant, so the version

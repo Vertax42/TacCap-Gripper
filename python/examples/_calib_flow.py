@@ -18,6 +18,7 @@ a non-positive span, or a zero that did not take.
 from __future__ import annotations
 
 import math
+import os
 import sys
 
 from xense.taccap import ProtocolError
@@ -48,6 +49,25 @@ def green(s):
 
 def red(s):
     return _c("31", s)
+
+
+def _ota_script_path() -> str:
+    """Path to ota_update.py that the reader can paste as-is.
+
+    Relative to their cwd, because this repo is usually vendored as a
+    submodule: someone running calibrate.py from a parent repo's root needs
+    third_party/taccap-gripper/python/examples/..., and a hardcoded
+    python/examples/... would send them looking for a directory they are not
+    standing in. Falls back to the absolute path when relpath would climb out
+    of the tree (different drive, or a cwd above nothing in common).
+    """
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "ota_update.py")
+    try:
+        rel = os.path.relpath(p)
+    except ValueError:
+        return p
+    return rel if not rel.startswith(os.pardir + os.sep) else p
 
 
 def deg(rad: float) -> str:
@@ -105,10 +125,11 @@ def require_support(gripper, fw_version: str | None = None) -> None:
             f"(leader 1.2.0); this gripper reports {fw_version}.\n"
             f"  {e}\n"
             f"  Nothing was changed. Flash it first:\n"
-            f"      python python/examples/ota_update.py \\\n"
-            f"          third_party/firmware/tc-gu-01/build/master/"
-            f"tc-gu-01-master.bin \\\n"
-            f"          --side <left|right> --target-version 1.2.0.0"
+            f"      python {_ota_script_path()} tc-gu-01-master.bin \\\n"
+            f"          --side <left|right> --target-version 1.2.0.0\n"
+            f"  (that image ships in this SDK under firmware/; pick it by the\n"
+            f"   gripper's ROLE — the last character of its firmware SN, 'm'\n"
+            f"   for master and 's' for slave — not by which hand it is on.)"
         ) from None
 
 

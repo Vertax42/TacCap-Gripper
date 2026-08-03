@@ -737,6 +737,16 @@ python python/examples/ota_update.py \
     --side left --target-version 1.2.0.0
 ```
 
+> Only builds you made yourself need that path. To flash the **released**
+> images, name them and let the script find them in [`firmware/`](firmware/) —
+> that resolves from any working directory, including a parent repo that
+> vendors this one as a submodule:
+>
+> ```bash
+> python python/examples/ota_update.py tc-gu-01-master.bin \
+>     --side left --target-version 1.2.0.0
+> ```
+
 Notes:
 
 - **`make` succeeding does not mean it will flash.** The linker script declares

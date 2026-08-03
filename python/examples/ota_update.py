@@ -6,18 +6,22 @@ TacCap-Gripper firmware over-the-air (OTA) update demo.
 Pushes a firmware .bin to the MCU's inactive Flash bank, verifies its
 CRC32, and triggers the bank-swap reboot. No SWD probe needed.
 
+The released images ship in this repo under `firmware/`, so the usual
+argument is just their name — it resolves against that directory from any
+working directory, including a parent repo that vendors this one.
+
 Usage:
 
     # Push firmware to whichever gripper is plugged in (single-gripper)
-    python python/examples/ota_update.py path/to/tc-gu-01.bin
+    python python/examples/ota_update.py tc-gu-01-master.bin
 
     # Bilateral: pick a side explicitly
-    python python/examples/ota_update.py path/to/tc-gu-01.bin --side left
+    python python/examples/ota_update.py tc-gu-01-master.bin --side left
 
     # Tag the target version (informational; firmware uses it for the
     # post-install verification log + bank metadata).
-    python python/examples/ota_update.py path/to/tc-gu-01.bin \\
-        --target-version 1.6.2.3
+    python python/examples/ota_update.py tc-gu-01-master.bin \\
+        --target-version 1.2.0.0
 
     # Just probe — don't flash anything
     python python/examples/ota_update.py --get-status
@@ -138,15 +142,51 @@ def _dim(t: str) -> str:
     return f"\033[2m{t}\033[0m" if sys.stdout.isatty() else t
 
 
+def _sdk_root() -> str:
+    """This repo's root — two levels up from python/examples/."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(here, "..", ".."))
+
+
+def _firmware_dir() -> str:
+    return os.path.join(_sdk_root(), "firmware")
+
+
 def _load_manifest() -> dict:
     """Read firmware/manifest.json if it is there. Absent is fine."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(here, "..", "..", "firmware", "manifest.json")
     try:
-        with open(path, "rb") as f:
+        with open(os.path.join(_firmware_dir(), "manifest.json"), "rb") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
+
+
+def _resolve_firmware(path: str) -> Optional[str]:
+    """Find the image whether `path` is relative to the cwd or to this repo.
+
+    The images ship inside this repo, but the repo is usually vendored as a
+    submodule of something else — so `firmware/tc-gu-01-master.bin`, the path
+    our docs print because it works from the SDK root, is not the path that
+    works from the parent repo's root. Rather than making every downstream
+    README carry its own prefix, accept both: the literal path first, then the
+    same path and the bare filename under our own firmware/.
+    """
+    if os.path.isfile(path):
+        return path
+    for cand in (os.path.join(_sdk_root(), path),
+                 os.path.join(_firmware_dir(), os.path.basename(path))):
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _resolve_or_report(path: str) -> Optional[str]:
+    resolved = _resolve_firmware(path)
+    if resolved is None:
+        print(f"[ERROR] firmware file not found: {path}\n"
+              f"        shipped images live in {_firmware_dir()}",
+              file=sys.stderr)
+    return resolved
 
 
 def _check_role(fw_bytes: bytes, firmware_sn: str, force: bool) -> int:
@@ -193,19 +233,19 @@ def _check_role(fw_bytes: bytes, firmware_sn: str, force: bool) -> int:
            f"(expects SN ending {want!r}), but {firmware_sn} ends {have!r} "
            f"— it is a {other.upper()}.")
     if not force:
+        alt = images.get(other, {}).get("file", f"tc-gu-01-{other}.bin")
         print(f"\n{msg}\n"
               f"Flashing the wrong role bricks the MCU and needs an SWD probe "
-              f"to recover.\nUse firmware/tc-gu-01-{other}.bin instead, or "
-              f"--force if you really mean it.", file=sys.stderr)
+              f"to recover.\nUse {alt} instead (shipped in {_firmware_dir()}), "
+              f"or --force if you really mean it.", file=sys.stderr)
         return 1
     print(f"\n{msg}\n--force given, proceeding anyway.", file=sys.stderr)
     return 0
 
 
 def _cmd_update(args: argparse.Namespace, g: LeaderGripper, eps) -> int:
-    fw_path = args.firmware
-    if not os.path.isfile(fw_path):
-        print(f"[ERROR] firmware file not found: {fw_path}", file=sys.stderr)
+    fw_path = _resolve_or_report(args.firmware)
+    if fw_path is None:
         return 1
     fw_size = os.path.getsize(fw_path)
     with open(fw_path, "rb") as f:
@@ -288,6 +328,13 @@ def main(argv=None) -> int:
 
     if not args.get_status and not args.firmware:
         p.error("firmware argument required unless --get-status is given")
+
+    # Resolve before touching hardware: a typo'd path should not cost a
+    # discovery + open round-trip to find out about.
+    if args.firmware:
+        args.firmware = _resolve_or_report(args.firmware)
+        if args.firmware is None:
+            return 1
 
     log.set_level("info")
     g, eps = _open_gripper(args.side)
