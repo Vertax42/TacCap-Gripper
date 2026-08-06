@@ -26,7 +26,7 @@ Both adapters consume this SDK; they do not reimplement device access.
 
 **v0.1.7 — firmware V2.1 sync, hardware-validated.** Tested on bilateral
 leader setups (left + right, ~280 MB/s outbound, both flashed to leader
-1.2.0) and on a real follower gripper (MIT force-position control, normalized
+1.2.1) and on a real follower gripper (MIT force-position control, normalized
 grasp, LED, auto-cal).
 
 > **Firmware you need.** Command set V2.1 first shipped in leader 1.2.0 /

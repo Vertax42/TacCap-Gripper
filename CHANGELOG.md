@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `firmware/manifest.json` is regenerated alongside the images — the OTA
   role guard identifies them by CRC32, so a stale manifest silently stops
   protecting against flashing the wrong role's image.
+  Both bench leaders were flashed to 1.2.1 over OTA and re-checked
+  afterwards: version reads back 1.2.1, and the flash-persisted encoder zero,
+  travel span (1.1582 / 1.1486 rad) and IMU all survived the bank swap
+  untouched.
 - `protocol::Ws2812EffectType` doc comments corrected: `NormalSolid` is solid
   **white** as of leader 1.2.1 (the comment still said green), and
   `FaultBlink` is 500 ms. These presets live in firmware and have now changed
@@ -48,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware
 1.2.0, follower 1.1.0).
 
-Validated on two leader grippers flashed from source to 1.2.0.0 over OTA.
+Validated on two leader grippers flashed from source to 1.2.0 over OTA.
 
 > **Downstream on pybind11 2.x should update.** The Python IMU vector fix
 > below changes the data affected consumers read — `accel_mps2` /
