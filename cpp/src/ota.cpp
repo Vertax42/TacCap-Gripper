@@ -175,8 +175,8 @@ void OtaSession::update_from_bytes(const std::vector<uint8_t>& firmware,
 
     const uint32_t crc = crc32_iso_hdlc(firmware.data(), firmware.size());
     logger()->info(
-        "OTA update: size={}B crc32=0x{:08X} target={}.{}.{}.{}",
-        total, crc, target.major, target.minor, target.patch, target.build);
+        "OTA update: size={}B crc32=0x{:08X} target={}.{}.{}",
+        total, crc, target.major, target.minor, target.patch);
 
     // 1. OtaStart — abort on failure to leave firmware idle for next try
     try {

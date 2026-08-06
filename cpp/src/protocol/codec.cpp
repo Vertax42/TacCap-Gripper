@@ -126,6 +126,11 @@ FirmwareVersion decode_version(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<FirmwareVersion>(data, len, "FirmwareVersion");
 }
 
+std::string version_string(const FirmwareVersion& v) {
+    return std::to_string(v.major) + "." + std::to_string(v.minor) + "." +
+           std::to_string(v.patch);
+}
+
 std::string decode_sn(const uint8_t* data, std::size_t len) {
     if (len == 0) return {};
     // SnInfo wire size is 17 bytes, but earlier docs show queries returning

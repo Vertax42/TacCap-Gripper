@@ -739,7 +739,7 @@ inactive bank and uses the STM32H5 bank swap, so one build serves both banks.
 ```bash
 python python/examples/ota_update.py \
     third_party/firmware/tc-gu-01/build/master/tc-gu-01-master.bin \
-    --side left --target-version 1.2.1.0
+    --side left --target-version 1.2.1
 ```
 
 > Only builds you made yourself need that path. To flash the **released**
@@ -749,7 +749,7 @@ python python/examples/ota_update.py \
 >
 > ```bash
 > python python/examples/ota_update.py tc-gu-01-master.bin \
->     --side left --target-version 1.2.1.0
+>     --side left --target-version 1.2.1
 > ```
 
 Notes:

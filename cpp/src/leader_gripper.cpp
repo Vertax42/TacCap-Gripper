@@ -66,10 +66,7 @@ LeaderGripper::LeaderGripper(const Config& cfg)
             ack.data.size() == sizeof(protocol::FirmwareVersion)) {
             auto v = protocol::decode_version(ack.data.data(),
                                               ack.data.size());
-            fw_version_str = std::to_string(v.major) + "." +
-                             std::to_string(v.minor) + "." +
-                             std::to_string(v.patch) + "." +
-                             std::to_string(v.build);
+            fw_version_str = protocol::version_string(v);
         }
     } catch (...) {
         // Leave fw_version_str as "<unknown>"; we still want construction

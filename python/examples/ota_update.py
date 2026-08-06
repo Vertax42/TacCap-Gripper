@@ -21,7 +21,7 @@ Usage:
     # Tag the target version (informational; firmware uses it for the
     # post-install verification log + bank metadata).
     python python/examples/ota_update.py tc-gu-01-master.bin \\
-        --target-version 1.2.0.0
+        --target-version 1.2.1
 
     # Just probe — don't flash anything
     python python/examples/ota_update.py --get-status
@@ -58,6 +58,8 @@ from xense.taccap import (
     log,
 )
 
+import _calib_flow
+
 
 def _open_gripper(side: str) -> tuple[LeaderGripper, object]:
     """Resolve `side` ('auto' | 'left' | 'right') → LeaderGripper + endpoints."""
@@ -75,18 +77,27 @@ def _open_gripper(side: str) -> tuple[LeaderGripper, object]:
 
 
 def _parse_version(spec: Optional[str]) -> OtaTargetVersion:
+    """Parse MAJOR.MINOR.PATCH, or the legacy four-part form.
+
+    Versions are presented as three parts everywhere now, so that is what
+    people will type. The wire still carries a fourth "build" byte; it
+    defaults to 0, which is what firmware has always set it to. The 4-part
+    form keeps working so older scripts and docs do not break.
+    """
     if spec is None:
         return OtaTargetVersion(0, 0, 0, 0)
     parts = spec.split(".")
-    if len(parts) != 4:
+    if len(parts) not in (3, 4):
         raise SystemExit(
-            f"--target-version must be MAJOR.MINOR.PATCH.BUILD, got {spec!r}")
+            f"--target-version must be MAJOR.MINOR.PATCH, got {spec!r}")
     try:
         nums = [int(p) for p in parts]
     except ValueError:
         raise SystemExit(f"--target-version components must be integers: {spec!r}")
     if any(n < 0 or n > 255 for n in nums):
         raise SystemExit(f"--target-version components must each fit in uint8: {spec!r}")
+    if len(nums) == 3:
+        nums.append(0)
     return OtaTargetVersion(*nums)
 
 
@@ -262,7 +273,7 @@ def _cmd_update(args: argparse.Namespace, g: LeaderGripper, eps) -> int:
     print(f"  firmware     : {fw_path}")
     print(f"  size         : {_format_size(fw_size)}")
     print(f"  CRC32        : 0x{crc:08X}")
-    print(f"  target ver   : {target.major}.{target.minor}.{target.patch}.{target.build}")
+    print(f"  target ver   : {_calib_flow.format_version(target.major, target.minor, target.patch)}")
     if _check_role(fw_bytes, getattr(eps, "firmware_sn", "") or "", args.force):
         return 1
     print()
@@ -313,8 +324,8 @@ def main(argv=None) -> int:
                    default="auto",
                    help="Which gripper to flash (default: auto = single-gripper)")
     p.add_argument("--target-version", default=None,
-                   help="Target version MAJOR.MINOR.PATCH.BUILD "
-                        "(informational; default 0.0.0.0)")
+                   help="Target version MAJOR.MINOR.PATCH "
+                        "(informational; default 0.0.0)")
     p.add_argument("--no-progress", action="store_true",
                    help="Suppress per-block progress bar")
     p.add_argument("--yes", "-y", action="store_true",

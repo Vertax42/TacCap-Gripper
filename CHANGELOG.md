@@ -8,7 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Shipped firmware images bumped to leader 1.2.1.0 / follower 1.1.1.0**
+- **Firmware versions are presented as `MAJOR.MINOR.PATCH`** — the fourth
+  "build" byte is no longer shown anywhere user-facing. Firmware pins it to 0
+  and it carries no meaning, so printing `1.2.1.0` only invited people to type
+  the trailing zero into version comparisons. The byte is untouched on the
+  wire and still readable as `FirmwareVersion::build` / `OtaTargetVersion.build`.
+  Formatting is now funnelled through one place per language —
+  `protocol::version_string()` in C++ (used by the gripper `open()` logs and
+  the OTA log) and `_calib_flow.format_version()` in the example CLIs — so the
+  format cannot drift between surfaces again. `--target-version` accepts three
+  parts and still accepts the legacy four so existing scripts keep working.
+- **Shipped firmware images bumped to leader 1.2.1 / follower 1.1.1**
   (firmware `hw_v1.1.0` @ `6b4605a`, tags `master_v1.2.1.0` /
   `slave_v1.1.1.0`). **No protocol change** — `protocol_cmd.h`,
   `protocol_data.h`, `protocol_frame.h` and `PROTOCOL.md` are byte-identical

@@ -72,6 +72,15 @@ std::vector<uint8_t> encode_ota_write_block(uint32_t offset,
 // ---- Specific payload decoders (throw ProtocolError on size mismatch) -----
 
 FirmwareVersion    decode_version(const uint8_t* data, std::size_t len);
+
+// Human-facing firmware version, "MAJOR.MINOR.PATCH" — deliberately WITHOUT
+// the build byte. Firmware pins build to 0 and it carries no meaning for
+// users, so showing "1.2.1.0" only invited people to type the trailing zero
+// into version comparisons. The byte is still on the wire and still readable
+// as FirmwareVersion::build for anyone who needs it; this is the one place
+// that decides how a version is *presented*, so the format cannot drift
+// between the gripper open() logs, OTA logs and the example CLIs.
+std::string        version_string(const FirmwareVersion&);
 std::string        decode_sn(const uint8_t* data, std::size_t len);
 DeviceType         decode_dev_type(const uint8_t* data, std::size_t len);
 ImuData            decode_imu(const uint8_t* data, std::size_t len);

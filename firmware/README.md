@@ -9,8 +9,8 @@ directory's git history, not from extra files.
 
 | Image | Role | Version | Size | CRC32 |
 | --- | --- | --- | --- | --- |
-| `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.1.0** | 116,840 B | `0xEC491CBD` |
-| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.1.0** | 149,256 B | `0xEBA6FB50` |
+| `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.1** | 116,840 B | `0xEC491CBD` |
+| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.1** | 149,256 B | `0xEBA6FB50` |
 
 Both carry protocol **command set V2.1**, built from firmware
 `hw_v1.1.0` @ `6b4605a`. `manifest.json` has the same data machine-readably.
@@ -56,7 +56,7 @@ python python/examples/fisheye_cal.py show
 #    Naming the image is enough — the script looks here for it, so this
 #    line also works from a parent repo that vendors this one.
 python python/examples/ota_update.py tc-gu-01-master.bin \
-    --side left --target-version 1.2.1.0
+    --side left --target-version 1.2.1
 
 # 3. Confirm — GetVersion returns the compiled-in constant, so the version
 #    you read back is proof of what actually landed.

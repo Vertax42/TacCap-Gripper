@@ -74,8 +74,21 @@ def deg(rad: float) -> str:
     return f"{math.degrees(rad):.1f}°"
 
 
+def format_version(major, minor, patch, build=None) -> str:
+    """Render a firmware version for humans: MAJOR.MINOR.PATCH.
+
+    The wire carries a fourth "build" byte, but it is pinned to 0 and means
+    nothing to users, so it is deliberately not shown — printing "1.2.1.0"
+    only invited people to type the trailing zero into version comparisons.
+    `build` is accepted so callers can pass all four through without
+    unpacking, and ignored on purpose. Mirrors C++
+    protocol::version_string().
+    """
+    return f"{major}.{minor}.{patch}"
+
+
 def firmware_version(gripper) -> str:
-    """Best-effort MAJOR.MINOR.PATCH.BUILD, for capability error messages.
+    """Best-effort MAJOR.MINOR.PATCH, for capability error messages.
 
     Cmd::GetVersion returns the compiled-in constant, not the OTA bank
     metadata, so this is the authoritative "what build am I talking to".
@@ -85,7 +98,7 @@ def firmware_version(gripper) -> str:
     try:
         ack = gripper.transport.send_cmd(Cmd.GetVersion, b"", 500)
         if len(ack.data) >= 4:
-            return ".".join(str(b) for b in ack.data[:4])
+            return format_version(*ack.data[:4])
     except Exception:
         pass
     return "<unknown>"
@@ -126,7 +139,7 @@ def require_support(gripper, fw_version: str | None = None) -> None:
             f"  {e}\n"
             f"  Nothing was changed. Flash it first:\n"
             f"      python {_ota_script_path()} tc-gu-01-master.bin \\\n"
-            f"          --side <left|right> --target-version 1.2.0.0\n"
+            f"          --side <left|right> --target-version 1.2.1\n"
             f"  (that image ships in this SDK under firmware/; pick it by the\n"
             f"   gripper's ROLE — the last character of its firmware SN, 'm'\n"
             f"   for master and 's' for slave — not by which hand it is on.)"
