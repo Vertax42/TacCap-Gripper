@@ -134,8 +134,8 @@ def require_support(gripper, fw_version: str | None = None) -> None:
         if fw_version is None:
             fw_version = firmware_version(gripper)
         raise SystemExit(
-            f"{red('✗')} encoder-max calibration needs firmware >= V2.1 "
-            f"(leader 1.2.0); this gripper reports {fw_version}.\n"
+            f"{red('✗')} encoder-max calibration needs command set >= V2.1 "
+            f"(leader >= 1.2.0); this gripper reports {fw_version}.\n"
             f"  {e}\n"
             f"  Nothing was changed. Flash it first:\n"
             f"      python {_ota_script_path()} tc-gu-01-master.bin \\\n"

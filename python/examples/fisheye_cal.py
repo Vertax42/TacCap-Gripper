@@ -118,8 +118,8 @@ def cmd_show(args) -> int:
         cal = g.calibration
         fw = _calib_flow.firmware_version(g)
         print(_bold(f"\nFirmware {fw}") +
-              "  (fisheye needs >= V2.0, encoder-max >= V2.1: "
-              "leader 1.2.0 / follower 1.1.0)")
+              "  (fisheye needs cmd set >= V2.0, encoder-max >= V2.1: "
+              "leader >= 1.2.0 / follower >= 1.1.0)")
 
         print(_bold("\nFisheye camera calibration (Cmd 0x2B)"))
         try:

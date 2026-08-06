@@ -74,7 +74,7 @@ public:
         // not repurpose one.
         //
         // The travel span comes from the firmware's Cmd::EncoderMaxCal (0x2C,
-        // firmware >= V2.1 / leader 1.2.0). Construction THROWS when the
+        // command set >= V2.1, i.e. leader >= 1.2.0). Construction THROWS when the
         // firmware has no encoder-max calibration or is too old to answer —
         // asking for normalization and silently not getting it would be worse.
         // Set encoder_max_rad to bypass the firmware read entirely.

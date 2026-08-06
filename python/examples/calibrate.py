@@ -20,7 +20,7 @@ accidentally zero the wrong one. The script:
      until it is stored, normalized position is unavailable.
 
 Both records live in MCU flash and survive power cycles. Step 5 needs
-firmware >= V2.1 (leader 1.2.0); the script checks that up front, before
+command set >= V2.1 (leader >= 1.2.0); the script checks that up front, before
 step 3 writes anything, so an old gripper is never left half-calibrated.
 
 Usage:

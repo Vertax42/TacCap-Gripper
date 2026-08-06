@@ -4,10 +4,10 @@
 // firmware persists in its internal flash.
 //
 //   - Fisheye camera intrinsics + distortion  (Cmd::CameraFisheyeCal 0x2B,
-//     firmware V2.0) — supported on BOTH leader and follower.
+//     command set >= V2.0) — supported on BOTH leader and follower.
 //   - Leader encoder max travel angle          (Cmd::EncoderMaxCal 0x2C,
-//     firmware V2.1) — LEADER ONLY; the follower has no MT6816 encoder and
-//     NACKs with ErrorCode::InvalidCmd.
+//     command set >= V2.1, i.e. leader >= 1.2.0) — LEADER ONLY; the follower
+//     has no MT6816 encoder and NACKs with ErrorCode::InvalidCmd.
 //
 // The firmware is a dumb store for both records: it persists the bytes, does
 // no unit conversion and no range clamping, and rejects only NaN/Inf (plus
