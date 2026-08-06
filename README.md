@@ -29,8 +29,10 @@ leader setups (left + right, ~280 MB/s outbound, both flashed to leader
 1.2.0) and on a real follower gripper (MIT force-position control, normalized
 grasp, LED, auto-cal).
 
-> **Firmware you need.** Command set V2.1 ships in **leader 1.2.0** /
-> **follower 1.1.0** (firmware repo `hw_v1.1.0` @ `f5dd086`). Check with
+> **Firmware you need.** Command set V2.1 first shipped in leader 1.2.0 /
+> follower 1.1.0; the images in `firmware/` are **leader 1.2.1** /
+> **follower 1.1.1** (firmware repo `hw_v1.1.0` @ `6b4605a`), which change
+> the status LED only and are protocol-identical. Check with
 > `python python/examples/fisheye_cal.py show`, which prints the version and
 > whether each V2.0/V2.1 command answers.
 >
@@ -720,8 +722,8 @@ sudo apt install gcc-arm-none-eabi
 cd third_party/firmware/tc-gu-01
 env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=master -j"$(nproc)"
 env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=slave  -j"$(nproc)"
-# -> build/master/tc-gu-01-master.bin   (leader 1.2.0)
-# -> build/slave/tc-gu-01-slave.bin     (follower 1.1.0)
+# -> build/master/tc-gu-01-master.bin   (leader 1.2.1)
+# -> build/slave/tc-gu-01-slave.bin     (follower 1.1.1)
 ```
 
 > **`env -u CFLAGS ...` is load-bearing.** The `taccap` conda env exports host
@@ -737,7 +739,7 @@ inactive bank and uses the STM32H5 bank swap, so one build serves both banks.
 ```bash
 python python/examples/ota_update.py \
     third_party/firmware/tc-gu-01/build/master/tc-gu-01-master.bin \
-    --side left --target-version 1.2.0.0
+    --side left --target-version 1.2.1.0
 ```
 
 > Only builds you made yourself need that path. To flash the **released**
@@ -747,7 +749,7 @@ python python/examples/ota_update.py \
 >
 > ```bash
 > python python/examples/ota_update.py tc-gu-01-master.bin \
->     --side left --target-version 1.2.0.0
+>     --side left --target-version 1.2.1.0
 > ```
 
 Notes:

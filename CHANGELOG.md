@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Shipped firmware images bumped to leader 1.2.1.0 / follower 1.1.1.0**
+  (firmware `hw_v1.1.0` @ `6b4605a`, tags `master_v1.2.1.0` /
+  `slave_v1.1.1.0`). **No protocol change** — `protocol_cmd.h`,
+  `protocol_data.h`, `protocol_frame.h` and `PROTOCOL.md` are byte-identical
+  to 1.2.0, so the command set stays V2.1 and no SDK API moves. The release
+  only retunes the status LED: normal state is solid **white** at brightness
+  20 (was green at 10), the fault blink halves to 500 ms, and the key-press
+  LED reactions are commented out. Upgrading is therefore optional as far as
+  the SDK is concerned.
+  `firmware/manifest.json` is regenerated alongside the images — the OTA
+  role guard identifies them by CRC32, so a stale manifest silently stops
+  protecting against flashing the wrong role's image.
+- `protocol::Ws2812EffectType` doc comments corrected: `NormalSolid` is solid
+  **white** as of leader 1.2.1 (the comment still said green), and
+  `FaultBlink` is 500 ms. These presets live in firmware and have now changed
+  once, so the comments say which firmware they describe rather than implying
+  the enum fixes them.
 - **`calibrate.py` selects the gripper by side**: `calibrate.py left` /
   `calibrate.py right` instead of hunting for a firmware SN first. The SN is
   resolved from `scan_grippers()` (side comes from the burned SN read over the

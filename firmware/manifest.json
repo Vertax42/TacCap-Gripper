@@ -2,21 +2,21 @@
   "protocol": "V2.1",
   "source": {
     "branch": "hw_v1.1.0",
-    "commit": "f5dd08603ec5f9e38b563551295a188a9eebbd68"
+    "commit": "6b4605ab1682a43084a4cbfec1fdead657a58fe0"
   },
   "images": {
     "master": {
       "file": "tc-gu-01-master.bin",
-      "version": "1.2.0.0",
-      "size_bytes": 116884,
-      "crc32": "0xACB8F971",
+      "version": "1.2.1.0",
+      "size_bytes": 116840,
+      "crc32": "0xEC491CBD",
       "sn_suffix": "m"
     },
     "slave": {
       "file": "tc-gu-01-slave.bin",
-      "version": "1.1.0.0",
+      "version": "1.1.1.0",
       "size_bytes": 149256,
-      "crc32": "0xE27FAD49",
+      "crc32": "0xEBA6FB50",
       "sn_suffix": "s"
     }
   }

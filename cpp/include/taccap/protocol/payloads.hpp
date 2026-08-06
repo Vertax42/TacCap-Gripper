@@ -353,10 +353,14 @@ struct Ws2812Set {
 
 enum class Ws2812EffectType : uint8_t {
     None         = 0,
-    NormalSolid  = 1,    // preset: solid green
+    // The presets' colours and rates are firmware-side and have changed
+    // before — 1.2.1 recoloured NormalSolid green -> white and halved the
+    // FaultBlink period. Treat the descriptions as "as of leader 1.2.1";
+    // the wire values are what this enum pins down.
+    NormalSolid  = 1,    // preset: solid white (green before leader 1.2.1)
     NormalBlink  = 2,    // preset: blinking green
     OtaBlink     = 3,    // preset: blinking blue
-    FaultBlink   = 4,    // preset: blinking red
+    FaultBlink   = 4,    // preset: blinking red, 500 ms (1000 ms before 1.2.1)
     Demo         = 5,
     ColorBlink   = 10,   // custom color blink
     ColorBreathe = 11,   // custom color breathe

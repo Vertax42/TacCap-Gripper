@@ -9,11 +9,18 @@ directory's git history, not from extra files.
 
 | Image | Role | Version | Size | CRC32 |
 | --- | --- | --- | --- | --- |
-| `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.0.0** | 116,884 B | `0xACB8F971` |
-| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.0.0** | 149,256 B | `0xE27FAD49` |
+| `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.1.0** | 116,840 B | `0xEC491CBD` |
+| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.1.0** | 149,256 B | `0xEBA6FB50` |
 
 Both carry protocol **command set V2.1**, built from firmware
-`hw_v1.1.0` @ `f5dd086`. `manifest.json` has the same data machine-readably.
+`hw_v1.1.0` @ `6b4605a`. `manifest.json` has the same data machine-readably.
+
+**1.2.1 / 1.1.1 change the status LED only** — the protocol is byte-identical
+to 1.2.0 / 1.1.0, so upgrading is optional from the SDK's point of view:
+
+- normal state: solid **white** at brightness 20 (was solid green at 10)
+- fault state: blinks at 500 ms (was 1000 ms)
+- the key-press LED reactions (click-blink, long-press-solid) are disabled
 
 ---
 
@@ -49,7 +56,7 @@ python python/examples/fisheye_cal.py show
 #    Naming the image is enough — the script looks here for it, so this
 #    line also works from a parent repo that vendors this one.
 python python/examples/ota_update.py tc-gu-01-master.bin \
-    --side left --target-version 1.2.0.0
+    --side left --target-version 1.2.1.0
 
 # 3. Confirm — GetVersion returns the compiled-in constant, so the version
 #    you read back is proof of what actually landed.
@@ -81,7 +88,7 @@ The manifest's CRC32 is the same value `ota_update.py` prints and sends in
 python -c "
 from xense.taccap import crc32_iso_hdlc
 print(hex(crc32_iso_hdlc(open('firmware/tc-gu-01-master.bin','rb').read())))"
-# → 0xacb8f971
+# → 0xec491cbd
 ```
 
 ## How OTA works, briefly
