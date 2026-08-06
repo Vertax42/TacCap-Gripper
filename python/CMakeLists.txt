@@ -1,5 +1,6 @@
 find_package(pybind11 CONFIG REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(fmt REQUIRED)
 
 pybind11_add_module(_taccap_native MODULE
     bindings/module.cpp
