@@ -56,6 +56,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Found by the new drift check below, ~2.5 months after the fact.
 
 ### Added
+- **Wrist fisheye undistortion.** The SDK could already *read* the intrinsics
+  the firmware persists (`Calibration::read_fisheye()`, `cal.K` / `cal.D` in
+  Python) but had nowhere to apply them. New `FisheyeUndistorter` builds the
+  remap tables once from a `CameraFisheyeCal` and rectifies frames with
+  `cv::remap`, mirroring the PC tool's `create_undistort_maps()`. It is
+  transport-free, so it also works on frames this SDK never captured — the
+  common case, since the wrist UVC device is usually owned by an external
+  service.
+  - `Camera::set_undistorter()` makes `read()` and the streaming callback hand
+    out rectified frames. Safe to call while streaming; if rectification throws,
+    the raw frame passes through and the error is logged rather than killing
+    the capture loop.
+  - `Config::undistort_wrist` / `Config::fisheye_balance` on both grippers wire
+    it automatically at `open()`. Missing calibration (`CalNotSet`) or firmware
+    older than command set V2.0 (`InvalidCmd`) degrades to raw frames with a
+    warning; a camera not at the calibrated resolution throws.
+  - `balance` interpolates the output focal length from the calibrated value
+    (0, the default and the PC tool's default) to 0.70x (1, widest field of
+    view). Only fx/fy move — the principal point stays put so the view does not
+    drift as the knob turns.
+  - **Only 640x480 is accepted.** The firmware record holds just the 8
+    intrinsic/distortion floats and no image size, so serving another
+    resolution would mean guessing a scale factor and silently rectifying
+    wrongly. Adding the image size to the firmware payload is the right fix if
+    a second resolution is ever needed.
+  - Links `opencv_calib3d` and `opencv_imgproc` on top of the existing core and
+    videoio.
 - **`scripts/check_protocol_drift.py`** — fails when the SDK's hand-written
   protocol mirror falls behind the firmware headers. The existing
   `static_assert(sizeof(...) == N)` lines catch mirroring something *wrong*;

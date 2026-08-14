@@ -89,6 +89,12 @@ What's in:
   limit torque, replacing the old hard-coded 6 Nm) and
   `follower.set_auto_cal_stall_param()` for patching auto-cal stall settings
   without a read-modify-write.
+- **Wrist fisheye undistortion.** `FisheyeUndistorter` turns the firmware's
+  stored intrinsics into cached remap tables and rectifies frames; standalone
+  (works on frames from any source) or wired automatically via
+  `undistort_wrist=True` on either gripper. `fisheye_balance` trades field of
+  view against black border (0 = calibrated focal length, 1 = 0.70x). Only the
+  calibrated 640×480 is accepted — the firmware record stores no image size.
 - **V2.0/V2.1 additions:** `Calibration` component (`g.calibration`) for the
   two flash-persisted calibration records — fisheye camera intrinsics +
   distortion (leader *and* follower) and the leader's encoder max travel angle.

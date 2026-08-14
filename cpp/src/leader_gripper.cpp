@@ -1,6 +1,7 @@
 // Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
 
 #include <taccap/leader_gripper.hpp>
+#include "wrist_fisheye.hpp"
 #include <taccap/error.hpp>
 #include <taccap/log.hpp>
 #include <taccap/protocol/codec.hpp>
@@ -91,6 +92,14 @@ LeaderGripper::LeaderGripper(const Config& cfg)
     if (cfg_.open_cameras) {
         if (!cfg_.wrist_video.empty()) {
             wrist_ = std::make_unique<Camera>(make_wrist_config(cfg_));
+            if (cfg_.undistort_wrist) {
+                detail::install_wrist_undistorter(cal_, *wrist_,
+                                                  cfg_.fisheye_balance,
+                                                  "LeaderGripper");
+            }
+        } else if (cfg_.undistort_wrist) {
+            logger()->warn("LeaderGripper: undistort_wrist=true but "
+                           "wrist_video is empty, so no camera was opened");
         }
     }
 

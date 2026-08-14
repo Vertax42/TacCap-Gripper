@@ -63,6 +63,7 @@ GripperConfig = _taccap_native.GripperConfig          # V1.7
 GripperAutoCalConfig = _taccap_native.GripperAutoCalConfig  # V1.9 power-on auto-cal
 GripperPosition = _taccap_native.GripperPosition      # raw rad <-> normalized [0,1]
 CameraFisheyeCal = _taccap_native.CameraFisheyeCal    # V2.0 fisheye intrinsics + distortion
+FisheyeUndistorter = _taccap_native.FisheyeUndistorter  # applies them to frames
 Calibration = _taccap_native.Calibration              # V2.0/V2.1 flash-persisted cal records
 GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
 ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
@@ -152,6 +153,7 @@ __all__ = [
     "GripperAutoCalConfig",
     "GripperPosition",
     "CameraFisheyeCal",
+    "FisheyeUndistorter",
     "Calibration",
     "GripperObservation",
     "ControlLoop",

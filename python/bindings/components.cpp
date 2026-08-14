@@ -16,6 +16,7 @@
 #include <taccap/components/imu.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/camera.hpp>
+#include <taccap/components/fisheye_undistorter.hpp>
 #include <taccap/components/key.hpp>
 #include <taccap/components/sensor_errors.hpp>
 #include <taccap/components/motor.hpp>
@@ -136,6 +137,32 @@ py::array mat_to_numpy(const cv::Mat& m) {
         }
     }
     return arr;
+}
+
+// Borrow a (H, W, 3) uint8 numpy array as a cv::Mat WITHOUT copying. The
+// caller must keep `arr` alive for as long as the Mat is used — every use
+// here is a synchronous read inside one binding call, so that holds.
+//
+// Deliberately strict rather than forcecast: silently casting a float image to
+// uint8 would produce a plausible-looking but wrong result.
+cv::Mat numpy_to_mat_bgr(const py::array& arr) {
+    if (!py::dtype::of<uint8_t>().is(arr.dtype())) {
+        throw std::invalid_argument(
+            "expected a uint8 array (BGR8); got dtype " +
+            py::str(arr.dtype()).cast<std::string>());
+    }
+    if (arr.ndim() != 3 || arr.shape(2) != 3) {
+        throw std::invalid_argument(
+            "expected shape (H, W, 3); got ndim=" + std::to_string(arr.ndim()));
+    }
+    if ((arr.flags() & py::array::c_style) == 0) {
+        throw std::invalid_argument(
+            "expected a C-contiguous array; pass numpy.ascontiguousarray(img)");
+    }
+    return cv::Mat(static_cast<int>(arr.shape(0)),
+                   static_cast<int>(arr.shape(1)),
+                   CV_8UC3,
+                   const_cast<void*>(arr.data()));
 }
 
 }  // namespace
@@ -953,6 +980,59 @@ void bind_components(py::module_& m) {
         });
 
     // ---- Camera ---------------------------------------------------------
+    // ---- FisheyeUndistorter (V2.0+ wrist fisheye intrinsics) -------------
+    // Usable standalone on frames this SDK never captured — the common case,
+    // since the wrist UVC device is normally owned by an external service.
+    py::class_<FisheyeUndistorter, std::shared_ptr<FisheyeUndistorter>>(
+            m, "FisheyeUndistorter")
+        .def(py::init([](const protocol::CameraFisheyeCal& cal,
+                         int width, int height, float balance) {
+                 return std::make_shared<FisheyeUndistorter>(
+                     cal, cv::Size(width, height), balance);
+             }),
+             py::arg("calibration"),
+             // Defaults are the only calibrated resolution; anything else
+             // raises, because the firmware record carries no image size.
+             py::arg("width")   = FISHEYE_CALIB_WIDTH,
+             py::arg("height")  = FISHEYE_CALIB_HEIGHT,
+             // 0 = calibrated focal length (natural view, matches the PC tool);
+             // 1 = 0.70x for the widest field of view. Clamped to [0,1].
+             py::arg("balance") = 0.0f)
+        .def("apply", [](const FisheyeUndistorter& self, const py::array& img) {
+                 cv::Mat src = numpy_to_mat_bgr(img);
+                 cv::Mat dst;
+                 {
+                     // remap() is pure CPU work on borrowed memory — let other
+                     // threads run, but keep `img` alive via the caller's ref.
+                     py::gil_scoped_release gil;
+                     dst = self.apply(src);
+                 }
+                 return mat_to_numpy(dst);
+             },
+             py::arg("image"),
+             "Rectify one (H, W, 3) uint8 BGR frame; returns a new array.")
+        .def_property_readonly("width",  [](const FisheyeUndistorter& s) { return s.size().width; })
+        .def_property_readonly("height", [](const FisheyeUndistorter& s) { return s.size().height; })
+        .def_property_readonly("balance", &FisheyeUndistorter::balance)
+        .def_property_readonly("focal_scale", &FisheyeUndistorter::focal_scale)
+        .def_property_readonly("new_camera_matrix",
+            [](const FisheyeUndistorter& s) {
+                // The K rectified pixels live in — NOT the raw firmware K.
+                const cv::Mat& k = s.new_camera_matrix();
+                py::array_t<double> a(std::vector<py::ssize_t>{3, 3});
+                std::memcpy(a.mutable_data(), k.ptr<double>(), 9 * sizeof(double));
+                return a;
+            },
+            "3x3 camera matrix of the rectified image (calibrated K with fx/fy "
+            "scaled by focal_scale).")
+        .def("__repr__", [](const FisheyeUndistorter& s) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                "FisheyeUndistorter(%dx%d, balance=%.2f, focal_scale=%.3f)",
+                s.size().width, s.size().height, s.balance(), s.focal_scale());
+            return std::string(buf);
+        });
+
     py::class_<Camera>(m, "Camera")
         .def(py::init([](const std::string& dev, int w, int h, double fps, bool mjpg) {
             return std::make_unique<Camera>(Camera::Config{dev, w, h, fps, mjpg});
@@ -980,6 +1060,12 @@ void bind_components(py::module_& m) {
             py::gil_scoped_release gil;
             self.stop();
         })
+        // Pass None to go back to raw frames. Safe to call while streaming.
+        .def("set_undistorter", [](Camera& self,
+                                   std::shared_ptr<FisheyeUndistorter> u) {
+            py::gil_scoped_release gil;
+            self.set_undistorter(std::move(u));
+        }, py::arg("undistorter").none(true))
         .def_property_readonly("is_streaming",   &Camera::is_streaming)
         .def_property_readonly("total_frames",   &Camera::total_frames)
         .def_property_readonly("dropped_frames", &Camera::dropped_frames)
@@ -1044,7 +1130,8 @@ void bind_components(py::module_& m) {
         .def(py::init([](const std::string& mcu, const std::string& wrist,
                          uint32_t baud, unsigned ack_ms, unsigned retries,
                          bool open_cameras, bool normalize_position,
-                         float encoder_max_rad) {
+                         float encoder_max_rad,
+                         bool undistort_wrist, float fisheye_balance) {
                 LeaderGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
@@ -1054,6 +1141,8 @@ void bind_components(py::module_& m) {
                 cfg.open_cameras         = open_cameras;
                 cfg.normalize_position   = normalize_position;
                 cfg.encoder_max_rad      = encoder_max_rad;
+                cfg.undistort_wrist      = undistort_wrist;
+                cfg.fisheye_balance      = fisheye_balance;
                 py::gil_scoped_release gil;
                 return std::make_unique<LeaderGripper>(cfg);
              }),
@@ -1070,7 +1159,13 @@ void bind_components(py::module_& m) {
              // Raises at construction if the firmware has no encoder-max
              // calibration and encoder_max_rad isn't supplied.
              py::arg("normalize_position")  = false,
-             py::arg("encoder_max_rad")     = 0.0f)
+             py::arg("encoder_max_rad")     = 0.0f,
+             // Wrist fisheye undistortion (needs open_cameras=True and a V2.0+
+             // firmware that holds a calibration). Degrades to raw frames with
+             // a warning when it does not; raises if the camera is not at the
+             // calibrated 640x480.
+             py::arg("undistort_wrist")     = false,
+             py::arg("fisheye_balance")     = 0.0f)
         .def_static("open", [](bool normalize_position, float encoder_max_rad) {
             py::gil_scoped_release gil;
             if (!normalize_position && encoder_max_rad <= 0.0f) {
@@ -1145,7 +1240,8 @@ void bind_components(py::module_& m) {
     py::class_<FollowerGripper>(m, "FollowerGripper")
         .def(py::init([](const std::string& mcu, const std::string& wrist,
                          uint32_t baud, unsigned ack_ms, unsigned retries,
-                         bool open_cameras) {
+                         bool open_cameras,
+                         bool undistort_wrist, float fisheye_balance) {
                 FollowerGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
@@ -1153,6 +1249,8 @@ void bind_components(py::module_& m) {
                 cfg.ack_timeout_ms       = ack_ms;
                 cfg.max_retries          = retries;
                 cfg.open_cameras         = open_cameras;
+                cfg.undistort_wrist      = undistort_wrist;
+                cfg.fisheye_balance      = fisheye_balance;
                 py::gil_scoped_release gil;
                 return std::make_unique<FollowerGripper>(cfg);
              }),
@@ -1162,7 +1260,10 @@ void bind_components(py::module_& m) {
              py::arg("baudrate")            = 3'000'000u,
              py::arg("ack_timeout_ms")      = 1000u,
              py::arg("max_retries")         = 2u,
-             py::arg("open_cameras")        = false)
+             py::arg("open_cameras")        = false,
+             // See LeaderGripper above — same semantics and same failure policy.
+             py::arg("undistort_wrist")     = false,
+             py::arg("fisheye_balance")     = 0.0f)
         .def_static("open", []() {
             py::gil_scoped_release gil;
             return FollowerGripper::open();

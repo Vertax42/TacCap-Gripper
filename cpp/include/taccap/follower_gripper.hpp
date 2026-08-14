@@ -68,6 +68,21 @@ public:
         // populated) to have this gripper open it.
         bool        open_cameras        = false;
         Camera::Config wrist_cam_extra{};   // width/height/fps overrides
+
+        // ---- Wrist fisheye undistortion (V2.0+ firmware) -------------------
+        // Off by default. When true (and the wrist camera is actually opened),
+        // open() reads the fisheye intrinsics the firmware persisted and every
+        // frame from wrist_camera() comes out rectified.
+        //
+        // Degrades to raw frames with a warning when the firmware holds no
+        // calibration or is too old to answer. Throws when the camera is not
+        // configured at the calibrated 640x480 — the firmware record stores no
+        // image size, so rescaling the intrinsics would be a guess.
+        bool        undistort_wrist     = false;
+        // 0 = the calibrated focal length (natural view, matches the PC tool's
+        // default); 1 = 0.70x focal length for the widest field of view, with
+        // correspondingly more black border. Clamped to [0,1].
+        float       fisheye_balance     = 0.0f;
     };
 
     explicit FollowerGripper(const Config& cfg);

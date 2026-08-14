@@ -1,7 +1,9 @@
 // Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
 
 #include <taccap/components/camera.hpp>
+#include <taccap/components/fisheye_undistorter.hpp>
 #include <taccap/error.hpp>
+#include <taccap/log.hpp>
 
 #include <opencv2/videoio.hpp>
 
@@ -48,6 +50,36 @@ Camera::~Camera() {
     }
 }
 
+void Camera::set_undistorter(std::shared_ptr<const FisheyeUndistorter> u) {
+    std::lock_guard<std::mutex> lk(undist_mu_);
+    undist_ = std::move(u);
+}
+
+std::shared_ptr<const FisheyeUndistorter> Camera::undistorter() const {
+    std::lock_guard<std::mutex> lk(undist_mu_);
+    return undist_;
+}
+
+void Camera::maybe_undistort_(cv::Mat& image) const {
+    std::shared_ptr<const FisheyeUndistorter> u;
+    {
+        // Copy the handle, then drop the lock: remap() is the expensive part
+        // and must not block a concurrent set_undistorter().
+        std::lock_guard<std::mutex> lk(undist_mu_);
+        u = undist_;
+    }
+    if (!u) return;
+    try {
+        image = u->apply(image);
+    } catch (const std::exception& e) {
+        // Pass the raw frame through rather than dropping it or tearing down
+        // the capture loop — a size/geometry mismatch is a config bug, and
+        // losing the stream on top of it helps nobody.
+        logger()->error("Camera({}): fisheye undistortion failed, passing the "
+                        "raw frame through: {}", cfg_.device, e.what());
+    }
+}
+
 bool Camera::read(CameraFrame& out, std::chrono::milliseconds /*timeout*/) {
     // VideoCapture::read is blocking up to its internal V4L2 timeout; the
     // `timeout` arg is currently informational. (Add poll/select wrapping
@@ -64,6 +96,7 @@ bool Camera::read(CameraFrame& out, std::chrono::milliseconds /*timeout*/) {
         ++dropped_;
         return false;
     }
+    maybe_undistort_(frame);
     out.host_time   = std::chrono::steady_clock::now();
     out.frame_index = ++total_;
     out.image       = std::move(frame);
@@ -93,6 +126,7 @@ void Camera::capture_loop_(Callback cb) {
             ++dropped_;
             continue;
         }
+        maybe_undistort_(frame);
         const auto now = clock::now();
         CameraFrame cf{};
         cf.host_time   = now;

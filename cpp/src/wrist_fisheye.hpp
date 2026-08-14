@@ -1,0 +1,63 @@
+// Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
+//
+// Private helper shared by leader_gripper.cpp and follower_gripper.cpp — NOT
+// part of the installed public headers.
+//
+// Both grippers wire the wrist camera's fisheye undistortion identically:
+// read the intrinsics the firmware persisted, build the remap tables, hand
+// them to the Camera. The interesting part is the failure policy, and having
+// one copy of it keeps leader and follower from drifting apart on what counts
+// as a warning versus an error.
+
+#pragma once
+
+#include <taccap/components/calibration.hpp>
+#include <taccap/components/camera.hpp>
+#include <taccap/components/fisheye_undistorter.hpp>
+#include <taccap/error.hpp>
+#include <taccap/log.hpp>
+
+#include <memory>
+
+namespace xense::taccap::detail {
+
+// Installs fisheye undistortion on `cam`, or leaves it streaming raw frames
+// and logs why.
+//
+// Degrades with a warning (an un-calibrated gripper must still stream):
+//   - firmware has no fisheye record yet     -> read_fisheye() == nullopt
+//   - firmware predates command set V2.0     -> ProtocolError(InvalidCmd)
+//
+// Propagates (a config bug the caller must fix, not something to paper over):
+//   - the camera is not running at the calibrated 640x480, so the intrinsics
+//     do not apply and any rectification would be quietly wrong.
+inline void install_wrist_undistorter(Calibration& cal,
+                                      Camera&      cam,
+                                      float        balance,
+                                      const char*  who) {
+    std::optional<protocol::CameraFisheyeCal> params;
+    try {
+        params = cal.read_fisheye();
+    } catch (const ProtocolError& e) {
+        logger()->warn("{}: wrist fisheye undistortion requested but the "
+                       "firmware would not answer ({}) — streaming raw frames. "
+                       "Command set V2.0 or newer is required.", who, e.what());
+        return;
+    }
+    if (!params) {
+        logger()->warn("{}: wrist fisheye undistortion requested but the "
+                       "firmware holds no calibration yet — streaming raw "
+                       "frames. Run python/examples/fisheye_cal.py set-fisheye "
+                       "to store it.", who);
+        return;
+    }
+
+    const cv::Size size{cam.config().width, cam.config().height};
+    auto u = std::make_shared<const FisheyeUndistorter>(*params, size, balance);
+    cam.set_undistorter(u);
+    logger()->info("{}: wrist fisheye undistortion on ({}x{}, balance={:.2f}, "
+                   "focal_scale={:.3f})", who, size.width, size.height,
+                   u->balance(), u->focal_scale());
+}
+
+}  // namespace xense::taccap::detail

@@ -17,11 +17,14 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 
 namespace xense::taccap {
+
+class FisheyeUndistorter;
 
 struct CameraFrame {
     std::chrono::steady_clock::time_point host_time;
@@ -57,6 +60,22 @@ public:
     void stop();
     bool is_streaming() const noexcept { return running_.load(); }
 
+    // ---- Optional fisheye undistortion -------------------------------------
+    // When set, every frame handed out by read() and by the streaming callback
+    // has already been rectified. Camera itself knows nothing about where the
+    // intrinsics came from — the gripper reads them off the MCU and injects the
+    // undistorter here (see Config::undistort_wrist), and callers that own the
+    // UVC device themselves can build one directly.
+    //
+    // Safe to call while streaming: the capture thread takes a copy of the
+    // shared_ptr per frame. Pass nullptr to go back to raw frames.
+    //
+    // If undistortion throws (e.g. a frame whose size does not match the remap
+    // tables), the frame is passed through UNRECTIFIED and the error is logged
+    // once per occurrence — a geometry problem must not kill the capture loop.
+    void set_undistorter(std::shared_ptr<const FisheyeUndistorter> u);
+    std::shared_ptr<const FisheyeUndistorter> undistorter() const;
+
     // Stats
     uint64_t total_frames() const noexcept { return total_; }
     uint64_t dropped_frames() const noexcept { return dropped_; }
@@ -66,6 +85,8 @@ public:
 
 private:
     void capture_loop_(Callback cb);
+    // Rectify in place when an undistorter is set; never throws.
+    void maybe_undistort_(cv::Mat& image) const;
 
     Config            cfg_;
     void*             impl_ = nullptr;   // opaque cv::VideoCapture* (kept void* so
@@ -77,6 +98,8 @@ private:
     std::atomic<uint64_t> dropped_{0};
     std::atomic<double>   last_fps_{0.0};
     std::mutex            cap_mu_;       // guards reads when start() inactive
+    mutable std::mutex    undist_mu_;    // guards undist_ against the capture thread
+    std::shared_ptr<const FisheyeUndistorter> undist_;
 };
 
 }  // namespace xense::taccap
