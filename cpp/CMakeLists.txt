@@ -9,6 +9,7 @@ add_library(taccap_core SHARED
     src/components/imu.cpp
     src/components/encoder.cpp
     src/components/camera.cpp
+    src/components/fisheye_undistorter.cpp
     src/components/motor.cpp
     src/components/key.cpp
     src/components/led.cpp
@@ -36,16 +37,19 @@ target_include_directories(taccap_core
 )
 
 # Camera component uses cv::VideoCapture (opencv_videoio) and cv::Mat
-# (opencv_core). spdlog backs the shared logger (taccap/log.hpp). Both used to
-# come transitively through libxensesdk; now that it is gone, request them
-# directly. spdlog is consumed header-only (matching the prior transitive use —
-# no libspdlog was ever linked).
-find_package(OpenCV REQUIRED COMPONENTS core videoio)
+# (opencv_core). FisheyeUndistorter adds cv::fisheye::initUndistortRectifyMap
+# (opencv_calib3d) and cv::remap (opencv_imgproc). spdlog backs the shared
+# logger (taccap/log.hpp). All used to come transitively through libxensesdk;
+# now that it is gone, request them directly. spdlog is consumed header-only
+# (matching the prior transitive use — no libspdlog was ever linked).
+find_package(OpenCV REQUIRED COMPONENTS core videoio calib3d imgproc)
 find_package(spdlog REQUIRED)
 
 target_link_libraries(taccap_core
     PUBLIC  opencv_core                 # cv::Mat in Camera component
     PUBLIC  opencv_videoio              # cv::VideoCapture in Camera component
+    PRIVATE opencv_calib3d              # cv::fisheye::* in FisheyeUndistorter
+    PRIVATE opencv_imgproc              # cv::remap in FisheyeUndistorter
     PUBLIC  spdlog::spdlog_header_only  # logging (taccap/log.hpp)
     PRIVATE Threads::Threads            # poll() + future async transport
 )
