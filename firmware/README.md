@@ -7,20 +7,49 @@ SDK — see the repo README's "Firmware / PC GUI reference repos").
 Only the current release lives here. Older images are recoverable from this
 directory's git history, not from extra files.
 
-| Image | Role | Version | Size | CRC32 |
-| --- | --- | --- | --- | --- |
-| `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.1** | 116,840 B | `0xEC491CBD` |
-| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.1** | 149,256 B | `0xEBA6FB50` |
+| Image | Role | Version | Protocol | Source | Size | CRC32 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.1** | V2.1 | `6b4605a` | 116,840 B | `0xEC491CBD` |
+| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.2** | V2.2 | `bf0a06e` | 156,048 B | `0x866B1800` |
 
-Both carry protocol **command set V2.1**, built from firmware
-`hw_v1.1.0` @ `6b4605a`. `manifest.json` has the same data machine-readably.
+Both from firmware branch `hw_v1.1.0`. `manifest.json` has the same data
+machine-readably, per image — the two roles no longer share one source commit
+or one protocol level, because every V2.2 command is follower-only and the
+leader had no reason to be rebuilt.
 
-**1.2.1 / 1.1.1 change the status LED only** — the protocol is byte-identical
-to 1.2.0 / 1.1.0, so upgrading is optional from the SDK's point of view:
+> ### ⚠️ The follower image is a local build
+>
+> `tc-gu-01-slave.bin` 1.1.2 was built here with `arm-none-eabi-gcc 13.2.1`,
+> **not** by the firmware team's release toolchain. It is a faithful build of
+> `bf0a06e`, but it is not the official artifact — replace it when that lands.
+>
+> **Its size and CRC32 are not comparable with the 1.1.1 row's.** Rebuilding
+> the *previous* image from its *own* commit with this toolchain also fails to
+> reproduce it (150,044 B against the shipped 149,256 B), so roughly 800 bytes
+> of the jump from 149,256 to 156,048 is toolchain, not new firmware code.
+> Do not read the delta as a measure of what V2.2 added.
+>
+> It has **not been validated on hardware yet.** The SDK's V2.2 support is
+> unit-tested against the wire format only.
+
+**Leader 1.2.1 changes the status LED only** — protocol byte-identical to
+1.2.0, so upgrading the leader is optional from the SDK's point of view:
 
 - normal state: solid **white** at brightness 20 (was solid green at 10)
 - fault state: blinks at 500 ms (was 1000 ms)
 - the key-press LED reactions (click-blink, long-press-solid) are disabled
+
+**Follower 1.1.2 adds command set V2.2** — the four follower diagnostic
+commands (`0x3A` / `0x3B` startup limit torque, `0x52` fault report, `0x53`
+extended motor status). It is purely additive: `GetMotorStatus` (0x50) and the
+motor-status DATA stream still carry the same 31-byte payload, so everything
+the SDK did against 1.1.1 behaves identically. Upgrade only if you want the
+diagnostics — on 1.1.1 those four raise `ProtocolError(InvalidCmd)`.
+
+It also retunes power-on auto-calibration: single-sample stall confirmation,
+the open stall records the frame *before* the trigger, and 0.013 rad is
+subtracted from the saved `max_open` as a safety margin. **Re-run calibration
+after upgrading** if you depend on the exact span — expect it slightly smaller.
 
 ---
 

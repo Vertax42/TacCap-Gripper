@@ -1,23 +1,32 @@
 {
-  "protocol": "V2.1",
-  "source": {
-    "branch": "hw_v1.1.0",
-    "commit": "6b4605ab1682a43084a4cbfec1fdead657a58fe0"
-  },
   "images": {
     "master": {
       "file": "tc-gu-01-master.bin",
       "version": "1.2.1",
       "size_bytes": 116840,
       "crc32": "0xEC491CBD",
-      "sn_suffix": "m"
+      "sn_suffix": "m",
+      "protocol": "V2.1",
+      "source": {
+        "branch": "hw_v1.1.0",
+        "commit": "6b4605ab1682a43084a4cbfec1fdead657a58fe0"
+      },
+      "build": "official"
     },
     "slave": {
       "file": "tc-gu-01-slave.bin",
-      "version": "1.1.1",
-      "size_bytes": 149256,
-      "crc32": "0xEBA6FB50",
-      "sn_suffix": "s"
+      "version": "1.1.2",
+      "size_bytes": 156048,
+      "crc32": "0x866B1800",
+      "sn_suffix": "s",
+      "protocol": "V2.2",
+      "source": {
+        "branch": "hw_v1.1.0",
+        "commit": "bf0a06e"
+      },
+      "build": "local",
+      "toolchain": "arm-none-eabi-gcc 13.2.1 (15:13.2.rel1-2)",
+      "note": "Built locally, NOT by the firmware team's release toolchain. Rebuilding the previous 1.1.1 image from its own commit with this toolchain also fails to reproduce it (150044 B vs the shipped 149256 B), so the size/CRC32 here are not comparable with pre-1.1.2 entries. Replace with the official artifact when it is available."
     }
   }
 }
