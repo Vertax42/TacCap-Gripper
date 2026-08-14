@@ -7,7 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Command set V2.2 — follower motor diagnostics** (firmware `hw_v1.1.0` @
+  `bf0a06e`, follower 1.1.2; the leader is unchanged at 1.2.1 because every
+  V2.2 command is follower-only). The upgrade is **purely additive**:
+  `Cmd::GetMotorStatus` (0x50) and the `MotorStatus` DATA stream still carry
+  the same 31-byte payload, so existing code — `read_status()`, `on_status()`,
+  `ControlLoop` — is untouched and keeps working against both firmware
+  generations. Payload length is *not* a firmware probe; use `Cmd::GetVersion`.
+  - `Motor::read_status_ext()` (`Cmd::GetMotorStatusExt`, 0x53) — the 72-byte
+    `MotorStatusExt`. Bytes 0..30 are byte-identical to `MotorStatus`; the tail
+    adds the motor's fault word, its power-on latched OR, a stop-time snapshot,
+    firmware collection-health flags and the raw cmd-5 CAN reply.
+  - `Motor::fault_report(force=False)` (`Cmd::GetMotorFault`, 0x52) — the
+    64-byte `MotorFaultReport`, merging the motor fault word, the MCU's own
+    firmware-level fault state and the CAN evidence into one snapshot.
+    `force=True` costs a CAN round trip and can disturb a running control loop.
+  - `Motor::get/set_startup_limit_torque()` (0x3A / 0x3B) — the power-on
+    limit-torque value the firmware writes to the motor's `0x700B` on every
+    boot, replacing the old hard-coded 6 Nm. Works under MIT as well as
+    Private. Note the coupling: a successful
+    `set_private_param(0x700B, ...)` now *also* rewrites this stored value.
+  - `FollowerGripper::set_auto_cal_stall_param()` — short-form
+    `Cmd::SetGripperAutoCalConfig` (0x68) writes that patch only the
+    stall-detection fields, no read-modify-write needed.
+    `GripperAutoCalStallParam` (10 B) / `GripperAutoCalStallParamEx` (16 B).
+  - Four decoded motor-status bits the firmware now reports in the existing
+    16-bit `status` field: `DriverFault`, `PositionInitError`,
+    `HardwareIdError`, `EncoderUncalibrated`. These reach `read_status()` and
+    the DATA stream too, not just 0x53.
+  - Supporting constants: `MotorMonitorFlag`, `MotorMonitorDiag`,
+    `MotorStopReason`, `MotorFaultBit`, `MotorFaultSource`,
+    `MotorFaultReportFlag`, `FirmwareFaultCode`. Following the existing
+    `MotorStatusBit` convention, the bit *masks* stay C++-only; Python gets the
+    raw integer fields plus the `MotorStopReason` enum.
+
+### Fixed
+- **`EncoderConfig` was 14 bytes on the wire; the firmware wants 5.** Firmware
+  `0086da6` (2026-05-27) dropped `baudrate` / `resolution` / `ratio` along with
+  the retired RS485 Modbus encoder driver — the encoder is SPI MT6816 now — but
+  the SDK kept mirroring the old layout. That broke both directions of the
+  command: `Cmd::SetEncoderConfig` sent 14 bytes where the firmware's command
+  table accepts exactly `sizeof(encoder_config_t)`, so it NACKed
+  `LengthMismatch`, and `Cmd::GetEncoderConfig` threw `ProtocolError` on the
+  5-byte response. `EncoderConfig` is now `{uint8_t direction; float
+  offset_rad;}`. No published API surface changes — the struct was reachable
+  only through the codec layer, never exposed on `Encoder` or in Python.
+  Found by the new drift check below, ~2.5 months after the fact.
+
+### Added
+- **`scripts/check_protocol_drift.py`** — fails when the SDK's hand-written
+  protocol mirror falls behind the firmware headers. The existing
+  `static_assert(sizeof(...) == N)` lines catch mirroring something *wrong*;
+  nothing caught *not mirroring it at all*, which is how both V2.2 and the
+  `EncoderConfig` shrink went unnoticed. Three checks: command table and error
+  codes are compared by wire value straight out of `protocol_cmd.h` (zero
+  maintenance — a new `#define CMD_*` fails until the enum gains it), and
+  payload sizes come from actually compiling both headers, so the numbers are
+  the compiler's rather than a regex's. Skips cleanly when no firmware clone is
+  present; `--require` makes its absence an error.
+- **GitHub Actions CI** (`.github/workflows/ci.yml`) — build + unit tests, plus
+  the drift check. `tc-gu-01` is private while this repo is public, so the
+  drift job needs a `FIRMWARE_REPO_TOKEN` secret (read-only deploy key or
+  repo-scoped fine-grained PAT). The secret is optional by design: GitHub
+  withholds secrets from fork pull requests, where the check degrades to a
+  SKIP rather than failing work it cannot verify.
+
 ### Changed
+- **Shipped follower image bumped to 1.1.2** (`hw_v1.1.0` @ `bf0a06e`), the
+  build that carries command set V2.2. The leader image is untouched at 1.2.1
+  (`6b4605a`) — every V2.2 command is follower-only, so it had no reason to be
+  rebuilt. `firmware/manifest.json` consequently moves `protocol` and `source`
+  from the top level down into each image entry; the fields `ota_update.py`
+  actually reads (`crc32`, `sn_suffix`) are unchanged.
+  - **This follower image is a local build**, produced with
+    `arm-none-eabi-gcc 13.2.1` rather than the firmware team's release
+    toolchain, and is **not yet hardware-validated**. Replace it with the
+    official artifact when that lands.
+  - Its size and CRC32 are **not comparable with the 1.1.1 row's**: rebuilding
+    the previous image from its own commit with this toolchain also fails to
+    reproduce it (150,044 B against the shipped 149,256 B), so roughly 800 of
+    the ~6,800 added bytes are toolchain, not new firmware code.
+- **Follower power-on auto-calibration retuned in firmware 1.1.2** — wire
+  layout unchanged, behaviour is not. Stall is now confirmed from a single
+  sample held for `stall_hold_ms` instead of averaged over several, the open
+  stall records the frame *before* the trigger rather than the fully-jammed
+  pose, and 0.013 rad is subtracted from the saved `max_open` as a safety
+  margin. Expect a slightly smaller `max_open` than the same hardware reported
+  on 1.1.1, and re-run calibration after upgrading if you depend on the exact
+  span. `close_confirm_count` / `open_confirm_count` are now compat-only fields.
 - **Firmware versions are presented as `MAJOR.MINOR.PATCH`** — the fourth
   "build" byte is no longer shown anywhere user-facing. Firmware pins it to 0
   and it carries no meaning, so printing `1.2.1.0` only invited people to type

@@ -24,18 +24,29 @@ Both adapters consume this SDK; they do not reimplement device access.
 
 ## Status
 
-**v0.1.7 — firmware V2.1 sync, hardware-validated.** Tested on bilateral
-leader setups (left + right, ~280 MB/s outbound, both flashed to leader
-1.2.1) and on a real follower gripper (MIT force-position control, normalized
-grasp, LED, auto-cal).
+**v0.1.7 — firmware V2.2 sync.** Tested on bilateral leader setups (left +
+right, ~280 MB/s outbound, both flashed to leader 1.2.1) and on a real follower
+gripper (MIT force-position control, normalized grasp, LED, auto-cal) against
+V2.1 firmware. The V2.2 additions below are protocol-complete and unit-tested
+but **not yet hardware-validated**.
 
 > **Firmware you need.** Command set V2.1 needs **leader >= 1.2.0** /
-> **follower >= 1.1.0**. That is a minimum, not an exact match — anything at
-> or above it speaks V2.1. The images shipped in `firmware/` are leader 1.2.1
-> / follower 1.1.1 (firmware repo `hw_v1.1.0` @ `6b4605a`), which change the
-> status LED only and are protocol-identical to 1.2.0 / 1.1.0. Check with
-> `python python/examples/fisheye_cal.py show`, which prints the version and
-> whether each V2.0/V2.1 command answers.
+> **follower >= 1.1.0**; the V2.2 follower diagnostics need **follower >=
+> 1.1.2**. Those are minimums, not exact matches. The images shipped in
+> `firmware/` are leader 1.2.1 (`6b4605a`) and follower 1.1.2 (`bf0a06e`) —
+> the two roles no longer share a source commit, since every V2.2 command is
+> follower-only. Check with `python python/examples/fisheye_cal.py show`, which
+> prints the version and whether each V2.0/V2.1 command answers.
+>
+> The shipped follower image is a **local build, not yet hardware-validated** —
+> see [`firmware/README.md`](firmware/README.md) before flashing it.
+>
+> **V2.2 is purely additive.** `Cmd::GetMotorStatus` (0x50) and the motor-status
+> DATA stream still carry the same 31-byte payload, so `read_status()`,
+> `on_status()` and `ControlLoop` behave identically on 1.1.1 and 1.1.2. Only
+> the new 0x3A/0x3B/0x52/0x53 commands need the newer firmware, and they fail
+> loudly with `ProtocolError(InvalidCmd)`. Payload length is *not* a version
+> probe — a 31-byte status frame says nothing about firmware age.
 >
 > The SDK stays usable on older firmware — everything up to command set V1.9
 > behaves identically. Only the V2.0/V2.1 calibration commands are affected,
@@ -48,7 +59,7 @@ grasp, LED, auto-cal).
 What's in:
 
 - TC-GU-01 protocol: **wire framing V1.8** (global byte stuffing) +
-  **command set V2.1**. Async transport with ACK matching, per-cmd DATA
+  **command set V2.2**. Async transport with ACK matching, per-cmd DATA
   subscribers.
 - **Follower motor control (MIT), validated on hardware.** `Motor` enable /
   disable / clear-fault + four control modes (position / velocity / torque /
@@ -69,6 +80,15 @@ What's in:
 - **V1.9 additions:** `motor_status_t` is 31 bytes; power-on auto-calibration
   config (`get/set_auto_cal_config`); WS2812 `Led` control (`g.led`); private-
   protocol single-parameter access (`get/set_private_param`, private-mode only).
+- **V2.2 additions (follower only, firmware >= 1.1.2):** motor diagnostics —
+  `motor.read_status_ext()` returns the 72-byte `MotorStatusExt` (the 31-byte
+  status plus the motor fault word, its power-on latched OR, a stop-time
+  snapshot and the raw CAN evidence); `motor.fault_report(force=False)` returns
+  the 64-byte `MotorFaultReport` that also folds in the MCU's own firmware-level
+  faults. Plus `motor.get/set_startup_limit_torque()` (the boot-time `0x700B`
+  limit torque, replacing the old hard-coded 6 Nm) and
+  `follower.set_auto_cal_stall_param()` for patching auto-cal stall settings
+  without a read-modify-write.
 - **V2.0/V2.1 additions:** `Calibration` component (`g.calibration`) for the
   two flash-persisted calibration records — fisheye camera intrinsics +
   distortion (leader *and* follower) and the leader's encoder max travel angle.
@@ -702,7 +722,11 @@ What's in them:
 - `tc-gu-01/App/protocol/protocol_cmd.h` + `protocol_data.h` — canonical
   command enum + POD payload layouts. The SDK's
   `cpp/include/taccap/protocol/{commands.hpp,payloads.hpp}` mirror these
-  1:1 with `static_assert(sizeof(...) == ...)` size checks.
+  1:1 with `static_assert(sizeof(...) == ...)` size checks. Currently
+  mirrored from branch `hw_v1.1.0` @ `bf0a06e` (command set V2.2).
+- `tc-gu-01/App/protocol/PROTOCOL_SPEC.md` + `tc-gu-01/docs/PROTOCOL.md` —
+  the human-readable spec, including the §10 offset table for the 72-byte
+  extended motor status that `test_codec_v22.cpp` is transcribed from.
 - `tc-gu-01/App/tasks/task_data_stream.c` + `task_imu.c` +
   `task_encoder.c` — explains why IMU/encoder unique-data rate caps at
   ~60 Hz even when you request 100 (see the SDK's stream-dup note in
@@ -724,7 +748,7 @@ cd third_party/firmware/tc-gu-01
 env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=master -j"$(nproc)"
 env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=slave  -j"$(nproc)"
 # -> build/master/tc-gu-01-master.bin   (leader 1.2.1)
-# -> build/slave/tc-gu-01-slave.bin     (follower 1.1.1)
+# -> build/slave/tc-gu-01-slave.bin     (follower 1.1.2 at bf0a06e)
 ```
 
 > **`env -u CFLAGS ...` is load-bearing.** The `taccap` conda env exports host
@@ -757,8 +781,10 @@ Notes:
 
 - **`make` succeeding does not mean it will flash.** The linker script declares
   the full 2048K, but OTA caps a single bank at 456 KB — check
-  `ls -l build/*/tc-gu-01-*.bin` (current builds: master 116,884 B, slave
-  149,256 B, i.e. 25% / 32% of the cap).
+  `ls -l build/*/tc-gu-01-*.bin` (builds at `bf0a06e` with
+  `arm-none-eabi-gcc 13.2.1`: master 117,612 B, slave 156,048 B, i.e. 25% / 33%
+  of the cap). Sizes vary by several hundred bytes across toolchains, so treat
+  these as approximate.
 - Flash the artifact matching the *role*, not the side. A gripper's role is the
   `m` / `s` suffix on its firmware SN; both leaders take the `master` build.
 - `make download` is Windows-only (`STM32_Programmer_CLI.exe`, and it flashes

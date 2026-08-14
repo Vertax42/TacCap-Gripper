@@ -17,7 +17,13 @@ carries deep background; this file is *house rules*.
 - After touching protocol / payload structs, verify the
   `static_assert(sizeof(...) == N)` lines in
   `cpp/include/taccap/protocol/payloads.hpp` — they fail the build the
-  instant firmware-side layout drifts.
+  instant our own layout drifts.
+- Those asserts only check the SDK against *itself*. To check it against the
+  firmware, run `scripts/check_protocol_drift.py` (needs the `tc-gu-01` clone;
+  skips cleanly without it). It compares the command/error tables by wire value
+  and every mapped payload by real compiled `sizeof`. Run it whenever the
+  firmware clone is updated — this is what catches "the firmware added a
+  command and we never noticed", which the asserts structurally cannot.
 - Linking the test binary can fail with `undefined reference to
   curl_*@CURL_OPENSSL_4` / `__cxa_call_terminate` — that is the
   `lerobot-xense` conda env leaking through `LD_LIBRARY_PATH`. Build with
@@ -29,18 +35,30 @@ carries deep background; this file is *house rules*.
   `test_numpy_views.py`); `py::array_t<T> a(n)` is a trap on pybind11 2.9.
 
 ## Build & install (Python wheel)
-- conda env `taccap` (py3.12, primary dev env):
+- conda env `xense-taccap` (py3.12, primary dev env):
   `pip install -e . --no-build-isolation`
 - System py3.10 (used by ROS2 Humble):
   `/usr/bin/python3 -m pip install --user --no-build-isolation .`
 - Examples are off by default; enable with `-DTACCAP_BUILD_EXAMPLES=ON`.
-- Active conda env's python: `/home/ubuntu/miniforge3/envs/taccap/bin/python`.
-- **Always run Python with `env -u PYTHONPATH`.** The shell stacks `taccap` on
-  top of `lerobot-xense`, whose activation exports
+- Active conda env's python:
+  `/home/vertax/miniforge3/envs/xense-taccap/bin/python`.
+- **Always run Python with `env -u PYTHONPATH`.** The shell stacks
+  `xense-taccap` on top of `lerobot-xense`, whose activation exports
   `PYTHONPATH=<lerobot-xense>/lib/python3.12/site-packages`. That injects its
   editable install of `xense.taccap` — pinned to whatever commit the
   `lerobot-xense` submodule sits at — into *every* interpreter, so you silently
   test old code. With `PYTHONPATH` cleared, `taccap` resolves to this repo.
+- **Importing needs `LD_LIBRARY_PATH=$CONDA_PREFIX/lib`.** OpenCV comes from
+  conda, the locally built `libtaccap_core.so` is linked with
+  `INSTALL_RPATH "$ORIGIN"`, and conda does not put its own `lib` on the loader
+  path — so `import xense.taccap` fails with `libopencv_core.so.412` even
+  inside an activated env. Distinct from the `env -u LD_LIBRARY_PATH` rule
+  above, which is about a leaked *build*-time path; a session can need both.
+- There is no system OpenCV, so a bare `cmake -S . -B build` fails at
+  `find_package(OpenCV REQUIRED)`. `conda activate xense-taccap` sets
+  `CMAKE_PREFIX_PATH` and puts the env's cmake first, which is enough; only if
+  you call `/usr/bin/cmake` directly do you need
+  `-DCMAKE_PREFIX_PATH=$CONDA_PREFIX`.
 
 ## Hardware smoke test (when a gripper is plugged in)
 ```bash
