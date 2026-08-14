@@ -102,6 +102,15 @@ public:
         std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
     void set_auto_cal_config(const protocol::GripperAutoCalConfig& cfg);
 
+    // V2.2 — patch only the stall-detection fields, leaving speeds and the
+    // Enable flag as stored. Saves a read-modify-write when tuning stall torque,
+    // and cannot accidentally clobber the rest of the config from a stale read.
+    // The Ex form additionally patches the two delays and the (compat-only)
+    // confirm counts. Firmware older than follower 1.1.2 NACKs LengthMismatch —
+    // fall back to the full set_auto_cal_config() there.
+    void set_auto_cal_stall_param(const protocol::GripperAutoCalStallParam& p);
+    void set_auto_cal_stall_param(const protocol::GripperAutoCalStallParamEx& p);
+
     // ---- Normalized gripper position (0 = closed, 1 = open) -----------------
     // Convenience layer over the motor + GripperConfig so callers work in a
     // normalized [0,1] position instead of raw shaft radians. NOTE: this is

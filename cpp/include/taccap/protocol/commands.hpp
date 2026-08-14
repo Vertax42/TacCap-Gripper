@@ -9,13 +9,19 @@
 // and any host-side Python implementation are secondary.
 //
 // Tracked firmware protocol: **wire framing V1.8** (global byte stuffing, see
-// bus/frame.cpp) + **command set V2.1** (V1.7 motor / CAN-id / gripper-config
+// bus/frame.cpp) + **command set V2.2** (V1.7 motor / CAN-id / gripper-config
 // commands; V1.9 WS2812 + private motor params; V2.0/V2.1 fisheye-camera and
-// leader-encoder-max calibration). The follower-only V1.7 commands are
+// leader-encoder-max calibration; V2.2 follower startup limit-torque, motor
+// fault report and extended motor status). The follower-only V1.7 commands are
 // implemented but not yet hardware-validated.
 //
 // Firmware builds carrying command set V2.1: leader (master) 1.2.0,
-// follower (slave) 1.1.0.
+// follower (slave) 1.1.0. V2.2 adds follower (slave) 1.1.2; the leader is
+// unchanged at 1.2.1 because every V2.2 command is follower-only.
+//
+// V2.2 is purely additive — Cmd::GetMotorStatus (0x50) and the MotorStatus DATA
+// stream still carry the 31-byte layout. Payload length is therefore NOT a
+// firmware-version probe; use Cmd::GetVersion.
 
 #pragma once
 
@@ -87,12 +93,17 @@ enum class Cmd : uint8_t {
     MotorGetProtocol    = 0x37,    // V1.7 — query CAN protocol (resp 1B MotorProtocol)
     MotorGetPrivateParam = 0x38,   // V1.9+ — read one private-protocol param (req u16 index)
     MotorSetPrivateParam = 0x39,   // V1.9+ — write one private-protocol param
+    MotorSetStartupLimitTorque = 0x3A,  // V2.2 — persist power-on limit torque (req f32)
+    MotorGetStartupLimitTorque = 0x3B,  // V2.2 — read it back (resp f32, 4B)
     MotorPosCtrl        = 0x40,
     MotorVelCtrl        = 0x41,
     MotorTorqueCtrl     = 0x42,
     MotorImpedanceCtrl  = 0x43,
-    GetMotorStatus      = 0x50,
+    GetMotorStatus      = 0x50,    // resp MotorStatus (31B) — unchanged in V2.2
     GetMotorControlStats = 0x51,   // V1.7 — follower control-loop stats (resp 48B)
+    GetMotorFault       = 0x52,    // V2.2 — MotorFaultReport (64B); req 0B (cached)
+                                   //        or 1B non-zero (force a CAN read)
+    GetMotorStatusExt   = 0x53,    // V2.2 — MotorStatusExt (72B), superset of 0x50
 
     // Config (0x60–0x6F)
     SetImuConfig        = 0x60,

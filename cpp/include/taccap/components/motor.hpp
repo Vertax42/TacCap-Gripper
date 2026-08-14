@@ -119,6 +119,36 @@ public:
     MotorStatusSample read_status(
         std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
 
+    // V2.2 — the 72-byte extended status (Cmd 0x53). Superset of read_status():
+    // same pose/torque/status prefix plus the firmware's fault word, its latched
+    // and stop-time snapshots, collection-health flags and the raw CAN evidence.
+    //
+    // read_status() is still the right call for a control loop — it is what the
+    // DATA stream carries and it stays cheap. Reach for this one when something
+    // has already gone wrong and you need to know *what*.
+    //
+    // Firmware older than follower 1.1.2 does not implement 0x53 and NACKs
+    // InvalidCmd -> ProtocolError. There is no capability query; either gate on
+    // FollowerGripper::firmware_version() or catch the throw.
+    protocol::MotorStatusExt read_status_ext(
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
+
+    // V2.2 — the 64-byte diagnostic fault report (Cmd 0x52). Merges the motor's
+    // own fault word, the MCU's firmware-level fault state and the raw CAN
+    // reply into one snapshot.
+    //
+    // `force` = false returns the firmware's cached report (cheap, safe to poll).
+    // `force` = true makes the MCU issue a fresh cmd-5 read on the CAN bus
+    // before answering — it costs a bus round trip and can perturb a running
+    // control loop, so keep it for on-demand diagnostics, not polling.
+    //
+    // The firmware ACKs OK even when there is nothing to report; inspect
+    // report_flags (MotorFaultReportFlag::MotorValid / FwValid) before trusting
+    // the fault code fields. Same 1.1.2 firmware floor as read_status_ext().
+    protocol::MotorFaultReport fault_report(
+        bool force = false,
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{200});
+
     // Subscribe to streamed MotorStatus DATA frames (StreamSrc::MotorStatus
     // must be enabled in start_streaming for these to arrive).
     SubId on_status(Callback cb);
@@ -142,6 +172,18 @@ public:
     void set_private_param(uint16_t index, uint32_t raw_value);
     protocol::MotorControlStats control_stats(                 // Cmd 0x51
         std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
+
+    // V2.2 — power-on limit-torque config (Cmd 0x3A / 0x3B), persisted in MCU
+    // flash. On every boot the firmware writes this value to the motor's 0x700B
+    // limit_torque instead of the old hard-coded 6 Nm. Independent of the
+    // current CAN protocol: unlike set_private_param(0x700B, ...) these two work
+    // under MIT as well as Private.
+    //
+    // Note the coupling in the other direction — a successful
+    // set_private_param(0x700B, ...) *also* rewrites this stored value, so a
+    // private-protocol torque tweak silently becomes the new boot default.
+    void  set_startup_limit_torque(float torque_nm);
+    float get_startup_limit_torque();
 
     static MotorStatusSample decode(const std::uint8_t* payload, std::size_t len);
 

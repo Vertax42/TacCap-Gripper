@@ -68,6 +68,12 @@ GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
 ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
 MotorControlStats = _taccap_native.MotorControlStats  # V1.7
 MotorPrivateParam = _taccap_native.MotorPrivateParam  # V1.9+ private-protocol param
+MotorStatusExt = _taccap_native.MotorStatusExt        # V2.2 72-byte status (Cmd 0x53)
+MotorFaultReport = _taccap_native.MotorFaultReport    # V2.2 64-byte fault report (Cmd 0x52)
+MotorStopReason = _taccap_native.MotorStopReason      # V2.2
+# V2.2 partial auto-cal writes — patch stall params without a read-modify-write
+GripperAutoCalStallParam = _taccap_native.GripperAutoCalStallParam
+GripperAutoCalStallParamEx = _taccap_native.GripperAutoCalStallParamEx
 KeySample = _taccap_native.KeySample
 SensorErrorSample = _taccap_native.SensorErrorSample
 CameraFrame = _taccap_native.CameraFrame
@@ -151,6 +157,11 @@ __all__ = [
     "ControlLoop",
     "MotorControlStats",
     "MotorPrivateParam",
+    "MotorStatusExt",
+    "MotorFaultReport",
+    "MotorStopReason",
+    "GripperAutoCalStallParam",
+    "GripperAutoCalStallParamEx",
     "CameraFrame",
     "IMU",
     "Encoder",

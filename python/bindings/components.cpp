@@ -413,6 +413,17 @@ void bind_components(py::module_& m) {
         .value("Private", protocol::MotorProtocol::Private)
         .value("Mit",     protocol::MotorProtocol::Mit);
 
+    // V2.2 — MotorStatusExt.stop_reason / MotorFaultReport.stop_reason. The
+    // fault/monitor *bit masks* stay C++-only, matching MotorStatusBit: Python
+    // gets the raw integers and masks them itself.
+    py::enum_<protocol::MotorStopReason>(m, "MotorStopReason")
+        .value("None_",        protocol::MotorStopReason::None)
+        .value("Disable",      protocol::MotorStopReason::Disable)
+        .value("Emergency",    protocol::MotorStopReason::Emergency)
+        .value("ClearFault",   protocol::MotorStopReason::ClearFault)
+        .value("LimitStall",   protocol::MotorStopReason::LimitStall)
+        .value("ControlError", protocol::MotorStopReason::ControlError);
+
     py::class_<protocol::GripperConfig>(m, "GripperConfig")
         .def(py::init([]() {
             protocol::GripperConfig c{};
@@ -460,6 +471,52 @@ void bind_components(py::module_& m) {
             std::snprintf(buf, sizeof(buf),
                 "GripperAutoCalConfig(flags=0x%04x, close_torque=%.3f, open_torque=%.3f)",
                 c.flags, c.close_stall_torque_nm, c.open_stall_torque_nm);
+            return std::string(buf);
+        });
+
+    // ---- GripperAutoCalStallParam / …Ex (V2.2 partial 0x68 write) ---------
+    // Patch just the stall-detection fields; speeds, flags and the magic/version
+    // header keep their stored values. No magic/version to fill in — the
+    // firmware supplies them.
+    py::class_<protocol::GripperAutoCalStallParam>(m, "GripperAutoCalStallParam")
+        .def(py::init([]() { return protocol::GripperAutoCalStallParam{}; }))
+        .def_readwrite("close_stall_torque_nm",
+                       &protocol::GripperAutoCalStallParam::close_stall_torque_nm)
+        .def_readwrite("open_stall_torque_nm",
+                       &protocol::GripperAutoCalStallParam::open_stall_torque_nm)
+        .def_readwrite("stall_hold_ms",
+                       &protocol::GripperAutoCalStallParam::stall_hold_ms)
+        .def("__repr__", [](const protocol::GripperAutoCalStallParam& p) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                "GripperAutoCalStallParam(close=%.3fNm, open=%.3fNm, hold=%ums)",
+                p.close_stall_torque_nm, p.open_stall_torque_nm, p.stall_hold_ms);
+            return std::string(buf);
+        });
+
+    py::class_<protocol::GripperAutoCalStallParamEx>(m, "GripperAutoCalStallParamEx")
+        .def(py::init([]() { return protocol::GripperAutoCalStallParamEx{}; }))
+        .def_readwrite("close_stall_torque_nm",
+                       &protocol::GripperAutoCalStallParamEx::close_stall_torque_nm)
+        .def_readwrite("open_stall_torque_nm",
+                       &protocol::GripperAutoCalStallParamEx::open_stall_torque_nm)
+        .def_readwrite("stall_hold_ms",
+                       &protocol::GripperAutoCalStallParamEx::stall_hold_ms)
+        .def_readwrite("startup_delay_ms",
+                       &protocol::GripperAutoCalStallParamEx::startup_delay_ms)
+        .def_readwrite("post_zero_delay_ms",
+                       &protocol::GripperAutoCalStallParamEx::post_zero_delay_ms)
+        .def_readwrite("close_confirm_count",
+                       &protocol::GripperAutoCalStallParamEx::close_confirm_count)
+        .def_readwrite("open_confirm_count",
+                       &protocol::GripperAutoCalStallParamEx::open_confirm_count)
+        .def("__repr__", [](const protocol::GripperAutoCalStallParamEx& p) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "GripperAutoCalStallParamEx(close=%.3fNm, open=%.3fNm, hold=%ums, "
+                "startup_delay=%ums)",
+                p.close_stall_torque_nm, p.open_stall_torque_nm,
+                p.stall_hold_ms, p.startup_delay_ms);
             return std::string(buf);
         });
 
@@ -620,6 +677,92 @@ void bind_components(py::module_& m) {
                 s.running, s.mode, s.actual_hz,
                 static_cast<unsigned>(s.loop_count),
                 static_cast<unsigned>(s.error_count));
+            return std::string(buf);
+        });
+
+    // ---- MotorStatusExt (V2.2 — Cmd 0x53, 72 bytes) ----------------------
+    // Bytes 0..30 mirror MotorStatusSample; the rest is the fault / monitor
+    // extension. `monitor_flags` gates the fault fields — check it first.
+    py::class_<protocol::MotorStatusExt>(m, "MotorStatusExt")
+        .def_readonly("actual_pos",          &protocol::MotorStatusExt::actual_pos)
+        .def_readonly("actual_vel",          &protocol::MotorStatusExt::actual_vel)
+        .def_readonly("actual_torque",       &protocol::MotorStatusExt::actual_torque)
+        .def_readonly("motor_temp_c",        &protocol::MotorStatusExt::motor_temp)
+        .def_readonly("status",              &protocol::MotorStatusExt::status)
+        .def_readonly("target_pos",          &protocol::MotorStatusExt::target_pos)
+        .def_readonly("target_vel",          &protocol::MotorStatusExt::target_vel)
+        .def_readonly("target_torque",       &protocol::MotorStatusExt::target_torque)
+        .def_readonly("control_mode",        &protocol::MotorStatusExt::control_mode)
+        .def_readonly("monitor_version",     &protocol::MotorStatusExt::monitor_version)
+        .def_readonly("monitor_flags",       &protocol::MotorStatusExt::monitor_flags)
+        .def_readonly("stop_reason",         &protocol::MotorStatusExt::stop_reason)
+        .def_readonly("monitor_reserved",    &protocol::MotorStatusExt::monitor_reserved)
+        .def_readonly("fault_code",          &protocol::MotorStatusExt::fault_code)
+        .def_readonly("latched_fault_code",  &protocol::MotorStatusExt::latched_fault_code)
+        .def_readonly("fault_timestamp_ms",  &protocol::MotorStatusExt::fault_timestamp_ms)
+        .def_readonly("status_timestamp_ms", &protocol::MotorStatusExt::status_timestamp_ms)
+        .def_readonly("stop_fault_code",     &protocol::MotorStatusExt::stop_fault_code)
+        .def_readonly("stop_timestamp_ms",   &protocol::MotorStatusExt::stop_timestamp_ms)
+        .def_readonly("fault_can_id",        &protocol::MotorStatusExt::fault_can_id)
+        .def_readonly("fault_can_dlc",       &protocol::MotorStatusExt::fault_can_dlc)
+        // Raw C array -> bytes; def_readonly on uint8_t[8] would expose an
+        // opaque proxy that does not survive the owning struct.
+        .def_property_readonly("fault_can_data", [](const protocol::MotorStatusExt& s) {
+            return py::bytes(reinterpret_cast<const char*>(s.fault_can_data),
+                             sizeof(s.fault_can_data));
+        })
+        .def("__repr__", [](const protocol::MotorStatusExt& s) {
+            char buf[200];
+            std::snprintf(buf, sizeof(buf),
+                "MotorStatusExt(pos=%.4frad, torque=%.3fNm, status=0x%04x, "
+                "fault=0x%08x, latched=0x%08x, monitor=0x%02x, stop_reason=%u)",
+                s.actual_pos, s.actual_torque, s.status,
+                static_cast<unsigned>(s.fault_code),
+                static_cast<unsigned>(s.latched_fault_code),
+                s.monitor_flags, s.stop_reason);
+            return std::string(buf);
+        });
+
+    // ---- MotorFaultReport (V2.2 — Cmd 0x52, 64 bytes) --------------------
+    py::class_<protocol::MotorFaultReport>(m, "MotorFaultReport")
+        .def_readonly("version",           &protocol::MotorFaultReport::version)
+        .def_readonly("report_flags",      &protocol::MotorFaultReport::report_flags)
+        .def_readonly("source_mask",       &protocol::MotorFaultReport::source_mask)
+        .def_readonly("protocol_mode",     &protocol::MotorFaultReport::protocol_mode)
+        .def_readonly("event_seq",         &protocol::MotorFaultReport::event_seq)
+        .def_readonly("timestamp_ms",      &protocol::MotorFaultReport::timestamp_ms)
+        .def_readonly("motor_fault_code",  &protocol::MotorFaultReport::motor_fault_code)
+        .def_readonly("motor_latched_fault_code",
+                      &protocol::MotorFaultReport::motor_latched_fault_code)
+        .def_readonly("stop_fault_code",   &protocol::MotorFaultReport::stop_fault_code)
+        .def_readonly("firmware_fault_code",
+                      &protocol::MotorFaultReport::firmware_fault_code)
+        .def_readonly("firmware_latched_fault_code",
+                      &protocol::MotorFaultReport::firmware_latched_fault_code)
+        .def_readonly("firmware_detail_code",
+                      &protocol::MotorFaultReport::firmware_detail_code)
+        .def_readonly("fault_can_id",      &protocol::MotorFaultReport::fault_can_id)
+        .def_readonly("fault_can_dlc",     &protocol::MotorFaultReport::fault_can_dlc)
+        .def_readonly("monitor_flags",     &protocol::MotorFaultReport::monitor_flags)
+        .def_readonly("monitor_reserved",  &protocol::MotorFaultReport::monitor_reserved)
+        .def_readonly("fault_timestamp_ms",
+                      &protocol::MotorFaultReport::fault_timestamp_ms)
+        .def_readonly("status_timestamp_ms",
+                      &protocol::MotorFaultReport::status_timestamp_ms)
+        .def_readonly("stop_reason",       &protocol::MotorFaultReport::stop_reason)
+        .def_property_readonly("fault_can_data", [](const protocol::MotorFaultReport& r) {
+            return py::bytes(reinterpret_cast<const char*>(r.fault_can_data),
+                             sizeof(r.fault_can_data));
+        })
+        .def("__repr__", [](const protocol::MotorFaultReport& r) {
+            char buf[200];
+            std::snprintf(buf, sizeof(buf),
+                "MotorFaultReport(flags=0x%02x, sources=0x%02x, motor=0x%08x, "
+                "fw=0x%08x, detail=%d, stop_reason=%u)",
+                r.report_flags, r.source_mask,
+                static_cast<unsigned>(r.motor_fault_code),
+                static_cast<unsigned>(r.firmware_fault_code),
+                static_cast<int>(r.firmware_detail_code), r.stop_reason);
             return std::string(buf);
         });
 
@@ -790,7 +933,24 @@ void bind_components(py::module_& m) {
         .def("control_stats", [](Motor& self, unsigned timeout_ms) {
             py::gil_scoped_release g;
             return self.control_stats(std::chrono::milliseconds(timeout_ms));
-        }, py::arg("timeout_ms") = 100);
+        }, py::arg("timeout_ms") = 100)
+        // ---- V2.2 diagnostics (follower >= 1.1.2; older firmware NACKs) ----
+        .def("read_status_ext", [](Motor& self, unsigned timeout_ms) {
+            py::gil_scoped_release g;
+            return self.read_status_ext(std::chrono::milliseconds(timeout_ms));
+        }, py::arg("timeout_ms") = 100)
+        // force=True costs a CAN round trip and can disturb a running control
+        // loop — leave it False when polling.
+        .def("fault_report", [](Motor& self, bool force, unsigned timeout_ms) {
+            py::gil_scoped_release g;
+            return self.fault_report(force, std::chrono::milliseconds(timeout_ms));
+        }, py::arg("force") = false, py::arg("timeout_ms") = 200)
+        .def("set_startup_limit_torque", [](Motor& self, float torque_nm) {
+            py::gil_scoped_release g; self.set_startup_limit_torque(torque_nm);
+        }, py::arg("torque_nm"))
+        .def("get_startup_limit_torque", [](Motor& self) {
+            py::gil_scoped_release g; return self.get_startup_limit_torque();
+        });
 
     // ---- Camera ---------------------------------------------------------
     py::class_<Camera>(m, "Camera")
@@ -1049,6 +1209,18 @@ void bind_components(py::module_& m) {
             py::gil_scoped_release gil;
             g.set_auto_cal_config(cfg);
         }, py::arg("config"))
+        // V2.2 — patch only the stall-detection fields. Overloaded on the
+        // param type; follower firmware older than 1.1.2 NACKs LengthMismatch.
+        .def("set_auto_cal_stall_param", [](FollowerGripper& g,
+                                            const protocol::GripperAutoCalStallParam& p) {
+            py::gil_scoped_release gil;
+            g.set_auto_cal_stall_param(p);
+        }, py::arg("param"))
+        .def("set_auto_cal_stall_param", [](FollowerGripper& g,
+                                            const protocol::GripperAutoCalStallParamEx& p) {
+            py::gil_scoped_release gil;
+            g.set_auto_cal_stall_param(p);
+        }, py::arg("param"))
         // ---- Normalized position (0 = closed, 1 = open) -------------------
         // NOTE: normalized [0,1] — distinct from motor.set_position() (raw rad).
         // set_position() is fire-and-forget (no ACK); poll motor.control_stats()

@@ -66,12 +66,16 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::MotorGetProtocol:    return "MotorGetProtocol";
         case Cmd::MotorGetPrivateParam: return "MotorGetPrivateParam";
         case Cmd::MotorSetPrivateParam: return "MotorSetPrivateParam";
+        case Cmd::MotorSetStartupLimitTorque: return "MotorSetStartupLimitTorque";
+        case Cmd::MotorGetStartupLimitTorque: return "MotorGetStartupLimitTorque";
         case Cmd::MotorPosCtrl:        return "MotorPosCtrl";
         case Cmd::MotorVelCtrl:        return "MotorVelCtrl";
         case Cmd::MotorTorqueCtrl:     return "MotorTorqueCtrl";
         case Cmd::MotorImpedanceCtrl:  return "MotorImpedanceCtrl";
         case Cmd::GetMotorStatus:      return "GetMotorStatus";
         case Cmd::GetMotorControlStats: return "GetMotorControlStats";
+        case Cmd::GetMotorFault:       return "GetMotorFault";
+        case Cmd::GetMotorStatusExt:   return "GetMotorStatusExt";
 
         case Cmd::SetImuConfig:        return "SetImuConfig";
         case Cmd::GetImuConfig:        return "GetImuConfig";

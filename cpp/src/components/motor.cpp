@@ -105,6 +105,29 @@ MotorStatusSample Motor::read_status(std::chrono::milliseconds timeout) {
     return decode(ack.data.data(), ack.data.size());
 }
 
+protocol::MotorStatusExt Motor::read_status_ext(std::chrono::milliseconds timeout) {
+    auto ack = t_.send_cmd(protocol::Cmd::GetMotorStatusExt, {}, timeout);
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("Motor::read_status_ext NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+    return protocol::decode_motor_status_ext(ack.data.data(), ack.data.size());
+}
+
+protocol::MotorFaultReport Motor::fault_report(bool force,
+                                               std::chrono::milliseconds timeout) {
+    // 0 bytes = read the cache; 1 non-zero byte = force a CAN round trip. The
+    // firmware accepts either length, so send the shorter frame when we can.
+    std::vector<uint8_t> req;
+    if (force) req.push_back(1);
+    auto ack = t_.send_cmd(protocol::Cmd::GetMotorFault, req, timeout);
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("Motor::fault_report NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+    return protocol::decode_motor_fault_report(ack.data.data(), ack.data.size());
+}
+
 Motor::SubId Motor::on_status(Callback cb) {
     return t_.subscribe(
         protocol::Cmd::GetMotorStatus,
@@ -189,6 +212,28 @@ protocol::MotorControlStats Motor::control_stats(std::chrono::milliseconds timeo
                             protocol::to_string(ack.error_code));
     }
     return protocol::decode_motor_control_stats(ack.data.data(), ack.data.size());
+}
+
+void Motor::set_startup_limit_torque(float torque_nm) {
+    std::vector<uint8_t> req(4);
+    std::memcpy(req.data(), &torque_nm, 4);  // little-endian host == wire
+    send_or_throw(t_, protocol::Cmd::MotorSetStartupLimitTorque, req,
+                  "set_startup_limit_torque");
+}
+
+float Motor::get_startup_limit_torque() {
+    auto ack = t_.send_cmd(protocol::Cmd::MotorGetStartupLimitTorque, {});
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("Motor::get_startup_limit_torque NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+    if (ack.data.size() < 4) {
+        throw ProtocolError("Motor::get_startup_limit_torque: expected 4 bytes, got " +
+                            std::to_string(ack.data.size()));
+    }
+    float torque_nm = 0.0f;
+    std::memcpy(&torque_nm, ack.data.data(), 4);
+    return torque_nm;
 }
 
 }  // namespace xense::taccap

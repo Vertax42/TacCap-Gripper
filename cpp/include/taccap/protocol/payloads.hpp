@@ -166,6 +166,13 @@ namespace MotorStatusBit {
     constexpr uint16_t OverVolt      = 0x0020;
     constexpr uint16_t UnderVolt     = 0x0040;
     constexpr uint16_t EncoderError  = 0x0080;
+    // V2.2 — the firmware now decodes the motor's own fault word into these.
+    // They ride in the same 16-bit `status` field the 31-byte layout already
+    // carries, so they surface on Cmd::GetMotorStatus and the DATA stream too.
+    constexpr uint16_t DriverFault         = 0x0100;
+    constexpr uint16_t PositionInitError   = 0x0200;
+    constexpr uint16_t HardwareIdError     = 0x0400;
+    constexpr uint16_t EncoderUncalibrated = 0x0800;
 }
 
 struct MotorPosCtrl {
@@ -210,6 +217,172 @@ struct MotorStatus {
     float    target_vel;      // rad/s
     float    target_torque;   // Nm    — target / feed-forward / clamp
     uint8_t  control_mode;    // MotorMode of the last applied command
+};
+
+// ---- Extended motor status + fault report (V2.2 — Cmd 0x53 / 0x52) --------
+//
+// V2.2 grew the firmware's internal motor_status_t to 72 bytes, but deliberately
+// did NOT change what Cmd::GetMotorStatus (0x50) or the MotorStatus DATA stream
+// emit — both still send the 31-byte prefix. The extra fields are reachable only
+// via Cmd::GetMotorStatusExt (0x53). Consequently a 31-byte status frame says
+// nothing about firmware age; probe with Cmd::GetVersion instead.
+//
+// Wire sizes mirror firmware MOTOR_STATUS_*_SIZE. The 59-byte figure is the
+// monitor extension without the raw-CAN tail; the firmware never emits it as a
+// standalone frame, but the PC tool decodes progressively (31 -> 59 -> 72) and
+// the constant is kept here so host code can do the same.
+constexpr std::size_t MOTOR_STATUS_LEGACY_SIZE = 31;
+constexpr std::size_t MOTOR_STATUS_V2_SIZE     = 59;
+constexpr std::size_t MOTOR_STATUS_EXT_SIZE    = 72;
+
+// MotorStatusExt::monitor_version — firmware MOTOR_MONITOR_VERSION.
+constexpr uint8_t MOTOR_MONITOR_VERSION = 0x02;
+
+// MotorStatusExt::monitor_flags — health of the firmware's own status/fault
+// collection, NOT motor faults. Read these before trusting fault_code:
+// StatusValid/FaultValid say whether the corresponding fields were ever filled.
+namespace MotorMonitorFlag {
+    constexpr uint8_t StatusValid       = 0x01;  // motion status has been received
+    constexpr uint8_t FaultValid        = 0x02;  // a full fault reply has been received
+    constexpr uint8_t CommStale         = 0x04;  // status feedback has gone stale
+    constexpr uint8_t FaultPollPending  = 0x08;  // a fault read is in flight
+    constexpr uint8_t StopSnapshotValid = 0x10;  // stop_fault_code/stop_timestamp are set
+    constexpr uint8_t FaultLatched      = 0x20;  // latched_fault_code is non-zero
+    constexpr uint8_t Warning           = 0x40;  // motor reports a warning
+    constexpr uint8_t FaultStale        = 0x80;  // detail fault data stale / never read
+}
+
+// MotorStatusExt::monitor_reserved — provenance of the fault data, so a host can
+// distinguish "no fault" from "never managed to read one".
+namespace MotorMonitorDiag {
+    constexpr uint8_t RxSeen       = 0x01;  // a valid cmd-5 reply has been seen
+    constexpr uint8_t TimeoutSeen  = 0x02;  // a fault read has timed out at least once
+    constexpr uint8_t CanFrameSeen = 0x04;  // a frame resembling a cmd-5 reply was seen
+}
+
+// MotorStatusExt::stop_reason / MotorFaultReport::stop_reason.
+enum class MotorStopReason : uint8_t {
+    None         = 0x00,
+    Disable      = 0x01,  // motor was disabled
+    Emergency    = 0x02,  // emergency stop
+    ClearFault   = 0x03,  // stopped by a clear-fault
+    LimitStall   = 0x04,  // limit / stall protection tripped
+    ControlError = 0x05,  // firmware control-loop error
+};
+
+// Bit positions inside the raw 32-bit motor fault word (MotorStatusExt::
+// fault_code / latched_fault_code / stop_fault_code, and the MotorFaultReport
+// motor_* fields). These come from the RobStride motor itself, not the MCU.
+namespace MotorFaultBit {
+    constexpr uint32_t OverTemp            = 1u << 0;   // > 135 °C
+    constexpr uint32_t DriverChip          = 1u << 1;
+    constexpr uint32_t UnderVolt           = 1u << 2;   // < 12 V
+    constexpr uint32_t OverVolt            = 1u << 3;   // > 60 V
+    constexpr uint32_t PhaseBOverCurrent   = 1u << 4;
+    constexpr uint32_t PhaseCOverCurrent   = 1u << 5;
+    constexpr uint32_t EncoderUncalibrated = 1u << 7;
+    constexpr uint32_t HardwareId          = 1u << 8;
+    constexpr uint32_t PositionInit        = 1u << 9;
+    constexpr uint32_t StallOverload       = 1u << 14;
+    constexpr uint32_t PhaseAOverCurrent   = 1u << 16;
+}
+
+// Cmd::GetMotorStatusExt (0x53) response — firmware motor_status_t. Bytes 0..30
+// are byte-identical to MotorStatus, so the two can share a decode path.
+struct MotorStatusExt {
+    // ---- bytes 0..30 — identical to MotorStatus ----
+    float    actual_pos;           // rad
+    float    actual_vel;           // rad/s
+    float    actual_torque;        // Nm
+    float    motor_temp;           // °C
+    uint16_t status;               // MotorStatusBit::*
+    float    target_pos;           // rad
+    float    target_vel;           // rad/s
+    float    target_torque;        // Nm
+    uint8_t  control_mode;         // MotorMode
+    // ---- bytes 31..58 — monitor extension ----
+    uint8_t  monitor_version;      // == MOTOR_MONITOR_VERSION
+    uint8_t  monitor_flags;        // MotorMonitorFlag::*
+    uint8_t  stop_reason;          // MotorStopReason
+    uint8_t  monitor_reserved;     // MotorMonitorDiag::*
+    uint32_t fault_code;           // current motor fault word (MotorFaultBit::*)
+    uint32_t latched_fault_code;   // OR of every fault seen since power-on
+    uint32_t fault_timestamp_ms;   // MCU tick of the last full fault reply
+    uint32_t status_timestamp_ms;  // MCU tick of the last motion-status reply
+    uint32_t stop_fault_code;      // fault word latched when the gripper stopped
+    uint32_t stop_timestamp_ms;    // MCU tick of the stop snapshot
+    // ---- bytes 59..71 — raw cmd-5 CAN reply ----
+    uint32_t fault_can_id;         // standard CAN id of the reply, normally 0xFD
+    uint8_t  fault_can_dlc;        // raw DLC; a valid reply is ≥ 5
+    uint8_t  fault_can_data[8];    // byte0 = motor CAN id, bytes 1..4 = LE fault
+};
+
+// MotorFaultReport::version — firmware MOTOR_FAULT_REPORT_VERSION.
+constexpr uint8_t MOTOR_FAULT_REPORT_VERSION = 0x01;
+
+// MotorFaultReport::report_flags.
+namespace MotorFaultReportFlag {
+    constexpr uint8_t Valid          = 0x01;
+    constexpr uint8_t ForceRead      = 0x02;  // this report came from a forced read
+    constexpr uint8_t MotorValid     = 0x04;  // motor_*_fault_code fields are meaningful
+    constexpr uint8_t FwValid        = 0x08;  // firmware_*_fault_code fields are meaningful
+    constexpr uint8_t CanEvidence    = 0x10;  // raw CAN evidence is attached
+    constexpr uint8_t ReadTimeout    = 0x20;  // the fault read timed out
+    constexpr uint8_t PrivatePartial = 0x40;  // partial data under the private protocol
+}
+
+// MotorFaultReport::source_mask — which layer raised the fault.
+namespace MotorFaultSource {
+    constexpr uint8_t Motor      = 0x01;  // the motor's own fault word
+    constexpr uint8_t FwCan      = 0x02;  // MCU CAN layer
+    constexpr uint8_t FwControl  = 0x04;  // MCU control loop
+    constexpr uint8_t FwSystem   = 0x08;  // MCU system level
+}
+
+// MotorFaultReport::firmware_fault_code / firmware_latched_fault_code. Unlike
+// the motor fault word these are enumerated values, not bit masks — compare for
+// equality. Mirrors firmware FW_FAULT_*.
+enum class FirmwareFaultCode : uint32_t {
+    None                = 0x00000000,
+    CanStatusStale      = 0x00000201,
+    CanFaultReadTimeout = 0x00000202,
+    CanBusOff           = 0x00000203,
+    CanErrorPassive     = 0x00000204,
+    CanTxTimeout        = 0x00000205,
+    CanInvalidFaultFrame = 0x00000207,
+    ControlOutput       = 0x00000302,
+    ControlDeadline     = 0x00000303,
+    ControlTargetTimeout = 0x00000304,
+    ControlLimitStall   = 0x00000305,
+};
+
+// Cmd::GetMotorFault (0x52) response — firmware motor_fault_report_t. This is
+// the diagnostic-grade view: it merges the motor's fault word, the MCU's own
+// fault state and the raw CAN evidence into one snapshot. Always ACKs OK (even
+// with nothing to report) — check report_flags before reading the fault fields.
+struct MotorFaultReport {
+    uint8_t  version;                     // == MOTOR_FAULT_REPORT_VERSION
+    uint8_t  report_flags;                // MotorFaultReportFlag::*
+    uint8_t  source_mask;                 // MotorFaultSource::*
+    uint8_t  protocol_mode;               // MotorProtocol in effect
+    uint32_t event_seq;                   // increments per new fault event
+    uint32_t timestamp_ms;                // MCU tick when this report was built
+    uint32_t motor_fault_code;            // MotorFaultBit::*
+    uint32_t motor_latched_fault_code;
+    uint32_t stop_fault_code;
+    uint32_t firmware_fault_code;         // FirmwareFaultCode
+    uint32_t firmware_latched_fault_code;
+    int32_t  firmware_detail_code;        // driver-level errno, signed
+    uint32_t fault_can_id;
+    uint8_t  fault_can_dlc;
+    uint8_t  monitor_flags;               // MotorMonitorFlag::*
+    uint8_t  monitor_reserved;            // MotorMonitorDiag::*
+    uint8_t  reserved0;
+    uint8_t  fault_can_data[8];
+    uint32_t fault_timestamp_ms;
+    uint32_t status_timestamp_ms;
+    uint8_t  stop_reason;                 // MotorStopReason
+    uint8_t  reserved1[3];
 };
 
 // ---- Private-protocol single-parameter access (V1.9+ — Cmd 0x38/0x39) -----
@@ -273,6 +446,13 @@ struct MotorControlStats {
 // the motor stalls at close_stall_torque (that pose becomes zero / fully
 // closed), then opens until it stalls at open_stall_torque (that span becomes
 // max_open). This automates the manual "zero at close, capture max_open" flow.
+//
+// V2.2 changed the firmware-side procedure (the wire layout is unchanged):
+// stall is confirmed from a single sample held for stall_hold_ms rather than
+// averaged over several, the open stall records the frame *before* the trigger
+// instead of the fully-jammed pose, and 0.013 rad is subtracted from the saved
+// max_open as a safety margin. Expect a slightly smaller max_open than the same
+// hardware reported on 1.1.1.
 constexpr uint32_t GRIPPER_AUTO_CAL_MAGIC   = 0x4743414Cu;  // "GCAL"
 constexpr uint16_t GRIPPER_AUTO_CAL_VERSION = 0x0001u;
 namespace GripperAutoCalFlag {
@@ -291,8 +471,34 @@ struct GripperAutoCalConfig {
     uint16_t stall_hold_ms;         // stall confirmation time (ms)
     uint16_t startup_delay_ms;      // delay after power-on before auto-cal (ms)
     uint16_t post_zero_delay_ms;    // delay after set-zero before opening (ms)
-    uint8_t  close_confirm_count;   // close stall samples before set-zero
-    uint8_t  open_confirm_count;    // open stall samples before saving max
+    uint8_t  close_confirm_count;   // compat only — V2.2 firmware confirms once
+    uint8_t  open_confirm_count;    // compat only — V2.2 firmware confirms once
+};
+
+// V2.2 — Cmd::SetGripperAutoCalConfig (0x68) now also accepts a short payload
+// that patches only the stall-detection fields, leaving speeds, flags and the
+// magic/version header at their stored values. Useful for tuning stall torque
+// without a read-modify-write round trip.
+//
+// Accepted request lengths: 10 (GripperAutoCalStallParam), 12 (the same struct
+// padded — the firmware ignores the two trailing bytes), 16
+// (GripperAutoCalStallParamEx), 32 (full GripperAutoCalConfig) and 36 (the
+// pre-V2.2 layout that carried a trailing fast_open_speed_rad_s, ignored).
+// The 0x69 read response is always the 32-byte GripperAutoCalConfig.
+struct GripperAutoCalStallParam {
+    float    close_stall_torque_nm;
+    float    open_stall_torque_nm;
+    uint16_t stall_hold_ms;
+};
+
+struct GripperAutoCalStallParamEx {
+    float    close_stall_torque_nm;
+    float    open_stall_torque_nm;
+    uint16_t stall_hold_ms;
+    uint16_t startup_delay_ms;
+    uint16_t post_zero_delay_ms;
+    uint8_t  close_confirm_count;   // compat only — V2.2 firmware confirms once
+    uint8_t  open_confirm_count;    // compat only — V2.2 firmware confirms once
 };
 
 // ---- Fisheye camera / leader-encoder calibration (V2.0 / V2.1) ------------
@@ -576,10 +782,20 @@ static_assert(sizeof(MotorVelCtrl)       == 12);
 static_assert(sizeof(MotorTorqueCtrl)    == 12);
 static_assert(sizeof(MotorImpedanceCtrl) == 20);  // V1.7 (+ feed-forward vel)
 static_assert(sizeof(MotorStatus)        == 31);  // V1.9 motor_status_t (was 40)
+static_assert(sizeof(MotorStatus)        == MOTOR_STATUS_LEGACY_SIZE);
+// V2.2 — 0x53 payload. Its first 31 bytes must stay layout-identical to
+// MotorStatus; the firmware memcpys one into the other.
+static_assert(sizeof(MotorStatusExt)     == 72);  // V2.2 motor_status_t
+static_assert(sizeof(MotorStatusExt)     == MOTOR_STATUS_EXT_SIZE);
+static_assert(offsetof(MotorStatusExt, monitor_version) == MOTOR_STATUS_LEGACY_SIZE);
+static_assert(offsetof(MotorStatusExt, fault_can_id)    == MOTOR_STATUS_V2_SIZE);
+static_assert(sizeof(MotorFaultReport)   == 64);  // V2.2 motor_fault_report_t
 static_assert(sizeof(MotorPrivateParam)  == 8);   // V1.9+ private-param GET resp
 static_assert(sizeof(GripperConfig)      == 32);  // V1.7 gripper_config_t
 static_assert(sizeof(MotorControlStats)  == 48);  // V1.7 motor_control_stats
 static_assert(sizeof(GripperAutoCalConfig) == 32); // V1.9 gripper_auto_cal_config_t
+static_assert(sizeof(GripperAutoCalStallParam)   == 10);  // V2.2 partial 0x68 write
+static_assert(sizeof(GripperAutoCalStallParamEx) == 16);  // V2.2 partial 0x68 write
 static_assert(sizeof(Ws2812Set)          == 7);   // V1.9 ws2812_set_t
 static_assert(sizeof(Ws2812Effect)       == 12);  // V1.9 ws2812_effect_t
 // V2.0/V2.1 — body only; the wire payload prepends a CalOp byte, which is why

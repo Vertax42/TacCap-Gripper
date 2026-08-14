@@ -32,6 +32,8 @@ std::vector<uint8_t> encode(const MotorTorqueCtrl& v)     { return encode_pod(v)
 std::vector<uint8_t> encode(const MotorImpedanceCtrl& v)  { return encode_pod(v); }
 std::vector<uint8_t> encode(const GripperConfig& v)       { return encode_pod(v); }
 std::vector<uint8_t> encode(const GripperAutoCalConfig& v){ return encode_pod(v); }
+std::vector<uint8_t> encode(const GripperAutoCalStallParam& v)  { return encode_pod(v); }
+std::vector<uint8_t> encode(const GripperAutoCalStallParamEx& v){ return encode_pod(v); }
 std::vector<uint8_t> encode(const Ws2812Set& v)           { return encode_pod(v); }
 std::vector<uint8_t> encode(const Ws2812Effect& v)        { return encode_pod(v); }
 std::vector<uint8_t> encode(const StreamConfig& v)        { return encode_pod(v); }
@@ -213,6 +215,26 @@ float decode_encoder_max_cal(const uint8_t* data, std::size_t len) {
 
 MotorControlStats decode_motor_control_stats(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<MotorControlStats>(data, len, "MotorControlStats");
+}
+
+// V2.2 — 0x53. Accepts the three documented prefix lengths (31 / 59 / 72) and
+// anything in between, zero-filling the tail. A short frame is not an error
+// here: the 31-byte prefix is exactly what 0x50 and the DATA stream carry, so
+// the same decoder can be pointed at either without a length dance.
+MotorStatusExt decode_motor_status_ext(const uint8_t* data, std::size_t len) {
+    if (data == nullptr || len < MOTOR_STATUS_LEGACY_SIZE) {
+        throw ProtocolError(
+            "decode MotorStatusExt: expected >= " +
+            std::to_string(MOTOR_STATUS_LEGACY_SIZE) + " bytes, got " +
+            std::to_string(len));
+    }
+    MotorStatusExt out{};
+    std::memcpy(&out, data, std::min(len, sizeof(out)));
+    return out;
+}
+
+MotorFaultReport decode_motor_fault_report(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<MotorFaultReport>(data, len, "MotorFaultReport");
 }
 StreamConfig decode_stream_config(const uint8_t* data, std::size_t len) {
     return pod_from_bytes<StreamConfig>(data, len, "StreamConfig");

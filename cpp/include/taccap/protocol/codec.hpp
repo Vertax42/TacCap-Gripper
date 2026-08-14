@@ -41,6 +41,8 @@ std::vector<uint8_t> encode(const MotorTorqueCtrl&);
 std::vector<uint8_t> encode(const MotorImpedanceCtrl&);
 std::vector<uint8_t> encode(const GripperConfig&);   // V1.7
 std::vector<uint8_t> encode(const GripperAutoCalConfig&);  // V1.9
+std::vector<uint8_t> encode(const GripperAutoCalStallParam&);    // V2.2 (10B)
+std::vector<uint8_t> encode(const GripperAutoCalStallParamEx&);  // V2.2 (16B)
 std::vector<uint8_t> encode(const Ws2812Set&);       // V1.9
 std::vector<uint8_t> encode(const Ws2812Effect&);    // V1.9
 std::vector<uint8_t> encode(const StreamConfig&);
@@ -91,6 +93,13 @@ EskinHeader        decode_eskin_header(const uint8_t* data, std::size_t len);
 EskinConfig        decode_eskin_config(const uint8_t* data, std::size_t len);
 MotorStatus        decode_motor_status(const uint8_t* data, std::size_t len);
 MotorPrivateParam  decode_motor_private_param(const uint8_t* data, std::size_t len);  // V1.9+
+// V2.2 — Cmd::GetMotorStatusExt (0x53) / Cmd::GetMotorFault (0x52). The ext
+// decoder accepts the 31- and 59-byte prefixes as well as the full 72 bytes and
+// zero-fills whatever the frame stopped short of, so a host that asks for 0x53
+// on firmware that only fills part of it still gets a usable struct — check
+// monitor_flags rather than the length. Anything below 31 bytes throws.
+MotorStatusExt     decode_motor_status_ext(const uint8_t* data, std::size_t len);
+MotorFaultReport   decode_motor_fault_report(const uint8_t* data, std::size_t len);
 // V1.7 follower (slave) gripper
 GripperConfig      decode_gripper_config(const uint8_t* data, std::size_t len);
 GripperAutoCalConfig decode_gripper_auto_cal_config(const uint8_t* data, std::size_t len);  // V1.9

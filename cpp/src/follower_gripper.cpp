@@ -187,6 +187,24 @@ void FollowerGripper::set_auto_cal_config(const protocol::GripperAutoCalConfig& 
     }
 }
 
+void FollowerGripper::set_auto_cal_stall_param(
+        const protocol::GripperAutoCalStallParam& p) {
+    auto ack = t_.send_cmd(protocol::Cmd::SetGripperAutoCalConfig, protocol::encode(p));
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("FollowerGripper::set_auto_cal_stall_param NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+}
+
+void FollowerGripper::set_auto_cal_stall_param(
+        const protocol::GripperAutoCalStallParamEx& p) {
+    auto ack = t_.send_cmd(protocol::Cmd::SetGripperAutoCalConfig, protocol::encode(p));
+    if (ack.is_nack) {
+        throw ProtocolError(std::string("FollowerGripper::set_auto_cal_stall_param NACK: ") +
+                            protocol::to_string(ack.error_code));
+    }
+}
+
 // ---- Normalized gripper position (0 = closed, 1 = open) --------------------
 
 void FollowerGripper::ensure_position_map_() {
