@@ -15,7 +15,7 @@ jobs:
     name: build + unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # OpenCV (Camera component) and spdlog (shared logger) are hard
       # dependencies of taccap_core; GTest backs the unit tests. Everything
@@ -42,7 +42,7 @@ jobs:
     name: protocol mirror vs firmware
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # tc-gu-01 is PRIVATE and this repo is public, so the clone needs a
       # credential. Configure a read-only deploy key or a fine-grained PAT
