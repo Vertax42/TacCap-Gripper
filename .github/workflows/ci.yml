@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # OpenCV (Camera component) and spdlog (shared logger) are hard
+      # dependencies of taccap_core; GTest backs the unit tests. Everything
+      # else the SDK needs is header-only or in-tree.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libopencv-dev libspdlog-dev libgtest-dev \
+            pybind11-dev python3-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DTACCAP_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      # The payload static_asserts fire at compile time, so reaching this step
+      # already proves the mirror is self-consistent; this runs the behaviour.
+      - name: Unit tests
+        run: ./build/cpp/tests/taccap_unit_tests
+
+  protocol-drift:
+    name: protocol mirror vs firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # tc-gu-01 is PRIVATE and this repo is public, so the clone needs a
+      # credential. Configure a read-only deploy key or a fine-grained PAT
+      # scoped to that one repo as the FIRMWARE_REPO_TOKEN secret.
+      #
+      # The secret is deliberately optional. It is absent on pull requests from
+      # forks (GitHub withholds secrets there by design), so the check degrades
+      # to a loud SKIP instead of failing work it cannot verify. Real coverage
+      # comes from pushes to main and from PRs opened inside the repo.
+      - name: Fetch firmware reference headers
+        id: firmware
+        env:
+          TOKEN: ${{ secrets.FIRMWARE_REPO_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::FIRMWARE_REPO_TOKEN unavailable - drift check will SKIP"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only the protocol headers are needed, so keep the clone shallow.
+          git clone --depth 1 --branch hw_v1.1.0 \
+            "https://x-access-token:${TOKEN}@github.com/XenseRobotics-AI/tc-gu-01.git" \
+            third_party/firmware/tc-gu-01
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check protocol mirror
+        run: |
+          python3 scripts/check_protocol_drift.py \
+            ${{ steps.firmware.outputs.available == 'true' && '--require' || '' }}
+
+      # Leaves nothing on disk that a later step could publish; the clone lives
+      # in a gitignored path, but be explicit rather than rely on that.
+      - name: Remove firmware clone
+        if: always()
+        run: rm -rf third_party/firmware
