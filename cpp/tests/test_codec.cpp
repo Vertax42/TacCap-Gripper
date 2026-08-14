@@ -46,6 +46,37 @@ TEST(Codec, ImuConfigEncodeDecodeKeeps10Bytes) {
     EXPECT_EQ(out.filter_cutoff, 50);
 }
 
+// Regression: the SDK mirrored a 14-byte encoder_config_t for ~2.5 months
+// after firmware 0086da6 shrank it to 5, which broke Cmd::Set/GetEncoderConfig
+// in both directions. The wire size is the whole point of this test — the
+// firmware command table uses sizeof(encoder_config_t) as both the min and max
+// accepted request length, so 5 is not negotiable.
+TEST(Codec, EncoderConfigIsFiveBytesOnTheWire) {
+    EXPECT_EQ(sizeof(tp::EncoderConfig), 5u);
+
+    tp::EncoderConfig in{};
+    in.direction  = 1;
+    in.offset_rad = -0.25f;
+
+    auto bytes = tp::encode(in);
+    ASSERT_EQ(bytes.size(), 5u);
+    EXPECT_EQ(bytes[0], 1u);            // direction leads, unpadded
+    float off = 0.0f;
+    std::memcpy(&off, bytes.data() + 1, 4);
+    EXPECT_FLOAT_EQ(off, -0.25f);
+
+    auto out = tp::decode_encoder_config(bytes.data(), bytes.size());
+    EXPECT_EQ(out.direction, 1u);
+    EXPECT_FLOAT_EQ(out.offset_rad, -0.25f);
+}
+
+TEST(Codec, EncoderConfigDecodeRejectsLegacyFourteenByteFrame) {
+    // A 14-byte buffer is what the pre-fix SDK produced; it must not decode.
+    std::vector<uint8_t> legacy(14, 0);
+    EXPECT_THROW(tp::decode_encoder_config(legacy.data(), legacy.size()),
+                 xense::taccap::ProtocolError);
+}
+
 TEST(Codec, StreamConfigRoundtrip) {
     tp::StreamConfig in{};
     in.source_mask  = tp::StreamSrc::Imu | tp::StreamSrc::Encoder;

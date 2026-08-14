@@ -83,12 +83,15 @@ struct EncoderData {
     uint16_t seq;
 };
 
+// Firmware `0086da6` (2026-05-27) dropped `baudrate` / `resolution` / `ratio`
+// along with the RS485 Modbus encoder driver, shrinking this 14 -> 5 bytes.
+// The SDK kept mirroring the old layout until 2026-08-14, which made BOTH
+// Cmd::SetEncoderConfig (firmware NACKs LengthMismatch on a 14-byte request)
+// and Cmd::GetEncoderConfig (SDK threw on the 5-byte response) unusable. The
+// encoder is SPI MT6816 now — there is no baud rate to configure.
 struct EncoderConfig {
-    uint32_t baudrate;        // default 38400
-    uint8_t  resolution;      // bits
     uint8_t  direction;       // 0 = forward, 1 = reversed
-    float    offset_rad;      // zero-point offset
-    float    ratio;           // gear ratio
+    float    offset_rad;      // zero-point offset (rad)
 };
 
 // ---- Electronic skin -----------------------------------------------------
@@ -564,7 +567,7 @@ static_assert(sizeof(SnInfo)             == 17);
 static_assert(sizeof(ImuData)            == 28);  // IMU_PACKET_SIZE
 static_assert(sizeof(ImuConfig)          == 10);
 static_assert(sizeof(EncoderData)        == 16);  // ENCODER_PACKET_SIZE
-static_assert(sizeof(EncoderConfig)      == 14);
+static_assert(sizeof(EncoderConfig)      == 5);   // firmware 0086da6 (was 14)
 static_assert(sizeof(EskinHeader)        == 12);  // ESKIN_HEADER_SIZE
 static_assert(sizeof(EskinConfig)        == 5);
 static_assert(sizeof(CombinedSensorHeader) == 8);
