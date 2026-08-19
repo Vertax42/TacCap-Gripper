@@ -86,9 +86,26 @@ inline std::vector<uint8_t> pack_frame(
 //                  bytes are bad, otherwise 1.
 enum class ParseStatus { Success, NeedMoreData, Resync };
 
+// Why a parse could not produce a frame at this offset. Only meaningful when
+// status == Resync; Success / NeedMoreData always carry ParseReason::None.
+//
+// This exists to separate "we are mid-stream on a byte boundary" from "we
+// found a well-formed frame whose CRC is wrong". The latter is the signature
+// of *lost bytes* — a host that stopped draining the tty long enough for the
+// kernel/USB buffers to overflow — and is the one counter worth alarming on.
+enum class ParseReason : uint8_t {
+    None = 0,
+    NoHead,      // first byte is not HEAD; scanned forward to the next one
+    Oversize,    // HEAD with no TAIL inside MAX_FRAME_LEN
+    ShortBody,   // unstuffed body below the 8-byte minimum
+    BadLength,   // LEN disagrees with the actual unstuffed body length
+    BadCrc,      // framing and LEN are self-consistent, CRC is not
+};
+
 struct ParseOutcome {
     ParseStatus  status;
     std::size_t  consumed;
+    ParseReason  reason = ParseReason::None;
     Frame        frame;   // populated when status == Success
 };
 
@@ -113,6 +130,20 @@ public:
     // Bytes currently held in the resync buffer (not yet a complete frame).
     std::size_t buffered_bytes() const noexcept { return rx_.size(); }
 
+    // Monotonic damage counters. Everything the parser throws away lands in
+    // exactly one of these, so "the firmware sent fewer frames" and "we lost
+    // bytes on the host" stop being indistinguishable.
+    //
+    // Not synchronised: only the thread calling feed() may read these. The
+    // Transport mirrors them into its own atomics from the reader thread.
+    struct Stats {
+        uint64_t crc_errors     = 0;  // well-framed, CRC mismatch → byte loss
+        uint64_t resync_bytes   = 0;  // bytes discarded without yielding a frame
+        uint64_t overflow_bytes = 0;  // bytes dropped by the max_buffered cap
+    };
+    const Stats& stats() const noexcept { return stats_; }
+
+    // Clears the buffers. Damage counters are monotonic and survive.
     void reset();
 
 private:
@@ -121,6 +152,7 @@ private:
     std::vector<uint8_t> rx_;
     std::deque<Frame>    ready_;
     std::size_t          max_buffered_;
+    Stats                stats_{};
 };
 
 }  // namespace xense::taccap::bus

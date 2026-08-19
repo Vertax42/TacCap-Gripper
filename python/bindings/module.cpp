@@ -27,6 +27,7 @@
 #include <taccap/bus/transport.hpp>
 
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -294,7 +295,38 @@ PYBIND11_MODULE(_taccap_native, m) {
         .def_readonly("ack_timeouts",        &tb::Transport::Stats::ack_timeouts)
         .def_readonly("retries",             &tb::Transport::Stats::retries)
         .def_readonly("unexpected_frames",   &tb::Transport::Stats::unexpected_frames)
-        .def_readonly("callback_exceptions", &tb::Transport::Stats::callback_exceptions);
+        .def_readonly("callback_exceptions", &tb::Transport::Stats::callback_exceptions)
+        // ---- Loss accounting ------------------------------------------
+        // Read together these localise a rate drop:
+        //   crc_errors / resync_bytes rising -> bytes lost before the parser
+        //       (the host stopped draining the tty long enough to overflow
+        //       the kernel/USB buffers). Check callback_max_us for the cause.
+        //   queue_dropped rising             -> bytes were fine, the
+        //       subscriber could not keep up and stale frames were evicted.
+        //   both flat, rate still low        -> the firmware really is
+        //       sending slower; nothing host-side to fix.
+        .def_readonly("crc_errors",            &tb::Transport::Stats::crc_errors)
+        .def_readonly("resync_bytes",          &tb::Transport::Stats::resync_bytes)
+        .def_readonly("parser_overflow_bytes", &tb::Transport::Stats::parser_overflow_bytes)
+        .def_readonly("queue_dropped",         &tb::Transport::Stats::queue_dropped)
+        .def_readonly("queue_high_water",      &tb::Transport::Stats::queue_high_water)
+        .def_readonly("callback_max_us",       &tb::Transport::Stats::callback_max_us)
+        .def("__repr__", [](const tb::Transport::Stats& s) {
+            char buf[320];
+            std::snprintf(buf, sizeof(buf),
+                "TransportStats(frames_rx=%llu, crc_err=%llu, resync_B=%llu, "
+                "queue_dropped=%llu, queue_hw=%llu, cb_max=%.1fms, "
+                "ack_timeouts=%llu, retries=%llu)",
+                (unsigned long long)s.frames_received,
+                (unsigned long long)s.crc_errors,
+                (unsigned long long)s.resync_bytes,
+                (unsigned long long)s.queue_dropped,
+                (unsigned long long)s.queue_high_water,
+                s.callback_max_us / 1000.0,
+                (unsigned long long)s.ack_timeouts,
+                (unsigned long long)s.retries);
+            return std::string(buf);
+        });
 
     py::class_<tb::Transport>(m, "Transport")
         .def(py::init([](const std::string& dev,
@@ -306,7 +338,8 @@ PYBIND11_MODULE(_taccap_native, m) {
                          unsigned read_timeout_ms,
                          unsigned write_timeout_ms,
                          std::size_t rx_chunk_bytes,
-                         std::size_t parser_max_buf) {
+                         std::size_t parser_max_buf,
+                         std::size_t dispatch_queue_frames) {
                 tb::Transport::Config cfg;
                 cfg.serial.device           = dev;
                 cfg.serial.baudrate         = baud;
@@ -318,6 +351,7 @@ PYBIND11_MODULE(_taccap_native, m) {
                 cfg.retry_interval          = std::chrono::milliseconds(retry_interval_ms);
                 cfg.rx_chunk_bytes          = rx_chunk_bytes;
                 cfg.parser_max_buf          = parser_max_buf;
+                cfg.dispatch_queue_frames   = dispatch_queue_frames;
                 // Release the GIL while opening the serial port (can be slow).
                 py::gil_scoped_release gil;
                 return std::make_unique<tb::Transport>(cfg);
@@ -331,7 +365,12 @@ PYBIND11_MODULE(_taccap_native, m) {
              py::arg("read_timeout_ms")   = 1u,
              py::arg("write_timeout_ms")  = 1000u,
              py::arg("rx_chunk_bytes")    = std::size_t{4096},
-             py::arg("parser_max_buf")    = std::size_t{64u * 1024u})
+             py::arg("parser_max_buf")    = std::size_t{64u * 1024u},
+             // Depth of the reader -> callback hand-off queue. It absorbs
+             // bursts; it is not a backlog. Lower it when staleness under a
+             // persistently slow subscriber matters more than surviving a
+             // scheduler hiccup.
+             py::arg("dispatch_queue_frames") = std::size_t{256})
         .def("send_cmd",
              [](tb::Transport& t, tp::Cmd cmd, py::bytes payload,
                 unsigned timeout_ms) {

@@ -306,3 +306,80 @@ TEST(FrameParser, BoundsResyncBuffer) {
     EXPECT_LE(p.buffered_bytes(), 64u);
     EXPECT_EQ(p.pending(), 0u);
 }
+
+// ---------------------------------------------------------------------------
+// Damage accounting. Everything the parser throws away must land in exactly
+// one counter, so a caller can tell "the firmware sent fewer frames" apart
+// from "we lost bytes on the host".
+// ---------------------------------------------------------------------------
+
+TEST(FrameParser, CountsCrcErrorSeparatelyFromResync) {
+    auto bad = tb::pack_frame(tp::Address::PC, 1,
+                              tp::FrameType::DATA, tp::Cmd::GetImu,
+                              random_payload(8, 1));
+    bad[bad.size() - 2] ^= 0xFF;  // framing stays valid, CRC does not
+
+    auto good = tb::pack_frame(tp::Address::PC, 2,
+                               tp::FrameType::DATA, tp::Cmd::GetEncoder,
+                               random_payload(16, 2));
+
+    std::vector<uint8_t> stream;
+    stream.insert(stream.end(), bad.begin(),  bad.end());
+    stream.insert(stream.end(), good.begin(), good.end());
+
+    tb::FrameParser p;
+    p.feed(stream);
+
+    EXPECT_EQ(p.stats().crc_errors, 1u);
+    // The whole corrupt frame is discarded: one byte at the failed CRC, then
+    // the scan to the next real HEAD.
+    EXPECT_EQ(p.stats().resync_bytes, bad.size());
+    EXPECT_EQ(p.stats().overflow_bytes, 0u);
+}
+
+// Garbage that never looks like a frame is resync, not a CRC error — the two
+// must not be conflated, since only the latter implies lost bytes.
+TEST(FrameParser, PureGarbageCountsAsResyncNotCrc) {
+    auto good = tb::pack_frame(tp::Address::PC, 3,
+                               tp::FrameType::DATA, tp::Cmd::GetEncoder,
+                               random_payload(16, 3));
+    std::vector<uint8_t> stream(32, 0xCC);   // no HEAD anywhere
+    stream.insert(stream.end(), good.begin(), good.end());
+
+    tb::FrameParser p;
+    p.feed(stream);
+
+    tb::Frame f;
+    ASSERT_TRUE(p.try_pop(f));
+    EXPECT_EQ(f.cmd, tp::Cmd::GetEncoder);
+    EXPECT_EQ(p.stats().crc_errors, 0u);
+    EXPECT_EQ(p.stats().resync_bytes, 32u);
+}
+
+TEST(FrameParser, CountsOverflowBytesWhenResyncBufferIsCapped) {
+    tb::FrameParser p(/*max_buffered=*/64);
+    p.feed(std::vector<uint8_t>(1024, 0xCC));
+
+    EXPECT_LE(p.buffered_bytes(), 64u);
+    // 1024 bytes of headless garbage: consumed by resync, capped, or both —
+    // but nothing may go unaccounted.
+    EXPECT_EQ(p.stats().resync_bytes + p.stats().overflow_bytes +
+                  p.buffered_bytes(),
+              1024u);
+}
+
+// Counters are diagnostics, not buffer state: reset() clears the bytes but
+// must not erase the history a caller is polling.
+TEST(FrameParser, ResetKeepsDamageCounters) {
+    auto bad = tb::pack_frame(tp::Address::PC, 1,
+                              tp::FrameType::DATA, tp::Cmd::GetImu,
+                              random_payload(8, 4));
+    bad[bad.size() - 2] ^= 0xFF;
+    tb::FrameParser p;
+    p.feed(bad);
+    ASSERT_EQ(p.stats().crc_errors, 1u);
+
+    p.reset();
+    EXPECT_EQ(p.buffered_bytes(), 0u);
+    EXPECT_EQ(p.stats().crc_errors, 1u);
+}

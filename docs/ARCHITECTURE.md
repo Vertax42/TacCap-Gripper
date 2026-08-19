@@ -26,15 +26,16 @@ fisheye-camera and leader-encoder-max calibration). Discovery is MCU-only;
 cameras are owned by an external camera service. Side/role come from the
 firmware SN (`parse_serial`) with a GetDevType fallback.
 
-**Worker threads outlive Python.** The transport reader and the camera
-capture thread are plain `std::thread`s — nothing stops them when the Python
-interpreter finalizes. Two rules keep that from aborting the process:
-`Transport::stop()` drops subscriptions *before* joining the reader (so
-callbacks die on the caller's thread, never on the reader during teardown),
+**Worker threads outlive Python.** The transport reader, the transport
+dispatcher and the camera capture thread are plain `std::thread`s — nothing
+stops them when the Python interpreter finalizes. Two rules keep that from
+aborting the process: `Transport::stop()` joins both workers *before* dropping
+subscriptions (so the callback objects die on the caller's thread, never on a
+worker mid-teardown, and no callback can be entered once the stop flag is up),
 and every binding that calls into Python from a worker thread first checks
 whether the interpreter is finalizing and drops the event if so. The
-gripper `__exit__` handlers call `transport().stop()` so a `with` block leaves
-nothing running.
+gripper `__exit__` handlers call `transport().stop()` so a `with` block
+leaves nothing running.
 
 **Firmware error wire path — a seam worth knowing.** Only handler *dispatch*
 failures take the `cmd == 0` wire path that `AckResponse::is_nack` detects. A
@@ -172,8 +173,9 @@ taccap-gripper/
 │   │   │   │                                          stuffing
 │   │   │   ├── serial_bus.hpp / .cpp             L1  termios at 3 Mbps
 │   │   │   └── transport.hpp / .cpp              L2a async transport:
-│   │   │                                              reader thread, ACK
-│   │   │                                              matching, subscribe
+│   │   │                                              reader + dispatcher
+│   │   │                                              threads, ACK matching,
+│   │   │                                              subscribe, loss stats
 │   │   ├── components/
 │   │   │   ├── imu.hpp / .cpp                    L3  ImuSample + IMU
 │   │   │   ├── encoder.hpp / .cpp                L3  EncoderSample +
@@ -276,15 +278,34 @@ taccap-gripper/
         ▼
   Firmware now pushes DATA frames at the configured rate.
 
-  reader_thread (background):
+  reader_thread (background) — no user code, ever:
         SerialBus::read() → bytes
         FrameParser::feed() → emits Frame
         dispatch_(Frame):
-          type==DATA → handle_data_(f):
-            for each subscriber matching f.cmd:
-              cb(f)  → IMU::decode → ImuSample → user callback
-                      (Python: gil_scoped_acquire + try/discard_as_unraisable)
+          type==ACK  → handle_ack_(f)      (inline: just fulfils a promise,
+                                            so send_cmd never queues behind
+                                            a slow subscriber)
+          type==DATA → enqueue_data_(f)    (bounded queue; when full, evicts
+                                            the OLDEST and bumps queue_dropped)
+
+  dispatcher_thread (background) — the only thread that runs user code:
+        pop Frame → handle_data_(f):
+          for each subscriber matching f.cmd:
+            cb(f)  → IMU::decode → ImuSample → user callback
+                    (Python: gil_scoped_acquire + try/discard_as_unraisable)
 ```
+
+> **Why two threads.** A subscriber callback is user code, and a Python one
+> must take the GIL. With callbacks inline on the reader, that GIL acquire sat
+> in the read loop: CPython's 5 ms default switch interval is ~3x the per-frame
+> budget of a 200 Hz three-source stream (~1.67 ms), so a busy main thread
+> stalled `read()`, overflowed the 4 KB n_tty buffer and lost *bytes* — frames
+> corrupted, not merely delayed, and the stream silently ran at a fraction of
+> its configured rate. The split makes callback cost pay in latency and queue
+> depth instead of in data. `Transport::stats()` tells the two apart:
+> `crc_errors` / `resync_bytes` mean loss upstream of the parser,
+> `queue_dropped` means the subscriber could not keep up, and
+> `callback_max_us` names it.
 
 > The Camera (3.3) and Tactile (3.4) paths below are **opt-in** — they run
 > only when the device was opened (a gripper constructed with
@@ -419,13 +440,21 @@ with LeaderGripper.open() as g:          # MCU-only; cameras off by default
 |---------------------------------|----------------------------|---------------------------------|
 | user thread (`send_cmd` blocks) | caller                     | per call                        |
 | `Transport::reader_loop_`       | one per Transport          | open()→stop()                   |
+| `Transport::dispatch_loop_`     | one per Transport          | open()→stop()                   |
 | `Camera::capture_loop_`         | one per Camera::start()    | start()→stop()                  |
 | libxense sensor capture threads | libxense Sensor (×2 OG)    | TactileSensor::start()→stop()  |
 
-Callbacks fire on the **producer** thread (reader / capture). Python
-callbacks reacquire the GIL via `py::gil_scoped_acquire`; exceptions
-inside callbacks are reported via `discard_as_unraisable` so a buggy
-callback never tears down the producer.
+Transport subscriber callbacks fire on the **dispatcher**, never on the reader;
+they are serialised with each other and delivered in frame order, and
+`unsubscribe()` still applies to frames already queued. Camera callbacks still
+fire on their own capture thread. Python callbacks reacquire the GIL via
+`py::gil_scoped_acquire`; exceptions inside callbacks are reported via
+`discard_as_unraisable` so a buggy callback never tears down the producer.
+
+A slow callback no longer costs data, but it is not free: it costs queue depth
+and staleness, and once the queue is full the oldest frames are dropped. Poll
+`Transport::stats()` (`queue_dropped`, `queue_high_water`, `callback_max_us`)
+rather than assuming.
 
 Lifetime contract:
 - `LeaderGripper` is *not* copyable / movable — its members own

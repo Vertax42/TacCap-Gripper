@@ -11,6 +11,20 @@ carries deep background; this file is *house rules*.
 
 ## Build & test (C++)
 - Build dir is `build/` (existing CMake/Ninja generator).
+- **GTest is not in `xense-taccap`** — it lives in the `taccap` env, while
+  OpenCV+spdlog live in `xense-taccap`. Neither env alone can configure the
+  test build; pass both prefixes (compiler/OpenCV/spdlog still resolve from
+  `xense-taccap`, which must come first):
+  ```bash
+  X=~/miniforge3/envs/xense-taccap; T=~/miniforge3/envs/taccap
+  env -u LD_LIBRARY_PATH -u PYTHONPATH $X/bin/cmake -S . -B build -G Ninja \
+    -DCMAKE_PREFIX_PATH="$X;$T" -DTACCAP_BUILD_TESTS=ON
+  ```
+  The system GTest at `/usr/lib/x86_64-linux-gnu/cmake/GTest` looks usable but
+  is not: conda's g++ compiles against its own sysroot and never searches
+  `/usr/include`, so `gtest/gtest.h` is not found. The "conflicting OpenCV in
+  implicit directories" warning at generate time is expected and harmless
+  (both envs ship OpenCV).
 - Build a target: `cmake --build build --target <tgt>` (e.g. `taccap_unit_tests`).
 - Run full test suite: `./build/cpp/tests/taccap_unit_tests`
 - Run one suite: `./build/cpp/tests/taccap_unit_tests --gtest_filter='<Suite>.*'`
@@ -33,6 +47,23 @@ carries deep background; this file is *house rules*.
 - `pytest python/tests` — hardware-free cases always run; the IMU cases skip
   when no gripper is connected. Guards against zero-stride numpy views (see
   `test_numpy_views.py`); `py::array_t<T> a(n)` is a trap on pybind11 2.9.
+- **`pytest` is not in `xense-taccap`** (it is in `taccap` / `lerobot-xense`),
+  and *both* envs carry an editable install of `taccap_gripper` that redirects
+  `xense.taccap` to a **different checkout** through a `sys.meta_path` finder.
+  That finder beats `PYTHONPATH`, so the obvious invocation silently tests
+  someone else's code — a second, nastier variant of the `PYTHONPATH` trap
+  below. Strip the finder first:
+  ```python
+  import sys
+  sys.meta_path[:] = [f for f in sys.meta_path
+                      if 'taccap' not in type(f).__module__.lower()]
+  sys.path.insert(0, '<repo>/python')
+  ```
+  Then assert `xense.taccap.__file__` really points into this repo before
+  trusting a green run. The build copies `_taccap_native*.so` and
+  `libtaccap_core.so*` straight into `python/xense/taccap/`, so no install step
+  is needed — but importing still needs `LD_LIBRARY_PATH=<xense-taccap>/lib`
+  for OpenCV.
 
 ## Build & install (Python wheel)
 - conda env `xense-taccap` (py3.12, primary dev env):

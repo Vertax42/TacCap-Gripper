@@ -106,6 +106,7 @@ ParseOutcome try_parse_frame(const uint8_t* data, std::size_t len) {
     }
     if (data[0] != FRAME_HEAD) {
         r.status = ParseStatus::Resync;
+        r.reason = ParseReason::NoHead;
         std::size_t skip = 1;
         while (skip < len && data[skip] != FRAME_HEAD) ++skip;
         r.consumed = skip;
@@ -120,6 +121,7 @@ ParseOutcome try_parse_frame(const uint8_t* data, std::size_t len) {
         // this HEAD can't begin a valid frame — drop it and resync.
         if (len > MAX_FRAME_LEN) {
             r.status = ParseStatus::Resync;
+            r.reason = ParseReason::Oversize;
             r.consumed = 1;
             return r;
         }
@@ -135,6 +137,7 @@ ParseOutcome try_parse_frame(const uint8_t* data, std::size_t len) {
     constexpr std::size_t BODY_MIN = 8;
     if (body.size() < BODY_MIN) {
         r.status = ParseStatus::Resync;
+        r.reason = ParseReason::ShortBody;
         r.consumed = 1;
         return r;
     }
@@ -146,6 +149,7 @@ ParseOutcome try_parse_frame(const uint8_t* data, std::size_t len) {
     // LEN must agree with the actual unstuffed body length.
     if (payload_len > MAX_PAYLOAD_LEN || body.size() != BODY_MIN + payload_len) {
         r.status = ParseStatus::Resync;
+        r.reason = ParseReason::BadLength;
         r.consumed = 1;
         return r;
     }
@@ -163,6 +167,7 @@ ParseOutcome try_parse_frame(const uint8_t* data, std::size_t len) {
         (static_cast<uint16_t>(body[crc_body + 1]) << 8);
     if (crc_calc != crc_recv) {
         r.status = ParseStatus::Resync;
+        r.reason = ParseReason::BadCrc;
         r.consumed = 1;
         return r;
     }
@@ -216,7 +221,10 @@ void FrameParser::drain_() {
             continue;
         }
         if (r.status == ParseStatus::Resync) {
-            cursor += (r.consumed > 0 ? r.consumed : 1);
+            if (r.reason == ParseReason::BadCrc) ++stats_.crc_errors;
+            const std::size_t step = (r.consumed > 0 ? r.consumed : 1);
+            stats_.resync_bytes += step;
+            cursor += step;
             continue;
         }
         // NeedMoreData at cursor. Before giving up, see if any LATER 0xAA
@@ -235,11 +243,16 @@ void FrameParser::drain_() {
                                               rx_.size() - alt);
             if (r2.status == ParseStatus::Success) {
                 ready_.push_back(std::move(r2.frame));
+                // Everything between the dead HEAD and this one is garbage.
+                // Counted once here rather than per speculative step, so the
+                // scan below can't double-bill the same bytes.
+                stats_.resync_bytes += (alt - cursor);
                 cursor = alt + r2.consumed;
                 recovered = true;
                 break;
             }
             if (r2.status == ParseStatus::Resync) {
+                if (r2.reason == ParseReason::BadCrc) ++stats_.crc_errors;
                 alt += (r2.consumed > 0 ? r2.consumed : 1);
                 continue;
             }
@@ -260,6 +273,7 @@ void FrameParser::drain_() {
     // Bound the resync buffer so a stream of garbage cannot exhaust memory.
     if (rx_.size() > max_buffered_) {
         const std::size_t excess = rx_.size() - max_buffered_;
+        stats_.overflow_bytes += excess;
         rx_.erase(rx_.begin(), rx_.begin() + static_cast<std::ptrdiff_t>(excess));
     }
 }

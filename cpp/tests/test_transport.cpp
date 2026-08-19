@@ -351,3 +351,282 @@ TEST(Transport, StopIsIdempotent) {
     EXPECT_THROW(host.send_cmd(tp::Cmd::Heartbeat),
                  xense::taccap::IoError);
 }
+
+// ---------------------------------------------------------------------------
+// Reader / dispatcher decoupling.
+//
+// Subscriber callbacks are user code. Running them on the reader thread makes
+// read() wait on them, so a slow callback stops the host draining the tty, the
+// kernel buffer overflows, bytes are lost mid-frame, and the stream silently
+// drops to a fraction of its configured rate. The dispatcher thread exists to
+// make callback cost pay in latency and queue depth instead of in data.
+//
+// Every test below fails against the pre-dispatcher single-thread design.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+bool poll_until(const std::function<bool()>& pred, int ms) {
+    const auto end = std::chrono::steady_clock::now() +
+                     std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < end) {
+        if (pred()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return pred();
+}
+
+// A subscriber that parks on its first invocation until the test releases it,
+// then records every frame's seq. Models "the callback is slower than the
+// stream" without depending on wall-clock sleeps.
+struct BlockingSubscriber {
+    std::mutex              m;
+    std::condition_variable cv;
+    bool                    entered  = false;
+    bool                    released = false;
+    std::vector<uint8_t>    seen;
+
+    void operator()(const tb::Frame& f) {
+        std::unique_lock<std::mutex> lk(m);
+        if (!entered) {
+            entered = true;
+            cv.notify_all();
+            cv.wait(lk, [this] { return released; });
+        }
+        seen.push_back(f.seq);
+    }
+
+    void wait_entered() {
+        std::unique_lock<std::mutex> lk(m);
+        cv.wait(lk, [this] { return entered; });
+    }
+    void release() {
+        { std::lock_guard<std::mutex> lk(m); released = true; }
+        cv.notify_all();
+    }
+    std::vector<uint8_t> snapshot() {
+        std::lock_guard<std::mutex> lk(m);
+        return seen;
+    }
+};
+
+}  // namespace
+
+// The core regression guard: while a subscriber is parked, the reader must
+// keep reading, parsing and counting frames. Pre-dispatcher this stalled at
+// frames_received == 1 and the rest of the burst rotted in the tty buffer.
+TEST(Transport, SlowSubscriberDoesNotStallReader) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    tb::Transport host(base_config(pty.slave_path()));
+
+    BlockingSubscriber sub;
+    host.subscribe(tp::Cmd::GetEncoder, std::ref(sub));
+
+    constexpr int kFrames = 50;
+    for (int i = 1; i <= kFrames; ++i) {
+        pty.send_data(static_cast<uint8_t>(i), tp::Cmd::GetEncoder,
+                      std::vector<uint8_t>(16, 0));
+    }
+    sub.wait_entered();
+
+    // The callback is still parked here — the reader must have drained the
+    // whole burst regardless.
+    EXPECT_TRUE(poll_until(
+        [&] { return host.stats().frames_received >= kFrames; }, 2000))
+        << "reader stalled behind the subscriber: frames_received="
+        << host.stats().frames_received;
+
+    sub.release();
+    EXPECT_TRUE(poll_until(
+        [&] { return sub.snapshot().size() == kFrames; }, 2000));
+    EXPECT_EQ(host.stats().queue_dropped, 0u)   // 50 frames, 256-deep queue
+        << "burst fit in the queue and must not have been evicted";
+    EXPECT_GE(host.stats().queue_high_water, 1u);
+}
+
+// send_cmd() must not queue behind subscriber work. handle_ack_ deliberately
+// stays on the reader thread; pre-dispatcher this test timed out and threw.
+TEST(Transport, AckNotBlockedBySlowSubscriber) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    tb::Transport host(base_config(pty.slave_path()));   // ack_timeout 50ms, 2 retries
+
+    BlockingSubscriber sub;
+    host.subscribe(tp::Cmd::GetEncoder, std::ref(sub));
+
+    pty.send_data(1, tp::Cmd::GetEncoder, std::vector<uint8_t>(16, 0));
+    sub.wait_entered();   // dispatcher is now parked inside user code
+
+    std::thread fw([&] {
+        auto f = pty.expect_frame(1000);
+        ASSERT_TRUE(f.has_value());
+        pty.send_ack_ok(f->seq, tp::Cmd::GetVersion);
+    });
+
+    const auto t0 = std::chrono::steady_clock::now();
+    auto ack = host.send_cmd(tp::Cmd::GetVersion);   // must not throw
+    const auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0).count();
+    fw.join();
+    sub.release();
+
+    EXPECT_EQ(ack.error_code, tp::ErrorCode::Ok);
+    EXPECT_EQ(host.stats().retries, 0u)
+        << "ACK matching queued behind the subscriber";
+    EXPECT_LT(dt, 200) << "send_cmd took " << dt << "ms behind a parked callback";
+}
+
+// A consumer that cannot keep up must lose the OLDEST frames, not the newest:
+// these are state samples, so currency beats history. The eviction has to be
+// counted, otherwise a rate drop is indistinguishable from the firmware
+// simply sending less.
+TEST(Transport, FullQueueDropsOldestAndCountsIt) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    auto cfg = base_config(pty.slave_path());
+    cfg.dispatch_queue_frames = 4;
+    tb::Transport host(cfg);
+
+    BlockingSubscriber sub;
+    host.subscribe(tp::Cmd::GetEncoder, std::ref(sub));
+
+    // Park the dispatcher on frame 1 BEFORE the burst. Sending everything at
+    // once would race the dispatcher's own startup: the reader can fill a
+    // 4-deep queue before the thread first runs, and then which frame parks
+    // is a scheduling detail rather than something the test states.
+    constexpr int kFrames = 20;
+    pty.send_data(1, tp::Cmd::GetEncoder, std::vector<uint8_t>(16, 0));
+    sub.wait_entered();
+    for (int i = 2; i <= kFrames; ++i) {
+        pty.send_data(static_cast<uint8_t>(i), tp::Cmd::GetEncoder,
+                      std::vector<uint8_t>(16, 0));
+    }
+    ASSERT_TRUE(poll_until(
+        [&] { return host.stats().frames_received >= kFrames; }, 2000));
+
+    sub.release();
+    // Frame 1 was already popped into the callback; 2..20 contended for four
+    // slots, so the four newest survive and 15 are evicted.
+    EXPECT_TRUE(poll_until([&] { return sub.snapshot().size() == 5u; }, 2000));
+
+    const auto seen = sub.snapshot();
+    ASSERT_EQ(seen.size(), 5u);
+    EXPECT_EQ(seen, (std::vector<uint8_t>{1, 17, 18, 19, 20}))
+        << "queue must evict from the front, keeping the freshest samples";
+    EXPECT_EQ(host.stats().queue_dropped, 15u);
+    EXPECT_EQ(host.stats().queue_high_water, 4u);
+}
+
+// Ordering is a contract: one dispatcher thread, one queue, no reordering.
+TEST(Transport, DispatchPreservesFrameOrder) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    tb::Transport host(base_config(pty.slave_path()));
+
+    std::mutex           m;
+    std::vector<uint8_t> seen;
+    host.subscribe(tp::Cmd::GetImu, [&](const tb::Frame& f) {
+        std::lock_guard<std::mutex> lk(m);
+        seen.push_back(f.seq);
+    });
+
+    constexpr int kFrames = 100;
+    for (int i = 0; i < kFrames; ++i) {
+        pty.send_data(static_cast<uint8_t>(i), tp::Cmd::GetImu,
+                      std::vector<uint8_t>(8, 0));
+    }
+    ASSERT_TRUE(poll_until([&] {
+        std::lock_guard<std::mutex> lk(m);
+        return seen.size() == kFrames;
+    }, 2000));
+
+    std::lock_guard<std::mutex> lk(m);
+    for (int i = 0; i < kFrames; ++i) {
+        ASSERT_EQ(seen[i], static_cast<uint8_t>(i)) << "reordered at " << i;
+    }
+}
+
+// stop() must not deliver whatever is still queued — entering user code during
+// teardown is what the shutdown ordering exists to prevent (the Python
+// binding's callback destructor takes the GIL). The leftovers are counted so
+// the drop stays visible rather than silent.
+TEST(Transport, StopDropsQueuedFramesInsteadOfDelivering) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    tb::Transport host(base_config(pty.slave_path()));
+
+    BlockingSubscriber sub;
+    host.subscribe(tp::Cmd::GetEncoder, std::ref(sub));
+
+    constexpr int kFrames = 10;
+    pty.send_data(1, tp::Cmd::GetEncoder, std::vector<uint8_t>(16, 0));
+    sub.wait_entered();                       // dispatcher parked on frame 1
+    for (int i = 2; i <= kFrames; ++i) {
+        pty.send_data(static_cast<uint8_t>(i), tp::Cmd::GetEncoder,
+                      std::vector<uint8_t>(16, 0));
+    }
+    ASSERT_TRUE(poll_until(
+        [&] { return host.stats().frames_received >= kFrames; }, 2000));
+
+    // stop() sets stop_requested_, joins the reader, then blocks joining the
+    // dispatcher — which is parked in frame 1's callback. Waiting for
+    // is_running() to clear guarantees the stop flag is already published
+    // before we release; otherwise the dispatcher would drain a few frames in
+    // the gap and the count below would be a race.
+    std::thread stopper([&] { host.stop(); });
+    ASSERT_TRUE(poll_until([&] { return !host.is_running(); }, 2000));
+    sub.release();
+    stopper.join();
+
+    EXPECT_EQ(sub.snapshot().size(), 1u)
+        << "no callback may be entered once stop() has begun";
+    EXPECT_EQ(host.stats().queue_dropped, static_cast<uint64_t>(kFrames - 1));
+    EXPECT_FALSE(host.is_running());
+}
+
+// callback_max_us is the number that tells a user their own callback is why
+// queue_dropped is climbing.
+TEST(Transport, RecordsSlowestCallback) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    tb::Transport host(base_config(pty.slave_path()));
+
+    std::atomic<int> count{0};
+    host.subscribe(tp::Cmd::GetEncoder, [&](const tb::Frame&) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        ++count;
+    });
+
+    pty.send_data(1, tp::Cmd::GetEncoder, std::vector<uint8_t>(16, 0));
+    ASSERT_TRUE(poll_until([&] { return count.load() >= 1; }, 2000));
+
+    // Allow for coarse timer resolution; the point is the order of magnitude.
+    EXPECT_GE(host.stats().callback_max_us, 40'000u);
+}
+
+// Byte loss upstream of the parser has to be attributable. A well-framed
+// frame with a bad CRC is the signature of dropped bytes, and it must land in
+// crc_errors rather than vanishing into a generic resync.
+TEST(Transport, CountsCrcErrorsFromCorruptedStream) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    tb::Transport host(base_config(pty.slave_path()));
+
+    std::atomic<int> count{0};
+    host.subscribe(tp::Cmd::GetEncoder,
+                   [&](const tb::Frame&) { ++count; });
+
+    auto bad = tb::pack_frame(tp::Address::MCU, 1, tp::FrameType::DATA,
+                              tp::Cmd::GetEncoder, std::vector<uint8_t>(16, 0));
+    bad[bad.size() - 2] ^= 0xFF;          // corrupt the CRC, keep the framing
+    pty.send_raw(bad);
+    pty.send_data(2, tp::Cmd::GetEncoder, std::vector<uint8_t>(16, 0));
+
+    ASSERT_TRUE(poll_until([&] { return count.load() >= 1; }, 2000));
+    auto s = host.stats();
+    EXPECT_EQ(s.crc_errors, 1u);
+    EXPECT_GE(s.resync_bytes, 1u);
+    EXPECT_EQ(s.queue_dropped, 0u)
+        << "loss was upstream of the queue; the counters must not blur that";
+}

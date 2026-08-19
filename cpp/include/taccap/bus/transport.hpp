@@ -1,15 +1,33 @@
 // Copyright (c) 2026 XenseRobotics Co., Ltd. — Apache-2.0
 //
 // Asynchronous transport for TC-GU-01:
-//   - owns a SerialBus + FrameParser + a background reader thread
+//   - owns a SerialBus + FrameParser + a reader thread + a dispatcher thread
 //   - matches CMD_NEED_ACK frames to incoming ACK frames by seq, with
 //     host-side timeout/retry honouring the firmware's 10ms / 3-attempt spec
 //   - dispatches DATA frames to per-Cmd subscriber callbacks
 //
-// Synchronous send_cmd() blocks the caller; subscribe() callbacks fire on
-// the reader thread (callbacks must be short and non-blocking — push to a
-// queue if you need real work). Component-level wrappers (IMU, Encoder,
-// Motor, ...) build on top of this in step 4.
+// Threading contract (two threads, deliberately):
+//
+//   reader thread      read() -> parse -> { ACK: fulfil the promise inline
+//                                           DATA: push to dispatch_queue_ }
+//   dispatcher thread  pop -> fan out to matching subscriber callbacks
+//
+// The split exists because subscriber callbacks are user code: a Python
+// callback must take the GIL, and CPython's default 5ms switch interval means
+// a single contended acquire can exceed the whole per-frame budget (at 200Hz
+// x 3 stream sources the reader has ~1.67ms per frame). With callbacks on the
+// reader thread, that stalls read(), the kernel tty buffer (4KB on n_tty)
+// overflows, bytes are lost mid-frame, and the stream silently drops to a
+// fraction of its configured rate. Keeping read() free of user code makes
+// callback cost cost *latency and queue depth* instead of *data*.
+//
+// It also decouples ACK matching from callback load: handle_ack_ still runs
+// on the reader, so send_cmd() no longer times out behind a slow subscriber.
+//
+// Callbacks are still expected to be reasonably quick. The queue is bounded
+// and drops the OLDEST frame when full (state telemetry wants currency, not
+// history); Stats::queue_dropped and Stats::callback_max_us make both the
+// loss and its cause visible. Synchronous send_cmd() blocks the caller.
 
 #pragma once
 
@@ -21,7 +39,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <future>
 #include <mutex>
@@ -104,6 +124,16 @@ public:
         std::chrono::milliseconds retry_interval  {10};
         std::size_t               rx_chunk_bytes  = 4096;
         std::size_t               parser_max_buf  = 64 * 1024;
+        // Depth of the reader -> dispatcher queue, in frames. Sized to absorb
+        // a scheduler/GC hiccup without loss: 256 frames is ~400ms at the
+        // 600 frames/s of a 200Hz three-source stream.
+        //
+        // It is a burst absorber, not a backlog. A consumer that is
+        // *persistently* slower than the stream keeps the queue full, which
+        // costs depth/rate of added staleness (and shows up as a rising
+        // queue_dropped) — lower this when latency matters more than
+        // surviving hiccups. Clamped to >= 1.
+        std::size_t               dispatch_queue_frames = 256;
     };
 
     struct Stats {
@@ -115,6 +145,24 @@ public:
         uint64_t retries              = 0;
         uint64_t unexpected_frames    = 0;
         uint64_t callback_exceptions  = 0;
+
+        // ---- Loss accounting ------------------------------------------
+        // Three distinct ways a frame can fail to reach a subscriber. Read
+        // together they say *where* a rate drop came from:
+        //
+        //   crc_errors / resync_bytes > 0  -> bytes were lost before the
+        //       parser, i.e. the host stopped draining the tty long enough to
+        //       overflow the kernel/USB buffers. Cross-check callback_max_us.
+        //   queue_dropped > 0              -> bytes arrived fine, but the
+        //       subscriber could not keep up and old frames were evicted.
+        //   both zero, rate still low      -> the firmware really is sending
+        //       slower; nothing on the host side to fix.
+        uint64_t crc_errors           = 0;  // well-framed, bad CRC → byte loss
+        uint64_t resync_bytes         = 0;  // bytes discarded without a frame
+        uint64_t parser_overflow_bytes = 0; // dropped by the parser_max_buf cap
+        uint64_t queue_dropped        = 0;  // DATA frames evicted, queue full
+        uint64_t queue_high_water     = 0;  // deepest the queue has ever been
+        uint64_t callback_max_us      = 0;  // slowest single fan-out, in us
     };
 
     // Opens the serial port, starts the reader thread.
@@ -140,17 +188,21 @@ public:
                          const std::vector<uint8_t>& payload = {});
 
     // Register a callback for DATA frames whose `cmd` byte matches.
-    // Callback runs on the reader thread; keep it short.
+    // Callbacks run on the dispatcher thread, never on the reader, and are
+    // serialised with each other. Subscriptions are resolved at dispatch
+    // time, so unsubscribe() takes effect even for already-queued frames.
     SubscriptionId subscribe(protocol::Cmd cmd, DataCallback cb);
     void unsubscribe(SubscriptionId id);
 
     bool is_running() const noexcept;
 
-    // Graceful, idempotent shutdown. Drops all subscriptions BEFORE joining
-    // the reader thread, so no callback can be entered once stop() has begun
-    // and every callback object is destroyed on the calling thread rather
-    // than on the reader. That ordering matters for the Python bindings,
-    // whose callback destructor takes the GIL.
+    // Graceful, idempotent shutdown. Signals both workers, joins them, and
+    // only THEN drops the subscriptions, so every callback object is
+    // destroyed on the calling thread — never on a worker. That ordering
+    // matters for the Python bindings, whose callback destructor takes the
+    // GIL. The dispatcher exits without draining whatever is still queued
+    // (entering user code during teardown is what this ordering forbids);
+    // those frames are counted into Stats::queue_dropped.
     void stop() noexcept;
 
     Stats stats() const noexcept;
@@ -168,9 +220,15 @@ private:
     };
 
     void reader_loop_();
-    void dispatch_(const Frame& f);
+    void dispatch_loop_();
+    void dispatch_(Frame&& f);
     void handle_ack_(const Frame& f);
+    void enqueue_data_(Frame&& f);
     void handle_data_(const Frame& f);
+
+    // Set stop_requested_, wake the dispatcher, join both workers. Safe to
+    // call when the threads are already gone.
+    void join_workers_() noexcept;
 
     // Fail every pending ACK with the given error message. Called on
     // reader exit and on stop().
@@ -189,6 +247,12 @@ private:
     std::atomic<bool>          stop_requested_{false};
     std::atomic<bool>          running_{false};
     std::thread                reader_;
+    std::thread                dispatcher_;
+
+    // reader -> dispatcher hand-off. Bounded; drop-oldest on overflow.
+    std::mutex                 queue_mu_;
+    std::condition_variable    queue_cv_;
+    std::deque<Frame>          queue_;
 
     // ACK matching
     std::mutex                                 pending_mu_;
@@ -209,6 +273,14 @@ private:
     std::atomic<uint64_t> stat_retries_            {0};
     std::atomic<uint64_t> stat_unexpected_frames_  {0};
     std::atomic<uint64_t> stat_callback_exceptions_{0};
+    // Mirrored from FrameParser::stats() by the reader thread (the parser
+    // itself is single-threaded and keeps plain counters).
+    std::atomic<uint64_t> stat_crc_errors_         {0};
+    std::atomic<uint64_t> stat_resync_bytes_       {0};
+    std::atomic<uint64_t> stat_parser_overflow_    {0};
+    std::atomic<uint64_t> stat_queue_dropped_      {0};
+    std::atomic<uint64_t> stat_queue_high_water_   {0};
+    std::atomic<uint64_t> stat_callback_max_us_    {0};
 };
 
 }  // namespace xense::taccap::bus

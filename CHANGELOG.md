@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Loss accounting on `Transport::stats()`**, so a rate drop can be attributed
+  instead of guessed at. Read together: `crc_errors` / `resync_bytes` rising
+  means bytes were lost before the parser (the host stopped draining the tty);
+  `queue_dropped` rising means the bytes were fine but the subscriber could not
+  keep up; both flat with a low rate means the firmware really is sending less.
+  `callback_max_us` names the culprit in the second case, and
+  `queue_high_water` / `parser_overflow_bytes` fill in the margins. All six are
+  exposed on `TransportStats` in Python, and `repr()` prints the useful subset.
+  `FrameParser::stats()` carries the parser-side counters directly.
 - **Command set V2.2 — follower motor diagnostics** (firmware `hw_v1.1.0` @
   `bf0a06e`, follower 1.1.2; the leader is unchanged at 1.2.1 because every
   V2.2 command is follower-only). The upgrade is **purely additive**:
@@ -161,6 +170,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scan saw, so the pick is verifiable before anything reaches flash. Two
   grippers reporting the same side is an error naming both SNs, never a guess.
   Passing an explicit firmware SN still works unchanged.
+
+### Changed
+- **Subscriber callbacks moved off the transport reader thread.** `Transport`
+  now runs a second thread: the reader does `read()` -> parse -> enqueue, and a
+  dispatcher drains a bounded queue and fans out to `on_data()` / `on_status()`
+  subscribers. Callbacks are still serialised and still delivered in order, and
+  `unsubscribe()` still takes effect for already-queued frames — but they no
+  longer sit inside the read loop.
+
+  This fixes stream rates collapsing under a slow subscriber. A Python callback
+  must take the GIL, and CPython's default 5ms switch interval is roughly 3x the
+  per-frame budget of a 200Hz three-source stream (~1.67ms), so a busy main
+  thread would stall `read()`, overflow the kernel tty buffer (4KB on n_tty) and
+  lose *bytes* — corrupting frames rather than merely delaying them. Callback
+  cost now shows up as latency and queue depth instead of as data loss.
+
+  Two consequences worth knowing:
+  - ACK matching stays on the reader thread, so `send_cmd()` no longer times out
+    and retries behind a slow subscriber.
+  - The queue is a burst absorber, not a backlog: when full it evicts the
+    **oldest** frame (state telemetry wants currency, not history) and counts it.
+    Depth is `Transport::Config::dispatch_queue_frames` /
+    `Transport(dispatch_queue_frames=...)`, default 256 (~400ms at 600 frames/s).
 
 ## [0.1.7] - 2026-08-03
 
