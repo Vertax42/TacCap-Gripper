@@ -20,6 +20,7 @@
 #include <opencv2/core.hpp>
 
 #include <cmath>
+#include <string>
 
 namespace xense::taccap {
 
@@ -60,6 +61,21 @@ inline constexpr protocol::CameraFisheyeCal FISHEYE_FALLBACK_CAL{
 // from fx = fy = 0 maps every pixel outside the source image, so the "rectified"
 // frame comes out uniformly black. Observed on firmware 1.1.1. Treat such a
 // record as absent.
+// The outcome of asking a gripper for its wrist calibration: what to rectify
+// with, and — when the unit could not supply one — why the reference values are
+// standing in. `reason` is empty exactly when `is_reference` is false.
+//
+// This exists so the policy has one home. It is applied on both sides of the
+// same decision: install_wrist_undistorter() uses it when the SDK owns the wrist
+// UVC device, and callers that own the device themselves (the common case, since
+// Config::open_cameras defaults to false) get the identical answer instead of
+// re-deriving it and drifting.
+struct ResolvedFisheyeCal {
+    protocol::CameraFisheyeCal calibration;
+    bool                       is_reference;
+    std::string                reason;
+};
+
 inline bool is_usable_fisheye_cal(const protocol::CameraFisheyeCal& c) {
     return std::isfinite(c.fx) && std::isfinite(c.fy) && c.fx > 0.0f && c.fy > 0.0f;
 }

@@ -556,6 +556,27 @@ void bind_components(py::module_& m) {
              "Read the fisheye intrinsics + distortion persisted in MCU flash. "
              "Returns None when the firmware has never been calibrated "
              "(ErrorCode.CalNotSet); raises ProtocolError on any other NACK.")
+        .def("resolve_fisheye",
+             [](Calibration& self, unsigned timeout_ms) {
+                 ResolvedFisheyeCal r;
+                 {
+                     py::gil_scoped_release nogil;
+                     r = self.resolve_fisheye(std::chrono::milliseconds(timeout_ms));
+                 }
+                 return py::make_tuple(r.calibration, r.is_reference, r.reason);
+             },
+             py::arg("timeout_ms") = 200,
+             "Intrinsics to rectify with, as (calibration, is_reference, reason).\n\n"
+             "Prefer this over read_fisheye() unless you need to know what the "
+             "flash actually holds. An uncalibrated unit answers a read with an "
+             "all-zero record rather than a NACK, and handing that to "
+             "FisheyeUndistorter remaps every frame to black; this applies the "
+             "fallback policy once, so a caller owning the wrist UVC device "
+             "itself makes the same decision the SDK makes internally.\n\n"
+             "is_reference is True when the SDK's shared reference values stood "
+             "in, and reason says why — empty otherwise. Warn when it is True: "
+             "the reference intrinsics are approximate, since lens placement "
+             "varies per assembly.")
         .def("write_fisheye",
              [](Calibration& self, const protocol::CameraFisheyeCal& cal,
                 unsigned timeout_ms) {

@@ -25,6 +25,7 @@
 #pragma once
 
 #include <taccap/bus/transport.hpp>
+#include <taccap/components/fisheye_undistorter.hpp>
 #include <taccap/protocol/payloads.hpp>
 
 #include <chrono>
@@ -45,6 +46,23 @@ public:
     // Persists to MCU flash (survives power cycles). Throws ProtocolError if
     // any value is NaN/Inf (firmware returns InvalidParam) or the flash write
     // fails (SysBusy).
+    // Ask for this unit's wrist calibration, falling back to the SDK's
+    // reference values when it cannot supply one.
+    //
+    // Prefer this over read_fisheye() unless you specifically need to know what
+    // the flash holds. read_fisheye() reports the firmware's answer — including
+    // the all-zero record an uncalibrated unit returns instead of a NACK, which
+    // remaps every frame to black if handed straight to FisheyeUndistorter.
+    // This applies the policy once, so callers that own the wrist UVC device
+    // themselves get the same decision the SDK makes internally rather than
+    // re-deriving it.
+    //
+    // Never throws for a missing or unusable calibration — that is a fallback,
+    // reported through ResolvedFisheyeCal::reason. A transport failure still
+    // propagates.
+    ResolvedFisheyeCal resolve_fisheye(
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(200));
+
     void write_fisheye(const protocol::CameraFisheyeCal& cal,
                        std::chrono::milliseconds timeout = std::chrono::milliseconds{500});
 

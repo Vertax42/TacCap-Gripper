@@ -38,38 +38,28 @@ inline void install_wrist_undistorter(Calibration& cal,
                                       Camera&      cam,
                                       float        balance,
                                       const char*  who) {
-    std::optional<protocol::CameraFisheyeCal> params;
-    const char* fallback_reason = nullptr;
-    try {
-        params = cal.read_fisheye();
-    } catch (const ProtocolError& e) {
-        logger()->warn("{}: the firmware would not answer the fisheye read ({}). "
-                       "Command set V2.0 or newer is required.", who, e.what());
-        fallback_reason = "the firmware predates command set V2.0";
-    }
-    if (!fallback_reason && !params) {
-        fallback_reason = "the firmware holds no calibration yet";
-    }
-    if (!fallback_reason && !is_usable_fisheye_cal(*params)) {
-        fallback_reason = "the firmware answered with an empty calibration record";
-    }
-
-    if (fallback_reason) {
+    // The read-and-fall-back policy lives in Calibration::resolve_fisheye, so
+    // this path and callers that own the wrist UVC device themselves make the
+    // same decision. It used to be spelled out here, and a second copy grew in a
+    // downstream consumer — with the two already disagreeing about why a read
+    // fails.
+    const auto resolved = cal.resolve_fisheye();
+    if (resolved.is_reference) {
         logger()->warn("{}: wrist fisheye undistortion is using the SDK's REFERENCE "
                        "intrinsics because {}. Rectification will be approximate — "
                        "lens placement varies per assembly, so the principal point "
                        "drifts. Run python/examples/fisheye_cal.py set-fisheye to "
-                       "store this unit's own calibration.", who, fallback_reason);
-        params = FISHEYE_FALLBACK_CAL;
+                       "store this unit's own calibration.", who, resolved.reason);
     }
 
     const cv::Size size{cam.config().width, cam.config().height};
-    auto u = std::make_shared<const FisheyeUndistorter>(*params, size, balance);
+    auto u = std::make_shared<const FisheyeUndistorter>(resolved.calibration, size,
+                                                       balance);
     cam.set_undistorter(u);
     logger()->info("{}: wrist fisheye undistortion on ({}x{}, balance={:.2f}, "
                    "focal_scale={:.3f}, calibration={})", who, size.width,
                    size.height, u->balance(), u->focal_scale(),
-                   fallback_reason ? "SDK reference" : "this unit");
+                   resolved.is_reference ? "SDK reference" : "this unit");
 }
 
 }  // namespace xense::taccap::detail

@@ -69,4 +69,32 @@ void Calibration::write_encoder_max_rad(float max_rad,
     if (err != protocol::ErrorCode::Ok) throw_nack("write_encoder_max_rad", err);
 }
 
+ResolvedFisheyeCal Calibration::resolve_fisheye(std::chrono::milliseconds timeout) {
+    std::optional<protocol::CameraFisheyeCal> params;
+    std::string reason;
+    try {
+        params = read_fisheye(timeout);
+    } catch (const ProtocolError& e) {
+        // The firmware does not know Cmd::CameraFisheyeCal (0x2B). That command
+        // belongs to command set V2.0, which follower 1.1.0 already carries —
+        // so this is genuinely old firmware, not merely un-calibrated.
+        reason = std::string("the firmware would not answer the fisheye read (")
+               + e.what() + ")";
+    }
+    if (reason.empty() && !params) {
+        reason = "the wrist lens has never been calibrated";
+    }
+    if (reason.empty() && !is_usable_fisheye_cal(*params)) {
+        // An uncalibrated unit answers with an all-zero record rather than a
+        // NACK. Remapping with fx = fy = 0 sends every pixel outside the source
+        // image, so the frame comes back black.
+        reason = "the wrist lens has never been calibrated — the firmware "
+                 "answered the read with an empty record";
+    }
+    if (!reason.empty()) {
+        return {FISHEYE_FALLBACK_CAL, true, reason};
+    }
+    return {*params, false, {}};
+}
+
 }  // namespace xense::taccap
