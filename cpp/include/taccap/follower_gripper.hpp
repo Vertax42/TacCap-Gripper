@@ -175,6 +175,22 @@ public:
     // Streaming lifecycle. motor_hz=0 means "don't stream motor status",
     // matching the leader streaming surface; non-zero adds MotorStatus to
     // the source mask so on_status() subscribers receive at that cadence.
+    //
+    // Motor status is capped by the firmware at 100 Hz
+    // (STREAM_MOTOR_MAX_RATE_HZ, "leave bandwidth for the control channel"),
+    // so motor_hz=200 is served at 100 Hz. If you need faster feedback than
+    // that, it is not available on this stream at any setting.
+    //
+    // Rates: 0 turns a source OFF. The firmware gates emission on the
+    // source_mask bit alone, so a 0 rate with the bit set would stream at its
+    // 100 Hz default — we clear the bit instead. All-zero throws
+    // IoError(EINVAL) rather than starting a stream that carries nothing.
+    //
+    // The firmware divides a 1 kHz tick by an integer, so only divisors of
+    // 1000 are exact: 300 Hz arrives as 333 Hz, 150 Hz as 167 Hz, and
+    // anything above 1000 Hz collapses to 100 Hz. StartStream is never NACKed
+    // for a bad rate, so the SDK logs a warning whenever it has to adjust one.
+    // See cpp/src/stream_rate.hpp for the firmware model this mirrors.
     void start_streaming(unsigned imu_hz     = 100,
                          unsigned encoder_hz = 100,
                          unsigned motor_hz   = 0);

@@ -21,7 +21,14 @@ add_executable(taccap_unit_tests
     test_upper_v16_pty.cpp
     test_crc32_boundaries.cpp
     test_log.cpp
+    test_stream_rate.cpp
 )
+
+# stream_rate.hpp is a private helper under src/ (not an installed header),
+# but its firmware model is exactly the kind of thing that must be pinned by
+# tests rather than re-derived by hand.
+target_include_directories(taccap_unit_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 target_link_libraries(taccap_unit_tests
     PRIVATE

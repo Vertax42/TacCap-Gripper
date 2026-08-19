@@ -1143,7 +1143,8 @@ void bind_components(py::module_& m) {
         .def("start_streaming", [](LeaderGripper& self, unsigned imu_hz, unsigned enc_hz) {
             py::gil_scoped_release gil;
             self.start_streaming(imu_hz, enc_hz);
-        }, py::arg("imu_hz") = 100u, py::arg("encoder_hz") = 100u)
+        }, py::arg("imu_hz") = 100u, py::arg("encoder_hz") = 100u,
+           "Start the MCU sensor stream.\n\nA rate of 0 turns that source OFF (its source_mask bit is cleared). Passing 0 used to stream the source at the firmware's 100 Hz default instead; raises IoError(EINVAL) if every rate is 0.\n\nThe firmware divides a 1 kHz tick by an integer, so only divisors of 1000 arrive at the requested rate -- 300 Hz becomes 333 Hz, 150 Hz becomes 167 Hz, and anything above 1000 Hz collapses to 100 Hz. Motor status is additionally capped at 100 Hz. None of this is NACKed by the firmware, so the SDK logs a warning when it applies.")
         .def("stop_streaming", [](LeaderGripper& self) {
             py::gil_scoped_release gil;
             self.stop_streaming();
@@ -1264,7 +1265,8 @@ void bind_components(py::module_& m) {
             self.start_streaming(imu_hz, enc_hz, motor_hz);
         }, py::arg("imu_hz") = 100u,
            py::arg("encoder_hz") = 100u,
-           py::arg("motor_hz") = 0u)
+           py::arg("motor_hz") = 0u,
+           "Start the MCU sensor stream.\n\nA rate of 0 turns that source OFF (its source_mask bit is cleared). Passing 0 used to stream the source at the firmware's 100 Hz default instead; raises IoError(EINVAL) if every rate is 0.\n\nThe firmware divides a 1 kHz tick by an integer, so only divisors of 1000 arrive at the requested rate -- 300 Hz becomes 333 Hz, 150 Hz becomes 167 Hz, and anything above 1000 Hz collapses to 100 Hz. Motor status is additionally capped at 100 Hz. None of this is NACKed by the firmware, so the SDK logs a warning when it applies.")
         .def("stop_streaming", [](FollowerGripper& self) {
             py::gil_scoped_release gil;
             self.stop_streaming();

@@ -2,11 +2,13 @@
 
 #include <taccap/follower_gripper.hpp>
 #include "wrist_fisheye.hpp"
+#include "stream_rate.hpp"
 #include <taccap/error.hpp>
 #include <taccap/log.hpp>
 #include <taccap/protocol/codec.hpp>
 #include <taccap/protocol/payloads.hpp>
 
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 
@@ -126,9 +128,23 @@ void FollowerGripper::start_streaming(unsigned imu_hz, unsigned encoder_hz,
                     std::chrono::milliseconds(500));
     } catch (...) { /* expected when fw is already idle */ }
 
+    // A rate of 0 means "off", and the only way to say that to the firmware
+    // is to leave the source's mask bit clear — the rate field alone would
+    // fall through to the firmware's 100 Hz default. See stream_rate.hpp.
+    const uint16_t mask = detail::stream_source_mask(imu_hz, encoder_hz, motor_hz);
+    if (mask == 0) {
+        throw IoError("FollowerGripper::start_streaming: every rate is 0, so "
+                      "nothing would be streamed — pass a non-zero rate for at "
+                      "least one source, or just don't start the stream",
+                      EINVAL);
+    }
+    detail::warn_if_rate_adjusted("FollowerGripper", "IMU", imu_hz, 0);
+    detail::warn_if_rate_adjusted("FollowerGripper", "encoder", encoder_hz, 0);
+    detail::warn_if_rate_adjusted("FollowerGripper", "motor status", motor_hz,
+                                  detail::kMotorMaxRateHz);
+
     protocol::StreamConfig sc{};
-    sc.source_mask  = protocol::StreamSrc::Imu | protocol::StreamSrc::Encoder;
-    if (motor_hz > 0) sc.source_mask |= protocol::StreamSrc::MotorStatus;
+    sc.source_mask  = mask;
     sc.mode         = static_cast<uint8_t>(protocol::StreamMode::Separate);
     sc.imu_rate     = static_cast<uint16_t>(imu_hz);
     sc.encoder_rate = static_cast<uint16_t>(encoder_hz);

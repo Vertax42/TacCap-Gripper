@@ -172,6 +172,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Passing an explicit firmware SN still works unchanged.
 
 ### Changed
+- **BREAKING: a stream rate of 0 now turns that source off.** `start_streaming()`
+  built the `source_mask` from a hard-coded `Imu | Encoder`, so `imu_hz=0` did
+  not disable the IMU — the firmware gates emission on the mask bit alone and
+  treats rate 0 as its 100 Hz default, so callers who asked for "no IMU" were
+  served a 100 Hz IMU stream (a third of the frame load on a two-source setup,
+  plus 100 callbacks/s). The mask is now derived from the rates. Callers who
+  relied on the old behaviour to get 100 Hz from a 0 must pass 100 explicitly.
+  All rates zero now raises `IoError(EINVAL)` instead of starting a stream that
+  carries nothing.
+- **`start_streaming()` warns when the firmware will not honour a rate.**
+  Verified against `third_party/firmware/tc-gu-01` @ `bf0a06e`
+  (`App/tasks/task_data_stream.c`), none of which is NACKed on the wire:
+  - Motor status is capped at `STREAM_MOTOR_MAX_RATE_HZ` = **100 Hz** ("leave
+    bandwidth for the control channel"), so `motor_hz=200` is served at 100 Hz.
+    There is no setting that streams motor status faster.
+  - The scheduler divides a 1 kHz tick by an integer, so only divisors of 1000
+    are exact: 300 Hz arrives as 333 Hz, 150 Hz as 167 Hz.
+  - Above 1000 Hz the divider underflows to 0 and the firmware rewrites it to
+    10 — asking for 2000 Hz yields 100 Hz, not 1000 Hz.
+
+  The model lives in `cpp/src/stream_rate.hpp` and is pinned by
+  `test_stream_rate.cpp` so it fails loudly if the firmware scheduler changes.
+
+### Changed
 - **Subscriber callbacks moved off the transport reader thread.** `Transport`
   now runs a second thread: the reader does `read()` -> parse -> enqueue, and a
   dispatcher drains a bounded queue and fans out to `on_data()` / `on_status()`
