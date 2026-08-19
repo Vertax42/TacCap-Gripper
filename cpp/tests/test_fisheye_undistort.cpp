@@ -166,7 +166,10 @@ TEST(FisheyeUndistorter, MatchesTheFisheyeProjectionFormulaExactly) {
     cv::Mat src(kCalibSize, CV_8UC3);
     cv::randu(src, cv::Scalar::all(0), cv::Scalar::all(255));
     cv::Mat want;
-    cv::remap(src, want, ref_x, ref_y, cv::INTER_LINEAR, cv::BORDER_CONSTANT);
+    // Same interpolation the implementation uses — this test is about the
+    // mapping, so a mismatch here would show up as a projection error and send
+    // the reader after the wrong thing.
+    cv::remap(src, want, ref_x, ref_y, cv::INTER_CUBIC, cv::BORDER_CONSTANT);
 
     cv::Mat got = u.apply(src);
     cv::Mat diff;
