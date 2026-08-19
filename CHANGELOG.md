@@ -194,6 +194,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Depth is `Transport::Config::dispatch_queue_frames` /
     `Transport(dispatch_queue_frames=...)`, default 256 (~400ms at 600 frames/s).
 
+### Fixed
+- **Segfault in `Transport.stop()` whenever a raw `Transport.subscribe()`
+  callback was live.** The binding held the Python callable through a bare
+  `make_shared`, so the final decref ran on a thread with no GIL: the binding
+  releases the GIL around `stop()`, which then drops the subscriptions. `Motor.on_status` and friends were
+  fixed for this previously; the raw `subscribe()` path was missed. The GIL-safe
+  holder and invoker now live in one shared header (`python/bindings/gil_safe.hpp`)
+  rather than in `components.cpp`'s anonymous namespace, so there is no longer a
+  copy for a binding to get wrong.
+
 ## [0.1.7] - 2026-08-03
 
 Sync to firmware protocol **V2.1** (`hw_v1.1.0` @ f5dd086; leader firmware

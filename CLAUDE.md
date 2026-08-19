@@ -47,6 +47,7 @@ carries deep background; this file is *house rules*.
 - `pytest python/tests` — hardware-free cases always run; the IMU cases skip
   when no gripper is connected. Guards against zero-stride numpy views (see
   `test_numpy_views.py`); `py::array_t<T> a(n)` is a trap on pybind11 2.9.
+  `test_dispatch_decoupling.py` is pty-backed and needs no hardware.
 - **`pytest` is not in `xense-taccap`** (it is in `taccap` / `lerobot-xense`),
   and *both* envs carry an editable install of `taccap_gripper` that redirects
   `xense.taccap` to a **different checkout** through a `sys.meta_path` finder.

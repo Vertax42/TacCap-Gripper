@@ -33,8 +33,11 @@ aborting the process: `Transport::stop()` joins both workers *before* dropping
 subscriptions (so the callback objects die on the caller's thread, never on a
 worker mid-teardown, and no callback can be entered once the stop flag is up),
 and every binding that calls into Python from a worker thread first checks
-whether the interpreter is finalizing and drops the event if so. The
-gripper `__exit__` handlers call `transport().stop()` so a `with` block
+whether the interpreter is finalizing and drops the event if so. That second
+rule lives in `python/bindings/gil_safe.hpp` — `make_gil_safe_callback()` to
+own the callable and `call_into_python()` to invoke it — because a binding that
+hand-rolled its own ownership got it wrong and segfaulted on every `stop()`.
+The gripper `__exit__` handlers call `transport().stop()` so a `with` block
 leaves nothing running.
 
 **Firmware error wire path — a seam worth knowing.** Only handler *dispatch*

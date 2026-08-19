@@ -26,6 +26,8 @@
 #include <taccap/bus/serial_bus.hpp>
 #include <taccap/bus/transport.hpp>
 
+#include "gil_safe.hpp"
+
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -33,6 +35,10 @@
 #include <string>
 
 namespace py = pybind11;
+
+// GIL-safe callback ownership/invocation is shared with components.cpp.
+using xense::taccap::python::gil::call_into_python;
+using xense::taccap::python::gil::make_gil_safe_callback;
 
 namespace {
 
@@ -391,19 +397,16 @@ PYBIND11_MODULE(_taccap_native, m) {
              py::arg("cmd"), py::arg("payload") = py::bytes(""))
         .def("subscribe",
              [](tb::Transport& t, tp::Cmd cmd, py::function pycb) {
-                 // Hold a strong ref to the Python callable; reacquire GIL
-                 // before calling it from the reader thread.
-                 auto cb = std::make_shared<py::function>(std::move(pycb));
+                 // make_gil_safe_callback, not a bare make_shared: the last
+                 // reference dies wherever the owning lambda is destroyed —
+                 // the dispatcher thread, or stop()/clear_subs_() on a caller
+                 // that has released the GIL. Decref'ing a Python object
+                 // there segfaults, which is exactly what a bare make_shared
+                 // did here on every stop() with a live subscription.
+                 auto cb = make_gil_safe_callback(std::move(pycb));
                  return t.subscribe(cmd, [cb](const tb::Frame& f) {
-                     py::gil_scoped_acquire acquire;
-                     try {
-                         (*cb)(f);
-                     } catch (py::error_already_set& e) {
-                         e.discard_as_unraisable("xense.taccap.Transport callback");
-                     } catch (...) {
-                         // C++ exception from the Python callback path.
-                         // Cannot propagate; swallow.
-                     }
+                     call_into_python("xense.taccap.Transport callback",
+                                      [&] { (*cb)(f); });
                  });
              },
              py::arg("cmd"), py::arg("callback"))
