@@ -929,6 +929,16 @@ void bind_components(py::module_& m) {
         });
 
     // ---- Camera ---------------------------------------------------------
+    // ---- Fisheye fallback (used when the firmware has no calibration) ----
+    m.attr("FISHEYE_FALLBACK_CAL") = py::cast(FISHEYE_FALLBACK_CAL);
+    m.def("is_usable_fisheye_cal", &is_usable_fisheye_cal, py::arg("calibration"),
+          "True when a CameraFisheyeCal carries usable intrinsics.\n\n"
+          "An uncalibrated unit answers a flash read with an all-zero record "
+          "rather than a NACK, and remapping with fx = fy = 0 yields a black "
+          "frame. Use this to tell a real calibration from an empty one; "
+          "FISHEYE_FALLBACK_CAL is the reference to fall back to, with a "
+          "warning, when it returns False.");
+
     // ---- FisheyeUndistorter (V2.0+ wrist fisheye intrinsics) -------------
     // Usable standalone on frames this SDK never captured — the common case,
     // since the wrist UVC device is normally owned by an external service.

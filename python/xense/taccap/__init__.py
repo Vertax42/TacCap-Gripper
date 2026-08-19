@@ -64,6 +64,11 @@ GripperAutoCalConfig = _taccap_native.GripperAutoCalConfig  # V1.9 power-on auto
 GripperPosition = _taccap_native.GripperPosition      # raw rad <-> normalized [0,1]
 CameraFisheyeCal = _taccap_native.CameraFisheyeCal    # V2.0 fisheye intrinsics + distortion
 FisheyeUndistorter = _taccap_native.FisheyeUndistorter  # applies them to frames
+# Reference intrinsics for the TC-GU-01 wrist lens, for units whose firmware was
+# never calibrated. Approximate by construction — see the C++ header — so every
+# path that uses it should say so.
+FISHEYE_FALLBACK_CAL = _taccap_native.FISHEYE_FALLBACK_CAL
+is_usable_fisheye_cal = _taccap_native.is_usable_fisheye_cal
 Calibration = _taccap_native.Calibration              # V2.0/V2.1 flash-persisted cal records
 GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
 ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
@@ -154,6 +159,8 @@ __all__ = [
     "GripperPosition",
     "CameraFisheyeCal",
     "FisheyeUndistorter",
+    "FISHEYE_FALLBACK_CAL",
+    "is_usable_fisheye_cal",
     "Calibration",
     "GripperObservation",
     "ControlLoop",

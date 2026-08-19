@@ -21,11 +21,14 @@
 
 namespace xense::taccap::detail {
 
-// Installs fisheye undistortion on `cam`, or leaves it streaming raw frames
-// and logs why.
+// Installs fisheye undistortion on `cam`, always — from this unit's own
+// calibration when the firmware holds one, and from FISHEYE_FALLBACK_CAL with a
+// warning when it does not.
 //
-// Degrades with a warning (an un-calibrated gripper must still stream):
+// Falls back with a warning (every unit shares the lens, so the reference
+// numbers beat raw fisheye; see FISHEYE_FALLBACK_CAL for what that costs):
 //   - firmware has no fisheye record yet     -> read_fisheye() == nullopt
+//   - firmware answers with an empty record  -> !is_usable_fisheye_cal()
 //   - firmware predates command set V2.0     -> ProtocolError(InvalidCmd)
 //
 // Propagates (a config bug the caller must fix, not something to paper over):
@@ -36,28 +39,37 @@ inline void install_wrist_undistorter(Calibration& cal,
                                       float        balance,
                                       const char*  who) {
     std::optional<protocol::CameraFisheyeCal> params;
+    const char* fallback_reason = nullptr;
     try {
         params = cal.read_fisheye();
     } catch (const ProtocolError& e) {
-        logger()->warn("{}: wrist fisheye undistortion requested but the "
-                       "firmware would not answer ({}) — streaming raw frames. "
+        logger()->warn("{}: the firmware would not answer the fisheye read ({}). "
                        "Command set V2.0 or newer is required.", who, e.what());
-        return;
+        fallback_reason = "the firmware predates command set V2.0";
     }
-    if (!params) {
-        logger()->warn("{}: wrist fisheye undistortion requested but the "
-                       "firmware holds no calibration yet — streaming raw "
-                       "frames. Run python/examples/fisheye_cal.py set-fisheye "
-                       "to store it.", who);
-        return;
+    if (!fallback_reason && !params) {
+        fallback_reason = "the firmware holds no calibration yet";
+    }
+    if (!fallback_reason && !is_usable_fisheye_cal(*params)) {
+        fallback_reason = "the firmware answered with an empty calibration record";
+    }
+
+    if (fallback_reason) {
+        logger()->warn("{}: wrist fisheye undistortion is using the SDK's REFERENCE "
+                       "intrinsics because {}. Rectification will be approximate — "
+                       "lens placement varies per assembly, so the principal point "
+                       "drifts. Run python/examples/fisheye_cal.py set-fisheye to "
+                       "store this unit's own calibration.", who, fallback_reason);
+        params = FISHEYE_FALLBACK_CAL;
     }
 
     const cv::Size size{cam.config().width, cam.config().height};
     auto u = std::make_shared<const FisheyeUndistorter>(*params, size, balance);
     cam.set_undistorter(u);
     logger()->info("{}: wrist fisheye undistortion on ({}x{}, balance={:.2f}, "
-                   "focal_scale={:.3f})", who, size.width, size.height,
-                   u->balance(), u->focal_scale());
+                   "focal_scale={:.3f}, calibration={})", who, size.width,
+                   size.height, u->balance(), u->focal_scale(),
+                   fallback_reason ? "SDK reference" : "this unit");
 }
 
 }  // namespace xense::taccap::detail

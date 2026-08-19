@@ -19,6 +19,8 @@
 
 #include <opencv2/core.hpp>
 
+#include <cmath>
+
 namespace xense::taccap {
 
 // The wrist camera is calibrated at 640x480 and the firmware record carries
@@ -36,6 +38,32 @@ inline constexpr int FISHEYE_CALIB_HEIGHT = 480;
 // the calibrated focal length — a natural, reference-like view; balance = 1
 // shortens it to 0.70x for the widest field of view, at the cost of more
 // black border around the edges.
+// A reference calibration for the TC-GU-01 wrist lens, measured on a sample
+// unit. It exists so a gripper whose firmware was never calibrated can still
+// deliver an approximately rectified stream instead of raw fisheye — every unit
+// carries the same lens and the same 640x480 sensor, so the shared numbers are
+// far closer to correct than no rectification at all.
+//
+// It is NOT a substitute for calibrating a unit. Lens placement varies between
+// assemblies, so the principal point in particular drifts per unit; anything
+// that measures in pixels off a rectified frame should be calibrated properly.
+// Every path that falls back to this warns, and says how to store a real one.
+inline constexpr protocol::CameraFisheyeCal FISHEYE_FALLBACK_CAL{
+    /* fx */ 213.0303f, /* fy */ 212.7928f,
+    /* cx */ 321.4000f, /* cy */ 239.9500f,
+    /* k1 */ -0.0172f,  /* k2 */ 0.0091f,
+    /* k3 */ -0.0146f,  /* k4 */ 0.0051f,
+};
+
+// A record read back from flash can be present but empty: an uncalibrated unit
+// answers with all-zero params rather than a NACK, and building remap tables
+// from fx = fy = 0 maps every pixel outside the source image, so the "rectified"
+// frame comes out uniformly black. Observed on firmware 1.1.1. Treat such a
+// record as absent.
+inline bool is_usable_fisheye_cal(const protocol::CameraFisheyeCal& c) {
+    return std::isfinite(c.fx) && std::isfinite(c.fy) && c.fx > 0.0f && c.fy > 0.0f;
+}
+
 inline constexpr double FISHEYE_NATURAL_FOCAL_SCALE = 1.00;
 inline constexpr double FISHEYE_WIDE_FOCAL_SCALE    = 0.70;
 
