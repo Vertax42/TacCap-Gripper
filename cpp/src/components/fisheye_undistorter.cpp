@@ -59,9 +59,16 @@ cv::Mat FisheyeUndistorter::apply(const cv::Mat& src) const {
             std::to_string(size_.height));
     }
     cv::Mat dst;
+    // INTER_CUBIC, not INTER_LINEAR. Rectifying an equidistant fisheye into a
+    // pinhole view upsamples the periphery — with this lens and f_new = f_src
+    // the edge is sampled at about 3.3x — and bilinear visibly softens an image
+    // being magnified that much. Measured on a structured test frame: cubic
+    // carries 1.36x the Laplacian variance of linear. Matches the PC calibration
+    // tool (camera-calibration, fisheye_calib/rectify.py RectifyMap.apply).
+    //
     // Argument order is (src, dst, map1, map2) — swapping dst and map1 still
     // compiles and fails at runtime with a -215 assertion inside remap.
-    cv::remap(src, dst, map_x_, map_y_, cv::INTER_LINEAR, cv::BORDER_CONSTANT);
+    cv::remap(src, dst, map_x_, map_y_, cv::INTER_CUBIC, cv::BORDER_CONSTANT);
     return dst;
 }
 

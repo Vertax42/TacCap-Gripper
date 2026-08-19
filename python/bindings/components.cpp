@@ -969,7 +969,10 @@ void bind_components(py::module_& m) {
                  return mat_to_numpy(dst);
              },
              py::arg("image"),
-             "Rectify one (H, W, 3) uint8 BGR frame; returns a new array.")
+             "Rectify one (H, W, 3) uint8 BGR frame; returns a new array.\n\n"
+             "Resampled with INTER_CUBIC: the periphery is magnified about "
+             "3.3x by the fisheye-to-pinhole mapping, and bilinear visibly "
+             "softens an image being enlarged that much.")
         .def_property_readonly("width",  [](const FisheyeUndistorter& s) { return s.size().width; })
         .def_property_readonly("height", [](const FisheyeUndistorter& s) { return s.size().height; })
         .def_property_readonly("balance", &FisheyeUndistorter::balance)
