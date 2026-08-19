@@ -158,6 +158,18 @@ public:
     // methods are leader-only and NACK with InvalidCmd here.
     Calibration&    calibration()    noexcept { return cal_; }            // V2.0
     OtaSession&     ota()            noexcept { return ota_; }            // V1.3
+    // The firmware version reported at open(), or nullopt when the MCU did not
+    // answer GetVersion. Read once during open rather than on demand: the
+    // command competes with the control stream, and the answer cannot change
+    // while the port is held.
+    //
+    // Callers gate features on it — wrist fisheye intrinsics need V2.0+, and a
+    // caller that skips the check gets a confusing protocol error instead of a
+    // "your firmware is too old" one.
+    std::optional<protocol::FirmwareVersion> firmware_version() const noexcept {
+        return fw_version_;
+    }
+
     bus::Transport& transport()      noexcept { return t_; }
 
     // Streaming lifecycle. motor_hz=0 means "don't stream motor status",
@@ -172,6 +184,8 @@ public:
     const Config& config() const noexcept { return cfg_; }
 
 private:
+    std::optional<protocol::FirmwareVersion> fw_version_{};
+
     // Dereference an optional component, or throw a clear IoError naming the
     // Config field the caller must set (with open_cameras=true) to enable it.
     template <typename T>

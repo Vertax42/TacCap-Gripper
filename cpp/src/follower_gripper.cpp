@@ -65,6 +65,7 @@ FollowerGripper::FollowerGripper(const Config& cfg)
             ack.data.size() == sizeof(protocol::FirmwareVersion)) {
             auto v = protocol::decode_version(ack.data.data(),
                                               ack.data.size());
+            fw_version_    = v;
             fw_version_str = protocol::version_string(v);
         }
     } catch (...) {}

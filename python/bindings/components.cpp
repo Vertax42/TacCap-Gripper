@@ -1196,6 +1196,24 @@ void bind_components(py::module_& m) {
         });
 
     // ---- FollowerGripper ------------------------------------------------
+    // ---- FirmwareVersion -------------------------------------------------
+    py::class_<protocol::FirmwareVersion>(m, "FirmwareVersion")
+        .def_readonly("major", &protocol::FirmwareVersion::major)
+        .def_readonly("minor", &protocol::FirmwareVersion::minor)
+        .def_readonly("patch", &protocol::FirmwareVersion::patch)
+        .def_readonly("build", &protocol::FirmwareVersion::build)
+        .def_property_readonly("tuple",
+            [](const protocol::FirmwareVersion& v) {
+                return py::make_tuple(v.major, v.minor, v.patch);
+            },
+            "(major, minor, patch) — comparable, so a feature gate reads as "
+            "`gripper.firmware_version.tuple >= (2, 0, 0)`.")
+        .def("__repr__", [](const protocol::FirmwareVersion& v) {
+            return "FirmwareVersion(" + std::to_string(v.major) + "." +
+                   std::to_string(v.minor) + "." + std::to_string(v.patch) +
+                   "." + std::to_string(v.build) + ")";
+        });
+
     py::class_<FollowerGripper>(m, "FollowerGripper")
         .def(py::init([](const std::string& mcu, const std::string& wrist,
                          uint32_t baud, unsigned ack_ms, unsigned retries,
@@ -1223,6 +1241,16 @@ void bind_components(py::module_& m) {
              // See LeaderGripper above — same semantics and same failure policy.
              py::arg("undistort_wrist")     = false,
              py::arg("fisheye_balance")     = 0.0f)
+        .def_property_readonly("firmware_version",
+            [](const FollowerGripper& g) -> py::object {
+                auto v = g.firmware_version();
+                if (!v) return py::none();
+                return py::cast(*v);
+            },
+            "The firmware version reported at open(), or None when the MCU did "
+            "not answer. Gate features on it: the wrist fisheye intrinsics need "
+            "command set V2.0+, and skipping the check turns 'firmware too old' "
+            "into an opaque protocol error.")
         .def_static("open", []() {
             py::gil_scoped_release gil;
             return FollowerGripper::open();
