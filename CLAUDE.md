@@ -111,19 +111,26 @@ means firmware hasn't burned the SN yet, or firmware < V1.6 — fall back to
 - Do **not** amend already-pushed commits — dual-remote sync becomes
   very painful afterwards.
 
-## Push order (two remotes)
-Remote naming in this repo is **counter-intuitive**:
-`origin` = GitLab (internal), `github` = GitHub (public).
-Default is push to GitHub first (it may have external contributions),
-then GitLab:
-```bash
-git push github main
-git push origin main
+## Pushing
+On **this machine there is exactly one remote**, and it is GitHub:
 ```
-GitLab `main` is a protected branch. **Before any force-push**, go to the
-GitLab web UI (`Settings → Repository → Protected branches`), temporarily
-unprotect, push, then **immediately re-protect**. Never force-push to
-`main` as a shortcut — ask first.
+origin  git@github.com:Vertax42/TacCap-Gripper.git
+```
+So the only push is `git push origin main`. There is no `github` remote here —
+`git fetch github` fails with "does not appear to be a git repository". (Other
+clones name the remotes the other way round, `origin` = internal GitLab and
+`github` = GitHub. Check `git remote -v` before trusting either convention.)
+
+The internal GitLab is **out of scope from here**: it is not reachable on this
+network and the maintainer syncs it by hand from somewhere that is. Do not try
+to add, fetch, or push a GitLab remote.
+
+`origin/main` takes external contributions, so **expect a rejected push**.
+Fetch, look at what landed, then rebase — never force-push to `main` as a
+shortcut, ask first. After a rebase across someone else's commits, rebuild and
+re-run the suites before pushing: the merged tree is code neither side tested.
+If a test fails there, check it against plain `origin/main` first — it may not
+be yours.
 
 ## Logging
 - The entire SDK uses **one singleton logger**: `xense::taccap::logger()`,
@@ -169,7 +176,14 @@ archive format never changes (keeps historical greps parseable).
   wrist-camera only.
 - `third_party/firmware/` is a **clone-on-demand** firmware reference dir,
   **not** a submodule. `.gitignore` already excludes it. Never `git add -f`
-  or convert it into a submodule.
+  or convert it into a submodule. It comes from a *different* GitHub org than
+  this repo, which is why searching `Vertax42` for it turns up nothing:
+  ```bash
+  gh repo clone XenseRobotics-AI/tc-gu-01 third_party/firmware/tc-gu-01 -- --depth=1
+  ```
+  Treat it as read-only. The stream scheduler in
+  `App/tasks/task_data_stream.c` is the authority for what `start_streaming()`
+  rates actually do — `cpp/src/stream_rate.hpp` mirrors it.
 - Side L/R detection reads the firmware-burned SN via `Cmd::GetSn`, **not**
   the CH343 USB chip SN.
 - ROS2 nodes must run with `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` and QoS
@@ -182,11 +196,15 @@ archive format never changes (keeps historical greps parseable).
   bricks the MCU).
 - Any change under `third_party/firmware/` or to the firmware-protocol
   mirror headers in `cpp/include/taccap/protocol/`.
-- `git push --force*` to `main` on either remote.
+- `git push --force*` to `main` (the only remote here is GitHub `origin`).
 - Stopping the system ROS2 daemon or editing cyclonedds config files.
 
 ## When in doubt
-Auto-memory in `~/.claude/projects/-home-ubuntu-TacCap-Gripper/memory/`
-holds the deeper background (subsystem map, runtime gotchas, wire-protocol
-notes, firmware stream-dup behavior, etc.) and is loaded automatically.
-Reference it when relevant.
+Auto-memory for this repo lives in
+`~/.claude/projects/-home-xense-sn0-TacCap-Gripper/memory/` and is loaded
+automatically — reference it when relevant. Note it is currently **empty on
+this machine**: the deeper background it used to hold (subsystem map, runtime
+gotchas, wire-protocol notes, firmware stream-dup behavior) was written under
+the old `-home-ubuntu-` user and did not come across. Treat anything you need
+from it as unknown until re-derived, and prefer writing durable findings into
+this file or into code comments where they can be reviewed.
