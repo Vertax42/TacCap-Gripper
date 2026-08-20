@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - **Loss accounting on `Transport::stats()`**, so a rate drop can be attributed
   instead of guessed at. Read together: `crc_errors` / `resync_bytes` rising
   means bytes were lost before the parser (the host stopped draining the tty);
@@ -51,20 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `MotorStatusBit` convention, the bit *masks* stay C++-only; Python gets the
     raw integer fields plus the `MotorStopReason` enum.
 
-### Fixed
-- **`EncoderConfig` was 14 bytes on the wire; the firmware wants 5.** Firmware
-  `0086da6` (2026-05-27) dropped `baudrate` / `resolution` / `ratio` along with
-  the retired RS485 Modbus encoder driver — the encoder is SPI MT6816 now — but
-  the SDK kept mirroring the old layout. That broke both directions of the
-  command: `Cmd::SetEncoderConfig` sent 14 bytes where the firmware's command
-  table accepts exactly `sizeof(encoder_config_t)`, so it NACKed
-  `LengthMismatch`, and `Cmd::GetEncoderConfig` threw `ProtocolError` on the
-  5-byte response. `EncoderConfig` is now `{uint8_t direction; float
-  offset_rad;}`. No published API surface changes — the struct was reachable
-  only through the codec layer, never exposed on `Encoder` or in Python.
-  Found by the new drift check below, ~2.5 months after the fact.
-
-### Added
 - **Wrist fisheye undistortion.** The SDK could already *read* the intrinsics
   the firmware persists (`Calibration::read_fisheye()`, `cal.K` / `cal.D` in
   Python) but had nowhere to apply them. New `FisheyeUndistorter` builds the
@@ -110,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SKIP rather than failing work it cannot verify.
 
 ### Changed
+
 - **Shipped follower image bumped to 1.1.2** (`hw_v1.1.0` @ `bf0a06e`), the
   build that carries command set V2.2. The leader image is untouched at 1.2.1
   (`6b4605a`) — every V2.2 command is follower-only, so it had no reason to be
@@ -171,7 +159,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grippers reporting the same side is an error naming both SNs, never a guess.
   Passing an explicit firmware SN still works unchanged.
 
-### Changed
 - **BREAKING: a stream rate of 0 now turns that source off.** `start_streaming()`
   built the `source_mask` from a hard-coded `Imu | Encoder`, so `imu_hz=0` did
   not disable the IMU — the firmware gates emission on the mask bit alone and
@@ -195,7 +182,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The model lives in `cpp/src/stream_rate.hpp` and is pinned by
   `test_stream_rate.cpp` so it fails loudly if the firmware scheduler changes.
 
-### Changed
 - **Subscriber callbacks moved off the transport reader thread.** `Transport`
   now runs a second thread: the reader does `read()` -> parse -> enqueue, and a
   dispatcher drains a bounded queue and fans out to `on_data()` / `on_status()`
@@ -219,6 +205,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Transport(dispatch_queue_frames=...)`, default 256 (~400ms at 600 frames/s).
 
 ### Fixed
+
+- **`EncoderConfig` was 14 bytes on the wire; the firmware wants 5.** Firmware
+  `0086da6` (2026-05-27) dropped `baudrate` / `resolution` / `ratio` along with
+  the retired RS485 Modbus encoder driver — the encoder is SPI MT6816 now — but
+  the SDK kept mirroring the old layout. That broke both directions of the
+  command: `Cmd::SetEncoderConfig` sent 14 bytes where the firmware's command
+  table accepts exactly `sizeof(encoder_config_t)`, so it NACKed
+  `LengthMismatch`, and `Cmd::GetEncoderConfig` threw `ProtocolError` on the
+  5-byte response. `EncoderConfig` is now `{uint8_t direction; float
+  offset_rad;}`. No published API surface changes — the struct was reachable
+  only through the codec layer, never exposed on `Encoder` or in Python.
+  Found by the new drift check below, ~2.5 months after the fact.
+
 - **Segfault in `Transport.stop()` whenever a raw `Transport.subscribe()`
   callback was live.** The binding held the Python callable through a bare
   `make_shared`, so the final decref ran on a thread with no GIL: the binding
