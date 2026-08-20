@@ -68,14 +68,44 @@ public:
                        float feedforward_vel_radps = 0.0f);  // V1.7; MIT only
 
     // ---- High-rate control submission (no ACK) -----------------------------
-    // Fire-and-forget MIT control frames for a host-driven realtime loop (e.g.
-    // a follow / teleop loop in the upper layer running up to the firmware's
-    // 500Hz slave control rate). These send a CMD_NO_ACK frame and return
-    // immediately: there is NO ACK, NO NACK, NO retry, NO timeout, and NO throw
-    // on a target the firmware rejects. The firmware's slave control task
-    // consumes the *latest* submitted target; the host's only job is to submit
-    // at rate. Unlike set_*(), which block on an ACK and throw ProtocolError on
-    // NACK, submit() never blocks.
+    // Fire-and-forget MIT control frames for a host-driven realtime loop.
+    // These send a CMD_NO_ACK frame and return immediately: there is NO ACK,
+    // NO NACK, NO retry, NO timeout, and NO throw on a target the firmware
+    // rejects. The firmware's slave control task consumes the *latest*
+    // submitted target. Unlike set_*(), which block on an ACK and throw
+    // ProtocolError on NACK, submit() never blocks.
+    //
+    // ---- On submission rate ------------------------------------------------
+    // This used to say you could submit "up to the firmware's 500Hz slave
+    // control rate", which read as a budget to spend. It is not one.
+    //
+    // The 500Hz figure is real — that is how often the firmware's control task
+    // applies the latest target — but it says nothing about what submitting at
+    // that rate costs you. Every host->MCU frame that lands while the MCU is
+    // transmitting makes it drop bytes out of the middle of the frame it is
+    // sending, and that frame is then discarded whole (tc-gu-01 issue #1). A
+    // 41-byte status frame at 3 Mbps fills only ~137us of each 10ms period, so
+    // whether a given submit collides is down to *when* it lands, not how many
+    // you send:
+    //
+    //   - 250Hz lost 154 status frames on one 60s run and none on the next.
+    //   - 300Hz was clean on a run where 250Hz was not.
+    //   - 1000Hz has produced both 0 and 146 lost frames on the same firmware.
+    //
+    // So rate does not predict loss; it only sets how many chances to collide
+    // you take per second. Submitting faster than the status stream also buys
+    // nothing on the observation side, since motor status is capped at 100Hz.
+    //
+    // Prefer ControlLoop with SubmitPhase::StreamLocked, which submits once per
+    // received status frame and therefore never overlaps a transmission —
+    // measured at zero lost frames across 8 runs while sending MORE frames than
+    // the free-running comparison. Reach for raw submit() at your own cadence
+    // only when you cannot ride the status stream.
+    //
+    // Separately: sustained input above a few hundred Hz used to livelock the
+    // firmware's command handler outright (tc-gu-01 issue #2, fixed in firmware
+    // 1.1.3). Against older firmware, high-rate submission can leave the device
+    // streaming happily while accepting no commands at all until power-cycled.
     //
     // Health/error feedback is OUT-OF-BAND — poll these off the realtime thread,
     // never inside the submit loop:

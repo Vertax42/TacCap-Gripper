@@ -95,13 +95,21 @@ public:
     //
     //   - ACK responses. The loop knows when the MCU emits *telemetry*; it has
     //     no idea when the MCU is answering somebody's command. Measured with
-    //     no stream running and a 100Hz GetMotorStatusExt poll: adding 250Hz of
-    //     concurrent no-ACK traffic corrupted 5-6 responses per 6000 commands,
-    //     against zero in the control runs. The saving grace is that commands
-    //     RETRY -- every one of those was recovered, costing ~31ms each and
-    //     surfacing to the caller as latency, never as failure. Stream frames
-    //     have no retry, which is why the same defect reads as a rate drop on
-    //     telemetry and as nothing at all on commands.
+    //     no stream running and a 100Hz GetMotorStatusExt poll, adding 250Hz of
+    //     concurrent no-ACK traffic corrupts responses that the control runs
+    //     never lose -- on firmware 1.1.2.0 that was 5-6 per 6000 commands, and
+    //     on 1.1.4.0 (logging off) 1-2. The count dropped; the exposure did
+    //     not. Control runs stayed at zero on both, test runs non-zero on both.
+    //     The saving grace is that commands RETRY -- every one of those was
+    //     recovered, costing ~31ms each and surfacing to the caller as latency,
+    //     never as failure. Stream frames have no retry, which is why the same
+    //     defect reads as a rate drop on telemetry and as nothing at all on
+    //     commands.
+    //
+    //     (Firmware 1.1.4.0 also roughly halved command latency outright --
+    //     877us to 489us mean on the quiet control arm -- by no longer blocking
+    //     tasks on its debug logging. That is a real gain, but it is a gain in
+    //     latency, not in collision immunity.)
     //   - Streams with a high transmit duty cycle. One 41-byte status frame at
     //     3 Mbps fills ~137us of each 10ms period -- 1.4%, so the idle window
     //     we aim at is enormous and the USB delivery jitter in our estimate of

@@ -939,8 +939,12 @@ void bind_components(py::module_& m) {
             py::arg("feedforward_torque_nm"),
             py::arg("feedforward_vel_radps") = 0.0f)  // V1.7; MIT only
         // ---- High-rate control submission (no ACK) -------------------------
-        // Fire-and-forget for a realtime loop (up to the firmware's 500Hz). No
-        // ACK, no NACK, no retry, no throw on a rejected target — the only
+        // Fire-and-forget for a realtime loop. The firmware applies the latest
+        // target at 500Hz, but that is not a submission budget: every frame
+        // that lands while the MCU is transmitting costs a status frame, and
+        // whether it collides depends on *when* it lands, not the rate. Prefer
+        // ControlLoop with STREAM_LOCKED. See motor.hpp for the measurements.
+        // No ACK, no NACK, no retry, no throw on a rejected target — the only
         // exception is IoError on a stopped transport. MIT is assumed. Poll
         // control_stats() (off the loop) for health: applied_seq, actual_hz,
         // error_count, last_error. The follow/teleop loop + grasp FSM live in

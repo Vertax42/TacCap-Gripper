@@ -31,6 +31,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DEBUG UART, which is not routed over USB, so enabling it without a probe on
   that pin costs the realtime penalty and shows nothing.
 
+  Two documentation corrections landed alongside it:
+
+  - **`Motor::submit_*` no longer advertises a 500 Hz submission budget.** The
+    firmware really does apply the latest target at 500 Hz, but that was being
+    read as "submitting at 500 Hz is free", and it is not: every host->MCU frame
+    that lands while the MCU is transmitting costs a whole status frame
+    (tc-gu-01#1). Rate does not predict the loss — 250 Hz lost 154 frames on one
+    60 s run and none on the next, 300 Hz was clean where 250 Hz was not, and
+    1000 Hz has produced both 0 and 146 on the same firmware. It only sets how
+    many chances to collide you take per second. The header now says that, and
+    points at `SubmitPhase::StreamLocked`.
+  - **`ControlLoop`'s ACK-response caveat now carries firmware 1.1.4.0 numbers.**
+    Concurrent traffic still corrupts command responses that the quiet control
+    runs never lose (1-2 per 6000 commands on 1.1.4.0, 5-6 on 1.1.2.0; control
+    arms zero on both). The count fell, the exposure did not. 1.1.4.0 separately
+    halved command latency (877 us -> 489 us mean) by no longer blocking tasks
+    on debug logging — a latency gain, not collision immunity.
+
   `decode_uart_stats()` accepts both the 32-byte packet firmware 1.1.3 answers
   with and the 36-byte one from 1.1.4, zero-filling the missing tail, so one
   SDK build talks to either. `log_dropped` therefore reads 0 against 1.1.3 and
