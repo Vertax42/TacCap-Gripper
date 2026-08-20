@@ -18,7 +18,7 @@
 // Usage:
 //   FollowerGripper g = ...;
 //   g.motor().enable();
-//   ControlLoop loop(g, {.hz = 200, .kp = 8.0f, .kd = 1.0f});
+//   ControlLoop loop(g, {.hz = 100, .kp = 8.0f, .kd = 1.0f});
 //   loop.start();                       // seeds target = current position
 //   for (;;) {                          // your policy, at its own rate
 //       auto obs = loop.observation();  // latest open amount, non-blocking
@@ -29,7 +29,20 @@
 //
 // While the loop runs it OWNS the control + telemetry path for this gripper:
 // don't issue other motor commands or start/stop streaming on the same gripper
-// concurrently (two writers on one serial link corrupt frames).
+// concurrently.
+//
+// The reason is NOT frame corruption on the host. Transport serialises writers
+// internally, and a blocking tty write() is whole-call atomic anyway (measured:
+// 40 x 100 kB writes against a deliberately starved drain produced zero short
+// writes, so the partial-write loop in SerialBus never even runs). The reason
+// is the firmware: host->MCU traffic that overlaps the MCU's own transmission
+// makes it drop bytes out of the middle of the frame it is sending. Measured on
+// hw_v1.1.0 with a 100Hz motor-status stream -- the damaged frame arrives with
+// its payload short by a couple of bytes, fails the LEN check (so crc_errors
+// stays 0, only resync_bytes moves) and is discarded whole. The rate that
+// survives is not a fixed ceiling: 250Hz submits lost frames on one run and not
+// on the next, because what matters is whether a command happens to land inside
+// the ~137us the MCU spends transmitting each 41-byte status frame.
 
 #pragma once
 
@@ -39,6 +52,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <thread>
@@ -59,12 +73,60 @@ struct GripperObservation {
 
 class ControlLoop {
 public:
+    // When the loop puts its MIT frame on the wire.
+    //
+    // The MCU drops bytes out of the middle of a status frame it is
+    // transmitting if host->MCU traffic overlaps that transmission (see the
+    // note above). A 41-byte status frame at 3 Mbps occupies ~137us of each
+    // 10ms period, so a free-running submitter collides only occasionally --
+    // which is exactly what makes the resulting rate drop look sporadic and
+    // unreproducible.
+    //
+    // StreamLocked removes the collision instead of making it rarer: it
+    // submits once per received status frame, so every write lands in the
+    // ~9.8ms the MCU is known to be idle. Config::hz is then ignored -- the
+    // submit rate becomes motor_stream_hz. This is the same shape as ARX5's
+    // send_recv_once: one owner, one exchange per cycle, send phase-locked to
+    // receive. Measured: 8 runs of 60s, free-running lost 5..154 status frames
+    // per run, stream-locked lost none while putting MORE traffic on the link.
+    //
+    // What it does NOT protect, because the honest scope matters more than the
+    // headline:
+    //
+    //   - ACK responses. The loop knows when the MCU emits *telemetry*; it has
+    //     no idea when the MCU is answering somebody's command. Measured with
+    //     no stream running and a 100Hz GetMotorStatusExt poll: adding 250Hz of
+    //     concurrent no-ACK traffic corrupted 5-6 responses per 6000 commands,
+    //     against zero in the control runs. The saving grace is that commands
+    //     RETRY -- every one of those was recovered, costing ~31ms each and
+    //     surfacing to the caller as latency, never as failure. Stream frames
+    //     have no retry, which is why the same defect reads as a rate drop on
+    //     telemetry and as nothing at all on commands.
+    //   - Streams with a high transmit duty cycle. One 41-byte status frame at
+    //     3 Mbps fills ~137us of each 10ms period -- 1.4%, so the idle window
+    //     we aim at is enormous and the USB delivery jitter in our estimate of
+    //     "the MCU just finished sending" does not matter. Turn on IMU and
+    //     encoder as well and that margin shrinks; this has not been measured.
+    //   - Callers that must write asynchronously by construction. If your
+    //     architecture sends when an external event says to, no phase this loop
+    //     chooses can help you.
+    //
+    // So this is avoidance, not a fix. The defect is in the firmware's UART
+    // path (tc-gu-01 issue #1) and stays worth fixing there.
+    enum class SubmitPhase : uint8_t { FreeRunning, StreamLocked };
+
     struct Config {
-        unsigned hz                  = 200;    // target submission rate (Hz)
+        // Target submission rate (Hz). Only consulted by
+        // SubmitPhase::FreeRunning -- StreamLocked takes its rate from the
+        // status stream. The default matches what StreamLocked actually
+        // produces, so the two phases agree out of the box and switching to
+        // FreeRunning does not silently change the rate as well as the phase.
+        unsigned hz                  = 100;
         float    kp                  = 8.0f;   // impedance stiffness (Nm/rad)
         float    kd                  = 1.0f;   // impedance damping (Nm·s/rad)
         float    feedforward_torque  = 0.0f;   // Nm
         unsigned motor_stream_hz     = 100;    // motor-status stream rate (Hz)
+        SubmitPhase phase            = SubmitPhase::StreamLocked;
     };
 
     explicit ControlLoop(FollowerGripper& gripper);   // default Config
@@ -97,6 +159,13 @@ public:
 
 private:
     void run_();
+    void run_free_();
+    void run_stream_locked_();
+    // Read the target under mu_ and put one MIT frame on the wire. False means
+    // the write failed and the loop has already set stop_flag_.
+    bool submit_once_();
+    void note_rate_(uint64_t& window_count,
+                    std::chrono::steady_clock::time_point& window_start);
     void on_status_(const MotorStatusSample& s);
     void start_motor_stream_();
     void stop_motor_stream_();
@@ -108,6 +177,14 @@ private:
     std::thread        thread_;
     std::atomic<bool>  running_{false};
     std::atomic<bool>  stop_flag_{false};
+
+    // Status-frame doorbell for SubmitPhase::StreamLocked. The submit stays on
+    // the loop's own thread rather than running inside on_status_: that
+    // callback is the dispatcher thread, shared with every other subscriber,
+    // and a write must not be able to stall them.
+    std::mutex              tick_mu_;
+    std::condition_variable tick_cv_;
+    bool                    tick_ = false;
 
     mutable std::mutex mu_;
     float              target_ = 0.0f;   // normalized [0,1]

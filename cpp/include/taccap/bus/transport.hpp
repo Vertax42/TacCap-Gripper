@@ -24,6 +24,12 @@
 // It also decouples ACK matching from callback load: handle_ack_ still runs
 // on the reader, so send_cmd() no longer times out behind a slow subscriber.
 //
+// Writers are serialised by an internal mutex, so send_cmd() and
+// send_cmd_no_ack() may be called from any number of threads without their
+// frames interleaving on the wire. That is frame integrity only -- it says
+// nothing about the ORDER two threads' commands reach the firmware, and it
+// cannot stop concurrent traffic from disturbing the firmware's own timing.
+//
 // Callbacks are still expected to be reasonably quick. The queue is bounded
 // and drops the OLDEST frame when full (state telemetry wants currency, not
 // history); Stats::queue_dropped and Stats::callback_max_us make both the
@@ -151,8 +157,17 @@ public:
         // together they say *where* a rate drop came from:
         //
         //   crc_errors / resync_bytes > 0  -> bytes were lost before the
-        //       parser, i.e. the host stopped draining the tty long enough to
-        //       overflow the kernel/USB buffers. Cross-check callback_max_us.
+        //       parser. Two different causes, told apart by bytes_read:
+        //         - bytes_read also down: the host stopped draining the tty
+        //           long enough to overflow the kernel/USB buffers.
+        //           Cross-check callback_max_us.
+        //         - bytes_read at full volume, crc_errors flat, resync_bytes
+        //           climbing in ~one-frame steps: the MCU dropped bytes out of
+        //           the middle of a frame it was transmitting, which it does
+        //           when host->MCU traffic overlaps its own send. The short
+        //           payload fails the LEN check before CRC is ever reached,
+        //           which is why crc_errors stays at zero. Nothing on the host
+        //           is broken; stop overlapping the writes (see ControlLoop).
         //   queue_dropped > 0              -> bytes arrived fine, but the
         //       subscriber could not keep up and old frames were evicted.
         //   both zero, rate still low      -> the firmware really is sending
@@ -219,6 +234,17 @@ private:
         DataCallback    cb;
     };
 
+    // Serialise every byte we put on the link. SerialBus::write() loops over
+    // partial writes, and that loop is only interruptible when ::write()
+    // returns short -- which a BLOCKING tty never does (n_tty holds
+    // atomic_write_lock and loops internally; measured at 40 x 100 kB writes
+    // against a starved drain, zero short writes). So this mutex prevents no
+    // failure we can currently produce; it makes the invariant ours instead of
+    // the kernel tty layer's, which a non-blocking fd or a non-tty transport
+    // would quietly take away. Held across the (blocking) write, so a submit
+    // can queue behind a large frame; that is the cost of one link.
+    void write_frame_(const std::vector<uint8_t>& wire);
+
     void reader_loop_();
     void dispatch_loop_();
     void dispatch_(Frame&& f);
@@ -248,6 +274,9 @@ private:
     std::atomic<bool>          running_{false};
     std::thread                reader_;
     std::thread                dispatcher_;
+
+    // Serialises writers; see write_frame_().
+    std::mutex                 write_mu_;
 
     // reader -> dispatcher hand-off. Bounded; drop-oldest on overflow.
     std::mutex                 queue_mu_;

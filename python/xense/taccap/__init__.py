@@ -73,6 +73,7 @@ FirmwareVersion = _taccap_native.FirmwareVersion
 Calibration = _taccap_native.Calibration              # V2.0/V2.1 flash-persisted cal records
 GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
 ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
+SubmitPhase = _taccap_native.SubmitPhase              # ControlLoop send phasing
 MotorControlStats = _taccap_native.MotorControlStats  # V1.7
 MotorPrivateParam = _taccap_native.MotorPrivateParam  # V1.9+ private-protocol param
 MotorStatusExt = _taccap_native.MotorStatusExt        # V2.2 72-byte status (Cmd 0x53)
@@ -166,6 +167,7 @@ __all__ = [
     "Calibration",
     "GripperObservation",
     "ControlLoop",
+    "SubmitPhase",
     "MotorControlStats",
     "MotorPrivateParam",
     "MotorStatusExt",

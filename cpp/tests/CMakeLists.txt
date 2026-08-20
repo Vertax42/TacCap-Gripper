@@ -14,6 +14,7 @@ add_executable(taccap_unit_tests
     test_python_compat.cpp
     test_stuff.cpp
     test_transport.cpp
+    test_transport_concurrent_write.cpp
     test_components.cpp
     test_discovery.cpp
     test_gripper_position.cpp
