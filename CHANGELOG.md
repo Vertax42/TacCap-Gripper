@@ -7,7 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`ControlLoop` submits in phase with the status stream**, via
+  `Config::phase` (`SubmitPhase::StreamLocked`, the new default; the old
+  behaviour is `SubmitPhase::FreeRunning`). StreamLocked fires one MIT frame
+  per received motor-status frame, so every write lands in the ~9.8 ms the MCU
+  is not transmitting instead of landing wherever an independent timer happens
+  to put it.
+
+  This exists because the MCU drops bytes out of the middle of a status frame
+  it is transmitting when host->MCU traffic overlaps that transmission. A
+  41-byte status frame at 3 Mbps occupies only ~137us of each 10 ms period, so
+  a free-running submitter collides rarely and at random -- which is why the
+  resulting rate drop reads as sporadic and refuses to reproduce on demand.
+
+  Measured on hw_v1.1.0, 100 Hz motor-status stream, 60 s per run, submits at
+  250/s:
+
+  | phase | submits | frames | missing | resync_bytes |
+  |---|---|---|---|---|
+  | free-running | 15002 | 5995 | 5 | 195 |
+  | free-running | 15002 | 5846 | 154 | 6005 |
+  | free-running | 15003 | 5983 | 17 | 662 |
+  | free-running | 15002 | 5987 | 13 | 505 |
+  | stream-locked | 18000 | 6000 | 0 | 0 |
+  | stream-locked | 18000 | 6000 | 0 | 0 |
+  | stream-locked | 18000 | 6000 | 0 | 0 |
+  | stream-locked | 18000 | 6000 | 0 | 0 |
+
+  Four out of four free-running runs lost frames; four out of four locked runs
+  lost none. The locked runs put *more* traffic on the link (18000 frames vs
+  15002) and lost nothing, so this is not about bandwidth or command volume -- only about
+  whether a write overlaps the MCU's send. `crc_errors` stays 0 throughout: the
+  damaged frame is short by a couple of bytes and fails the LEN check before
+  CRC is ever reached.
+
+  `Config::hz` now defaults to 100 to match the rate StreamLocked actually
+  produces, and is consulted only by FreeRunning. A StreamLocked loop that
+  receives no status frames for 2 s logs an error rather than silently
+  submitting nothing (the usual cause is riding a caller's stream that has no
+  `StreamSrc::MotorStatus`).
+
+  **This is avoidance, not a fix, and its scope is narrower than the headline.**
+  The loop knows when the MCU emits telemetry; it has no idea when the MCU is
+  answering a command, so **ACK responses are still exposed**. Measured with no
+  stream running and a 100 Hz `GetMotorStatusExt` poll, adding 250 Hz of
+  concurrent no-ACK traffic corrupted 5-6 responses per 6000 commands against
+  zero in the paired control runs:
+
+  | arm | commands | retries | ack timeouts | resync bytes |
+  |---|---|---|---|---|
+  | control | 6000 | 0 | 0 | 0 |
+  | control | 5997 | 1 | 1 | 0 |
+  | + 250 Hz no-ACK | 5984 | 5 | 5 | 364 |
+  | + 250 Hz no-ACK | 5981 | 6 | 6 | 441 |
+
+  Commands survive this because they retry — `ack_fail` was 0 in every run, so
+  a corrupted response costs ~31 ms of latency and nothing else. Stream frames
+  have no retry, which is why one defect reads as a rate drop on telemetry and
+  as nothing at all on commands. Also unmeasured: streams with several sources
+  enabled raise the MCU's transmit duty cycle well above the 1.4 % that makes
+  the idle window so forgiving today.
+
+  The defect itself is in the firmware's UART path — tracked as tc-gu-01 issue
+  #1, and still worth fixing there.
+
+- **`Transport` serialises its writers.** `send_cmd()` and `send_cmd_no_ack()`
+  now take an internal mutex around the write, so calling them from several
+  threads cannot splice two frames together. This is hardening, not a fix for
+  an observed failure: on a blocking tty `write()` is whole-call atomic (n_tty
+  holds `atomic_write_lock` and loops internally), measured at 40 x 100 kB
+  writes against a starved drain with zero short writes, so
+  `SerialBus::write()`'s partial-write loop never actually ran. The mutex makes
+  the invariant the code's own rather than a property of the kernel's tty
+  layer that a non-blocking fd would silently remove.
+  `cpp/tests/test_transport_concurrent_write.cpp` pins it.
+
+### Fixed
+
+- **Documentation that blamed the wrong layer.** `ControlLoop` claimed two
+  writers on one serial link corrupt frames; they do not (see above). The real
+  reason to keep one owner on the link is the firmware: host->MCU traffic that
+  overlaps the MCU's own transmission makes it drop bytes out of the middle of
+  the frame it is sending. Measured against hw_v1.1.0 with a 100Hz
+  motor-status stream, the damaged frame arrives a couple of bytes short, fails
+  the LEN check before CRC is reached, and is discarded whole -- so
+  `crc_errors` stays at 0 while `resync_bytes` climbs in one-frame steps and
+  `bytes_read` stays at full volume. `Transport::Stats` documented that
+  signature as host-side byte loss only; it now names both causes and how
+  `bytes_read` tells them apart.
 
 ## [0.1.8] - 2026-08-20
 

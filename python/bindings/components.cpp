@@ -1395,19 +1395,32 @@ void bind_components(py::module_& m) {
         });
 
     // ---- ControlLoop: fixed-rate send/recv for embodied control ----------
+    py::enum_<ControlLoop::SubmitPhase>(m, "SubmitPhase",
+        "When ControlLoop puts its MIT frame on the wire.\n\n"
+        "STREAM_LOCKED (default) submits once per received motor-status frame, "
+        "so the write lands while the MCU is not transmitting; `hz` is then "
+        "ignored and the submit rate follows motor_stream_hz. FREE_RUNNING "
+        "submits on its own clock at `hz` and will occasionally write into the "
+        "MCU's transmission, which costs status frames.")
+        .value("FREE_RUNNING",  ControlLoop::SubmitPhase::FreeRunning)
+        .value("STREAM_LOCKED", ControlLoop::SubmitPhase::StreamLocked);
+
     py::class_<ControlLoop>(m, "ControlLoop")
         .def(py::init([](FollowerGripper& g, unsigned hz, float kp, float kd,
-                         float feedforward_torque, unsigned motor_stream_hz) {
+                         float feedforward_torque, unsigned motor_stream_hz,
+                         ControlLoop::SubmitPhase phase) {
                 ControlLoop::Config c;
                 c.hz = hz; c.kp = kp; c.kd = kd;
                 c.feedforward_torque = feedforward_torque;
                 c.motor_stream_hz = motor_stream_hz;
+                c.phase = phase;
                 return std::make_unique<ControlLoop>(g, c);
             }),
-            py::arg("gripper"), py::arg("hz") = 200u,
+            py::arg("gripper"), py::arg("hz") = 100u,
             py::arg("kp") = 8.0f, py::arg("kd") = 1.0f,
             py::arg("feedforward_torque") = 0.0f,
             py::arg("motor_stream_hz") = 100u,
+            py::arg("phase") = ControlLoop::SubmitPhase::StreamLocked,
             py::keep_alive<1, 2>())   // keep the gripper alive while the loop lives
         .def("start", [](ControlLoop& l) { py::gil_scoped_release g; l.start(); })
         .def("stop",  [](ControlLoop& l) { py::gil_scoped_release g; l.stop(); })

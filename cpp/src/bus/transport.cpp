@@ -84,12 +84,9 @@ AckResponse Transport::send_cmd(protocol::Cmd cmd,
         }
 
         try {
-            auto wire = pack_frame(cfg_.peer, seq,
-                                   protocol::FrameType::CMD_NEED_ACK,
-                                   cmd, payload);
-            serial_.write(wire);
-            stat_bytes_written_.fetch_add(wire.size(), std::memory_order_relaxed);
-            stat_frames_sent_.fetch_add(1, std::memory_order_relaxed);
+            write_frame_(pack_frame(cfg_.peer, seq,
+                                    protocol::FrameType::CMD_NEED_ACK,
+                                    cmd, payload));
         } catch (...) {
             std::lock_guard<std::mutex> lk(pending_mu_);
             pending_acks_.erase(seq);
@@ -126,9 +123,17 @@ void Transport::send_cmd_no_ack(protocol::Cmd cmd,
         throw IoError("send_cmd_no_ack on stopped transport", EBADF);
     }
     const uint8_t seq = next_seq_.fetch_add(1, std::memory_order_relaxed);
-    auto wire = pack_frame(cfg_.peer, seq,
-                           protocol::FrameType::CMD_NO_ACK, cmd, payload);
-    serial_.write(wire);
+    write_frame_(pack_frame(cfg_.peer, seq,
+                            protocol::FrameType::CMD_NO_ACK, cmd, payload));
+}
+
+// The one place bytes leave for the MCU. Packing stays outside the lock; only
+// the write is serialised.
+void Transport::write_frame_(const std::vector<uint8_t>& wire) {
+    {
+        std::lock_guard<std::mutex> lk(write_mu_);
+        serial_.write(wire);
+    }
     stat_bytes_written_.fetch_add(wire.size(), std::memory_order_relaxed);
     stat_frames_sent_.fetch_add(1, std::memory_order_relaxed);
 }

@@ -96,6 +96,13 @@ void ControlLoop::start() {
 
 void ControlLoop::stop() {
     stop_flag_.store(true, std::memory_order_release);
+    // StreamLocked parks on the doorbell between status frames. Taking the
+    // mutex first closes the lost-wakeup window (same reasoning as
+    // Transport::join_workers_): if the loop has evaluated its predicate but
+    // not yet blocked, it still holds tick_mu_, so this waits until it is
+    // genuinely on the cv -- otherwise stop() would sit out the 100ms timeout.
+    { std::lock_guard<std::mutex> lk(tick_mu_); }
+    tick_cv_.notify_all();
     if (thread_.joinable() &&
         thread_.get_id() != std::this_thread::get_id()) {
         thread_.join();
@@ -138,6 +145,12 @@ GripperObservation ControlLoop::observation() const {
 }
 
 void ControlLoop::on_status_(const MotorStatusSample& s) {
+    {
+        std::lock_guard<std::mutex> lk(tick_mu_);
+        tick_ = true;
+    }
+    tick_cv_.notify_one();
+
     std::lock_guard<std::mutex> lk(mu_);
     obs_.position = pos_map_.to_position(s.actual_pos);
     obs_.velocity = s.actual_vel;
@@ -150,6 +163,45 @@ void ControlLoop::on_status_(const MotorStatusSample& s) {
 }
 
 void ControlLoop::run_() {
+    if (cfg_.phase == SubmitPhase::StreamLocked) run_stream_locked_();
+    else                                         run_free_();
+    running_.store(false, std::memory_order_release);
+}
+
+bool ControlLoop::submit_once_() {
+    float p, kp, kd, ff;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        p = target_; kp = kp_; kd = kd_; ff = ff_;
+    }
+    try {
+        g_.motor().submit_impedance(pos_map_.to_rad(p), kp, kd, ff);
+    } catch (const std::exception& e) {
+        logger()->error("ControlLoop submit failed, stopping: {}", e.what());
+        stop_flag_.store(true, std::memory_order_release);
+        return false;
+    }
+    submit_count_.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+void ControlLoop::note_rate_(uint64_t& window_count,
+                             std::chrono::steady_clock::time_point& window_start) {
+    ++window_count;
+    const auto now = std::chrono::steady_clock::now();
+    const double win_s = std::chrono::duration<double>(now - window_start).count();
+    if (win_s >= 0.5) {
+        submit_hz_.store(static_cast<float>(window_count / win_s),
+                         std::memory_order_relaxed);
+        window_count = 0;
+        window_start = now;
+    }
+}
+
+// Free-running: submit on our own clock, regardless of what the MCU is doing.
+// Keeps the configured rate, at the cost of occasionally writing while the MCU
+// is mid-transmission -- see SubmitPhase.
+void ControlLoop::run_free_() {
     using clock = std::chrono::steady_clock;
     const auto period = std::chrono::duration_cast<clock::duration>(
         std::chrono::duration<double>(1.0 / static_cast<double>(cfg_.hz)));
@@ -163,37 +215,62 @@ void ControlLoop::run_() {
         std::this_thread::sleep_until(deadline);
         if (stop_flag_.load(std::memory_order_acquire)) break;
 
-        float p, kp, kd, ff;
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            p = target_; kp = kp_; kd = kd_; ff = ff_;
-        }
+        if (!submit_once_()) break;
+        note_rate_(window_count, window_start);
 
-        try {
-            g_.motor().submit_impedance(pos_map_.to_rad(p), kp, kd, ff);
-        } catch (const std::exception& e) {
-            logger()->error("ControlLoop submit failed, stopping: {}", e.what());
-            stop_flag_.store(true, std::memory_order_release);
-            break;
-        }
-
-        submit_count_.fetch_add(1, std::memory_order_relaxed);
-        ++window_count;
-
-        const auto now = clock::now();
-        const double win_s = std::chrono::duration<double>(now - window_start).count();
-        if (win_s >= 0.5) {
-            submit_hz_.store(static_cast<float>(window_count / win_s),
-                             std::memory_order_relaxed);
-            window_count = 0;
-            window_start = now;
-        }
-
-        // If we fell badly behind (host stalled), don't burst to catch up —
+        // If we fell badly behind (host stalled), don't burst to catch up --
         // resync the deadline to now.
         if (clock::now() > deadline + period) deadline = clock::now();
     }
-    running_.store(false, std::memory_order_release);
+}
+
+// Phase-locked: one submit per received status frame, issued immediately after
+// it arrives, so the write lands in the window the MCU is not transmitting.
+// The submit rate follows the stream rate; cfg_.hz plays no part.
+void ControlLoop::run_stream_locked_() {
+    using clock = std::chrono::steady_clock;
+    uint64_t window_count = 0;
+    auto window_start = clock::now();
+    unsigned silent = 0;
+    bool warned = false;
+
+    while (!stop_flag_.load(std::memory_order_acquire)) {
+        {
+            std::unique_lock<std::mutex> lk(tick_mu_);
+            // The timeout is a liveness backstop, not a rate: if the stream
+            // stalls we wake anyway, notice stop_flag_, and can exit. We do NOT
+            // submit on a bare timeout -- that would reintroduce exactly the
+            // unsynchronised write this phase exists to avoid.
+            tick_cv_.wait_for(lk, std::chrono::milliseconds(100), [this] {
+                return tick_ || stop_flag_.load(std::memory_order_acquire);
+            });
+            if (stop_flag_.load(std::memory_order_acquire)) break;
+            if (!tick_) {
+                // No status frames means no doorbell means nothing is ever
+                // submitted -- the gripper just holds its last target and looks
+                // dead. The usual cause is a caller who had already started
+                // streaming without StreamSrc::MotorStatus, in which case
+                // start_motor_stream_() rode their config instead of setting
+                // ours. Say so rather than sitting there silently.
+                if (++silent >= 20 && !warned) {   // ~2 s
+                    warned = true;
+                    logger()->error(
+                        "ControlLoop: no motor-status frames in 2s, so the "
+                        "stream-locked submitter has nothing to fire on and the "
+                        "gripper is holding its last target. Is StreamSrc::"
+                        "MotorStatus enabled on the stream this loop is riding? "
+                        "Use SubmitPhase::FreeRunning if you must drive without "
+                        "the status stream.");
+                }
+                continue;
+            }
+            tick_ = false;
+            silent = 0;
+            warned = false;
+        }
+        if (!submit_once_()) break;
+        note_rate_(window_count, window_start);
+    }
 }
 
 }  // namespace xense::taccap
