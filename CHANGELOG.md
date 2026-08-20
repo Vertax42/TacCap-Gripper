@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.8] - 2026-08-20
+
+Wrist fisheye rectification, command set **V2.2** follower diagnostics, and
+the first tagged release since `v0.1.0` — 0.1.1 through 0.1.7 were written
+into this file but never tagged, so `git describe` had been understating the
+tree by seven releases. Tagging resumes here.
+
 ### Added
 
 - **Loss accounting on `Transport::stats()`**, so a rate drop can be attributed
@@ -97,6 +106,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SKIP rather than failing work it cannot verify.
 
 ### Changed
+
+- **The docs describe the code again.** `docs/ARCHITECTURE.md` had opened with
+  a banner saying its own diagrams were historical — that `libxensesdk`,
+  `vision.hpp`, `TactileSensor` and `TactileFrame` had gone in 0.1.4 and the
+  sections below still described them. The diagrams are updated and the banner
+  is gone. The module map is rebuilt from the tree: it had listed four files
+  that no longer exist and 7 test files where there are 21, and was missing the
+  whole follower stack, `calibration`, `ota`, `log` and `fisheye_undistorter`.
+  §5 recommended the `TactileSensor` class §3.4 said was deleted; §7 linked a
+  library from a submodule that is gone; the intro and §8 disagreed about
+  whether the motor stack lives here; §8 pointed lerobot integration at a fork
+  and a Robot class that are not how it works (TacCap is a gripper *backend*);
+  §9 quoted a gtest count from a suite a fifth its current size.
+- **The README's fisheye section pointed at the wrong API.** It told callers to
+  run `cv2.fisheye.undistortImage(img, cal.K, cal.D)` themselves, which was the
+  only option when it was written and now yields a *different* image from both
+  this SDK and the PC calibration tool. It points at `FisheyeUndistorter`, with
+  `cal.K` / `cal.D` still exposed for code that must do its own.
 
 - **Shipped follower image bumped to 1.1.2** (`hw_v1.1.0` @ `bf0a06e`), the
   build that carries command set V2.2. The leader image is untouched at 1.2.1

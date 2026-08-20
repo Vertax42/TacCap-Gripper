@@ -24,11 +24,11 @@ Both adapters consume this SDK; they do not reimplement device access.
 
 ## Status
 
-**v0.1.7 plus unreleased work.** `0.1.7` was the firmware **V2.1** sync; the
-V2.2 follower diagnostics and the wrist fisheye rectification below are in the
-tree but not in a release — see `[Unreleased]` in the CHANGELOG for the full
-list, and note that only `v0.1.0` is tagged, so `git describe` understates
-where you are.
+**v0.1.8 — wrist fisheye rectification + firmware V2.2 diagnostics.** Also the
+first tagged release since `v0.1.0`: 0.1.1 through 0.1.7 were written into the
+CHANGELOG but never tagged, so `git describe` had been understating the tree by
+seven releases. Tagging resumes at this one, and `git describe` is trustworthy
+from here.
 
 Tested on bilateral leader setups (left + right, ~280 MB/s outbound, both
 flashed to leader 1.2.1) and on a real follower gripper (MIT force-position
@@ -206,7 +206,7 @@ What ends up where (editable build):
 ```
 python/xense/taccap/
 ├── _taccap_native.cpython-312-x86_64-linux-gnu.so   # pybind11 module
-└── libtaccap_core.so.0.1.7   (+ .so.0 symlink)      # SDK core
+└── libtaccap_core.so.0.1.8   (+ .so.0 symlink)      # SDK core
 ```
 
 These two are co-located on purpose — the rpath is set to `$ORIGIN`,
@@ -236,7 +236,7 @@ Output:
 
 ```
 build/
-├── cpp/libtaccap_core.so(.0)(.0.1.7)
+├── cpp/libtaccap_core.so(.0)(.0.1.8)
 ├── cpp/examples/leader_demo
 └── cpp/tests/...                # gtest binaries; run via `ctest`
 ```
@@ -254,8 +254,8 @@ CMake options (top-level `CMakeLists.txt:19-21`):
 ```bash
 # Python — note `env -u PYTHONPATH`, see the note below
 env -u PYTHONPATH python -c "import xense.taccap as t; print(t.hello()); print(t.__version__)"
-# → taccap-gripper OK; version 0.1.7
-# → 0.1.7
+# → taccap-gripper OK; version 0.1.8
+# → 0.1.8
 
 # Python tests (hardware-free cases always run; IMU cases skip without a gripper)
 env -u PYTHONPATH pytest python/tests
