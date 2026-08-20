@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Diagnostics` component** — `gripper.diagnostics()` on both leader and
+  follower, wrapping the two firmware commands added in tc-gu-01 1.1.3/1.1.4.
+
+  `uart_stats()` (Cmd 0x54) returns the firmware's free-running UART counters.
+  It exists to answer a question nothing on the host can: when a status frame
+  arrives a couple of bytes short, did the MCU fail to send them, or were they
+  lost after leaving it? `tx_bytes_ok` / `tx_calls_ok` count only what the
+  firmware's transmit call accepted, so comparing them against what the host
+  decoded over the same window separates the two. That comparison is what
+  established the byte loss is downstream of the MCU (tc-gu-01#1): firmware
+  reported 6013 frames and 246417 bytes out with zero failures while the host
+  still lost 40 frames.
+
+  `set_log_config()` / `disable_logging()` (Cmd 0x55) turn firmware logging on
+  and off at runtime. Firmware 1.1.4 ships with logging off because its log
+  sink is a blocking polled UART write (~0.5 ms per line at 921600) that stalls
+  whichever task emitted the line — logging on every received command is what
+  livelocked the firmware's command channel. Treat this as a diagnostic lever,
+  not a setting: the docstrings say so, and note the output goes to the MCU's
+  DEBUG UART, which is not routed over USB, so enabling it without a probe on
+  that pin costs the realtime penalty and shows nothing.
+
+  `decode_uart_stats()` accepts both the 32-byte packet firmware 1.1.3 answers
+  with and the 36-byte one from 1.1.4, zero-filling the missing tail, so one
+  SDK build talks to either. `log_dropped` therefore reads 0 against 1.1.3 and
+  is not distinguishable from a genuine zero — gate on `firmware_version()` if
+  that matters. `cpp/tests/test_diagnostics_codec.cpp` pins both lengths.
+
 - **`ControlLoop` submits in phase with the status stream**, via
   `Config::phase` (`SubmitPhase::StreamLocked`, the new default; the old
   behaviour is `SubmitPhase::FreeRunning`). StreamLocked fires one MIT frame

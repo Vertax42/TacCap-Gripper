@@ -33,6 +33,7 @@
 
 #include <taccap/bus/transport.hpp>
 #include <taccap/components/calibration.hpp>
+#include <taccap/components/diagnostics.hpp>
 #include <taccap/components/camera.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/imu.hpp>
@@ -154,6 +155,9 @@ public:
     Key&            key()            noexcept { return key_; }            // V1.4
     Led&            led()            noexcept { return led_; }            // V1.9
     SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
+    // Firmware UART counters and log control. Works on both roles; needs
+    // firmware 1.1.3 (counters) / 1.1.4 (log control).
+    Diagnostics&    diagnostics()    noexcept { return diag_; }           // fw 1.1.3
     // Fisheye camera calibration works on the follower too; the encoder-max
     // methods are leader-only and NACK with InvalidCmd here.
     Calibration&    calibration()    noexcept { return cal_; }            // V2.0
@@ -227,6 +231,7 @@ private:
     Key                             key_;       // V1.4
     Led                             led_;       // V1.9
     SensorErrors                    errors_;    // V1.6
+    Diagnostics    diag_;
     Calibration                     cal_;       // V2.0
     OtaSession                      ota_;       // V1.3
     std::unique_ptr<Camera>         wrist_;

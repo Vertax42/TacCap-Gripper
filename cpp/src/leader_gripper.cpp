@@ -48,6 +48,7 @@ LeaderGripper::LeaderGripper(const Config& cfg)
       key_(t_),
       led_(t_),
       errors_(t_),
+      diag_(t_),
       cal_(t_),
       ota_(t_) {
     // Read firmware version + SN once at construction time so the log

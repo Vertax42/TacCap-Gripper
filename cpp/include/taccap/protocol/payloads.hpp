@@ -421,6 +421,57 @@ struct GripperConfig {
     uint8_t  reserved[16];   // future expansion
 };
 
+// ---- UART counters (fw 1.1.3 — Cmd::GetUartStats 0x54) --------------------
+//
+// Exists to answer "which side dropped the bytes". tx_bytes_ok counts only
+// what HAL_UART_Transmit accepted, i.e. what actually reached the MCU's
+// transmit register. When that disagrees with what the host received, the loss
+// happened downstream of the MCU — cable or USB-serial bridge — and no
+// firmware change can help. tx_fail_timeout is called out separately because a
+// polled transmit that times out mid-frame leaves a short frame on the wire,
+// which looks identical to bytes lost in transit.
+//
+// All counters are free-running since boot; take deltas across a measurement
+// window rather than reading absolutes.
+struct UartStats {
+    uint32_t tx_bytes_ok;       // control port: bytes HAL accepted
+    uint32_t tx_calls_ok;       // control port: successful sends (~frames out)
+    uint32_t tx_fail_timeout;   // control port: polled-send timeouts (truncates!)
+    uint32_t tx_fail_other;     // control port: other send failures
+    uint32_t rx_bytes;          // control port: bytes taken by the RXNE ISR
+    uint32_t rx_overflow;       // control port: bytes dropped, ring buffer full
+    uint32_t debug_tx_bytes;    // DEBUG port bytes out — quantifies logging cost
+    uint16_t rb_used;           // control port ring buffer occupancy
+    uint16_t rb_free;           // control port ring buffer headroom
+    uint32_t log_dropped;       // whole log lines dropped (0 on fw < 1.1.4)
+};
+
+// ---- Log configuration (fw 1.1.4 — Cmd::SetLogConfig 0x55) ----------------
+//
+// Firmware logging is OFF by default and this is the only way to turn it back
+// on. It is a diagnostic lever, not a setting to leave enabled: the firmware's
+// log sink is a blocking polled UART write (~0.5 ms per line at 921600), so
+// every enabled LOG_* call stalls whichever task emitted it. That is what
+// livelocked the command channel before it was switched off.
+struct LogConfig {
+    uint8_t level;        // LogLevel
+    uint8_t output_mask;  // LogOutput bitmask
+};
+
+enum class LogLevel : uint8_t {
+    None    = 0,   // nothing is emitted, whatever output_mask says
+    Error   = 1,
+    Warn    = 2,
+    Info    = 3,
+    Debug   = 4,
+    Verbose = 5,
+};
+
+namespace LogOutput {
+    constexpr uint8_t None = 0x00;   // the firmware default
+    constexpr uint8_t Uart = 0x01;   // the MCU's DEBUG UART (not exposed over USB)
+}
+
 // ---- Follower motor control loop stats (V1.7 — Cmd::GetMotorControlStats 0x51)
 struct MotorControlStats {
     uint8_t  running;              // control thread running?
@@ -793,6 +844,8 @@ static_assert(sizeof(MotorFaultReport)   == 64);  // V2.2 motor_fault_report_t
 static_assert(sizeof(MotorPrivateParam)  == 8);   // V1.9+ private-param GET resp
 static_assert(sizeof(GripperConfig)      == 32);  // V1.7 gripper_config_t
 static_assert(sizeof(MotorControlStats)  == 48);  // V1.7 motor_control_stats
+static_assert(sizeof(UartStats)          == 36);  // fw 1.1.3 uart_stats_packet_t
+static_assert(sizeof(LogConfig)          == 2);   // fw 1.1.4 log_config_payload_t
 static_assert(sizeof(GripperAutoCalConfig) == 32); // V1.9 gripper_auto_cal_config_t
 static_assert(sizeof(GripperAutoCalStallParam)   == 10);  // V2.2 partial 0x68 write
 static_assert(sizeof(GripperAutoCalStallParamEx) == 16);  // V2.2 partial 0x68 write

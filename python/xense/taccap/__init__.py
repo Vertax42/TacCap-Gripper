@@ -74,6 +74,12 @@ Calibration = _taccap_native.Calibration              # V2.0/V2.1 flash-persiste
 GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
 ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
 SubmitPhase = _taccap_native.SubmitPhase              # ControlLoop send phasing
+Diagnostics = _taccap_native.Diagnostics              # firmware UART counters + log control
+UartStats   = _taccap_native.UartStats                # Cmd 0x54 payload
+LogConfig   = _taccap_native.LogConfig                # Cmd 0x55 payload
+LogLevel    = _taccap_native.LogLevel                 # firmware log verbosity
+LOG_OUTPUT_NONE = _taccap_native.LOG_OUTPUT_NONE      # firmware default: logging off
+LOG_OUTPUT_UART = _taccap_native.LOG_OUTPUT_UART      # MCU DEBUG UART (not on USB)
 MotorControlStats = _taccap_native.MotorControlStats  # V1.7
 MotorPrivateParam = _taccap_native.MotorPrivateParam  # V1.9+ private-protocol param
 MotorStatusExt = _taccap_native.MotorStatusExt        # V2.2 72-byte status (Cmd 0x53)
@@ -168,6 +174,12 @@ __all__ = [
     "GripperObservation",
     "ControlLoop",
     "SubmitPhase",
+    "Diagnostics",
+    "UartStats",
+    "LogConfig",
+    "LogLevel",
+    "LOG_OUTPUT_NONE",
+    "LOG_OUTPUT_UART",
     "MotorControlStats",
     "MotorPrivateParam",
     "MotorStatusExt",

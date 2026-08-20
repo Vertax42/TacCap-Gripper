@@ -15,6 +15,7 @@ add_executable(taccap_unit_tests
     test_stuff.cpp
     test_transport.cpp
     test_transport_concurrent_write.cpp
+    test_diagnostics_codec.cpp
     test_components.cpp
     test_discovery.cpp
     test_gripper_position.cpp

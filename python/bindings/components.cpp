@@ -15,6 +15,7 @@
 #include <pybind11/functional.h>
 
 #include <taccap/components/calibration.hpp>
+#include <taccap/components/diagnostics.hpp>
 #include <taccap/components/imu.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/camera.hpp>
@@ -651,6 +652,88 @@ void bind_components(py::module_& m) {
             return std::string(buf);
         });
 
+    // ---- Diagnostics: UART counters + log control (fw 1.1.3 / 1.1.4) ----
+    py::class_<protocol::UartStats>(m, "UartStats",
+        "Free-running firmware UART counters since MCU boot (Cmd 0x54).\n\n"
+        "Take a reading before and after a measurement window and subtract.\n"
+        "tx_bytes_ok / tx_calls_ok count only what the firmware's transmit call\n"
+        "accepted, i.e. what reached the MCU's transmit register -- compare them\n"
+        "against what the host decoded to tell 'the MCU never sent it' apart from\n"
+        "'it was lost after leaving the MCU'.\n\n"
+        "log_dropped reads 0 on firmware 1.1.3, which had no such field; that is\n"
+        "not distinguishable from a genuine zero.")
+        .def_readonly("tx_bytes_ok",     &protocol::UartStats::tx_bytes_ok)
+        .def_readonly("tx_calls_ok",     &protocol::UartStats::tx_calls_ok)
+        .def_readonly("tx_fail_timeout", &protocol::UartStats::tx_fail_timeout)
+        .def_readonly("tx_fail_other",   &protocol::UartStats::tx_fail_other)
+        .def_readonly("rx_bytes",        &protocol::UartStats::rx_bytes)
+        .def_readonly("rx_overflow",     &protocol::UartStats::rx_overflow)
+        .def_readonly("debug_tx_bytes",  &protocol::UartStats::debug_tx_bytes)
+        .def_readonly("rb_used",         &protocol::UartStats::rb_used)
+        .def_readonly("rb_free",         &protocol::UartStats::rb_free)
+        .def_readonly("log_dropped",     &protocol::UartStats::log_dropped)
+        .def("__repr__", [](const protocol::UartStats& s) {
+            char buf[220];
+            std::snprintf(buf, sizeof(buf),
+                "UartStats(tx_calls_ok=%u, tx_bytes_ok=%u, tx_fail_timeout=%u, "
+                "rx_overflow=%u, debug_tx_bytes=%u, log_dropped=%u)",
+                static_cast<unsigned>(s.tx_calls_ok),
+                static_cast<unsigned>(s.tx_bytes_ok),
+                static_cast<unsigned>(s.tx_fail_timeout),
+                static_cast<unsigned>(s.rx_overflow),
+                static_cast<unsigned>(s.debug_tx_bytes),
+                static_cast<unsigned>(s.log_dropped));
+            return std::string(buf);
+        });
+
+    py::class_<protocol::LogConfig>(m, "LogConfig")
+        .def_readonly("level",       &protocol::LogConfig::level)
+        .def_readonly("output_mask", &protocol::LogConfig::output_mask)
+        .def("__repr__", [](const protocol::LogConfig& c) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "LogConfig(level=%u, output_mask=0x%02X)",
+                          c.level, c.output_mask);
+            return std::string(buf);
+        });
+
+    py::enum_<protocol::LogLevel>(m, "LogLevel")
+        .value("NONE",    protocol::LogLevel::None)
+        .value("ERROR",   protocol::LogLevel::Error)
+        .value("WARN",    protocol::LogLevel::Warn)
+        .value("INFO",    protocol::LogLevel::Info)
+        .value("DEBUG",   protocol::LogLevel::Debug)
+        .value("VERBOSE", protocol::LogLevel::Verbose);
+
+    m.attr("LOG_OUTPUT_NONE") = py::int_(protocol::LogOutput::None);
+    m.attr("LOG_OUTPUT_UART") = py::int_(protocol::LogOutput::Uart);
+
+    py::class_<Diagnostics>(m, "Diagnostics",
+        "Firmware UART counters and log control. Available on both gripper\n"
+        "roles; needs firmware 1.1.3 (counters) / 1.1.4 (log control).")
+        .def("uart_stats", [](Diagnostics& self, unsigned timeout_ms) {
+                py::gil_scoped_release g;
+                return self.uart_stats(std::chrono::milliseconds(timeout_ms));
+            }, py::arg("timeout_ms") = 100u)
+        .def("set_log_config", [](Diagnostics& self, protocol::LogLevel level,
+                                  uint8_t output_mask, unsigned timeout_ms) {
+                py::gil_scoped_release g;
+                return self.set_log_config(level, output_mask,
+                                           std::chrono::milliseconds(timeout_ms));
+            },
+            py::arg("level"), py::arg("output_mask") = protocol::LogOutput::None,
+            py::arg("timeout_ms") = 100u,
+            "Turn firmware logging on or off. DIAGNOSTIC LEVER, NOT A SETTING:\n"
+            "the firmware log sink is a blocking polled UART write (~0.5 ms per\n"
+            "line at 921600) that stalls whichever task emitted the line -- that\n"
+            "is what livelocked the command channel before logging was switched\n"
+            "off by default. Output also goes to the MCU's DEBUG UART, which is\n"
+            "not routed over USB, so without a probe on that pin you pay the\n"
+            "realtime cost and see nothing. Turn it on, look, turn it back off.")
+        .def("disable_logging", [](Diagnostics& self, unsigned timeout_ms) {
+                py::gil_scoped_release g;
+                return self.disable_logging(std::chrono::milliseconds(timeout_ms));
+            }, py::arg("timeout_ms") = 100u);
+
     py::class_<protocol::MotorControlStats>(m, "MotorControlStats")
         .def_readonly("running",             &protocol::MotorControlStats::running)
         .def_readonly("mode",                &protocol::MotorControlStats::mode)
@@ -1176,6 +1259,7 @@ void bind_components(py::module_& m) {
         .def_property_readonly("key",           [](LeaderGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("led",           [](LeaderGripper& g) -> Led&            { return g.led(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](LeaderGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("diagnostics", [](LeaderGripper& g) -> Diagnostics&    { return g.diagnostics(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("calibration",   [](LeaderGripper& g) -> Calibration&    { return g.calibration(); },   py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](LeaderGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](LeaderGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
@@ -1299,6 +1383,7 @@ void bind_components(py::module_& m) {
         .def_property_readonly("key",           [](FollowerGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("led",           [](FollowerGripper& g) -> Led&            { return g.led(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](FollowerGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("diagnostics", [](FollowerGripper& g) -> Diagnostics&    { return g.diagnostics(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("calibration",   [](FollowerGripper& g) -> Calibration&    { return g.calibration(); },   py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](FollowerGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](FollowerGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
