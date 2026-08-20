@@ -91,6 +91,35 @@ carries deep background; this file is *house rules*.
   `CMAKE_PREFIX_PATH` and puts the env's cmake first, which is enough; only if
   you call `/usr/bin/cmake` directly do you need
   `-DCMAKE_PREFIX_PATH=$CONDA_PREFIX`.
+- **Put `$CONDA_PREFIX/bin` on `PATH` before `pip install -e .`**, i.e. call
+  `pip` through an activated env rather than by absolute path. scikit-build-core
+  probes the build tool by running `ninja --version`, and on a bare `PATH` it
+  finds something that answers with GNU Make's banner instead. The failure names
+  the wrong culprit entirely:
+  ```
+  CMake Error: The detected version of Ninja (GNU Make 4.3 ...) is less than the
+  ```
+  ```bash
+  export PATH=$CONDA_PREFIX/bin:$PATH
+  pip install -e . --no-build-isolation
+  ```
+- **A C++ or bindings change is not live in a consumer env until you reinstall
+  there.** The editable install goes through
+  `_taccap_gripper_editable.ScikitBuildRedirectingFinder`, which redirects the
+  *Python* sources to this checkout but keeps serving `_taccap_native` from the
+  env's `site-packages`. So after touching `python/bindings/` you get this
+  checkout's `__init__.py` paired with whatever extension was built last time —
+  and a newly exported symbol fails as
+  `module 'xense.taccap._taccap_native' has no attribute '<Name>'`, which reads
+  like a typo in `__init__.py` and is not. Reinstall into *each* env that
+  consumes the package (`lerobot-xense` is a separate install from
+  `xense-taccap`), and note that `xense.taccap` is a namespace package whose
+  search path covers both the checkout and site-packages, so `__file__` pointing
+  at this repo does **not** mean the extension came from here. Confirm with:
+  ```python
+  import sys, xense.taccap
+  print(sys.modules['xense.taccap._taccap_native'].__file__)
+  ```
 
 ## Hardware smoke test (when a gripper is plugged in)
 ```bash
