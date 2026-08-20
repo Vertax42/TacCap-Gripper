@@ -24,11 +24,17 @@ Both adapters consume this SDK; they do not reimplement device access.
 
 ## Status
 
-**v0.1.7 — firmware V2.2 sync.** Tested on bilateral leader setups (left +
-right, ~280 MB/s outbound, both flashed to leader 1.2.1) and on a real follower
-gripper (MIT force-position control, normalized grasp, LED, auto-cal) against
-V2.1 firmware. The V2.2 additions below are protocol-complete and unit-tested
-but **not yet hardware-validated**.
+**v0.1.7 plus unreleased work.** `0.1.7` was the firmware **V2.1** sync; the
+V2.2 follower diagnostics and the wrist fisheye rectification below are in the
+tree but not in a release — see `[Unreleased]` in the CHANGELOG for the full
+list, and note that only `v0.1.0` is tagged, so `git describe` understates
+where you are.
+
+Tested on bilateral leader setups (left + right, ~280 MB/s outbound, both
+flashed to leader 1.2.1) and on a real follower gripper (MIT force-position
+control, normalized grasp, LED, auto-cal) against V2.1 firmware. The V2.2
+additions below are protocol-complete and unit-tested but **not yet
+hardware-validated**.
 
 > **Firmware you need.** Command set V2.1 needs **leader >= 1.2.0** /
 > **follower >= 1.1.0**; the V2.2 follower diagnostics need **follower >=
@@ -424,11 +430,18 @@ Fisheye intrinsics + distortion live in MCU flash and are readable from both
 leader and follower:
 
 ```python
+from xense.taccap import CameraFisheyeCal, FisheyeUndistorter
+
 cal = g.calibration.read_fisheye()     # None when never calibrated
 if cal is not None:
-    undistorted = cv2.fisheye.undistortImage(img, cal.K, cal.D)
+    # Prefer FisheyeUndistorter over calling cv2.fisheye.undistortImage with
+    # cal.K / cal.D by hand: it builds the remap tables once, resamples with
+    # INTER_CUBIC and applies the same focal-length balance as the PC
+    # calibration tool, so a frame rectified here matches one rectified there.
+    # `cal.K` / `cal.D` remain exposed for code that must do its own thing.
+    undistorter = FisheyeUndistorter(cal, width=640, height=480, balance=0.0)
+    undistorted = undistorter.apply(img)
 
-from xense.taccap import CameraFisheyeCal
 g.calibration.write_fisheye(CameraFisheyeCal(
     fx=320.5, fy=321.0, cx=319.5, cy=240.2,
     k1=-0.031, k2=0.0072, k3=-0.0013, k4=0.0002))
