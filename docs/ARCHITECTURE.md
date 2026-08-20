@@ -1,22 +1,16 @@
 # TacCap-Gripper SDK — Architecture
 
-> **Note (0.1.4):** the visuotactile (OG) capture/rectify path was removed from
-> this SDK. The `libxensesdk` submodule, the `vision.hpp` alias header and the
-> `TactileSensor` / `TactileFrame` classes are gone; visuotactile imaging now
-> lives at the Python level via the `xensesdk` wheel. Diagrams and sections
-> below that mention `vision.hpp`, `TactileSensor`, `Rectifier`, libxense
-> `Sensor`/`Frame`, or the `third_party/libxensesdk` submodule are **historical**
-> — the current C++ surface is gripper protocol + the wrist `Camera` (plain
-> OpenCV) only.
-
-This document captures the state of the SDK as of the close of step 4
-(zero-config bilateral discovery + ergonomic component classes).
+This document describes the SDK as it is now. Where it once carried a banner
+warning that the diagrams below were historical, the diagrams have been brought
+up to date instead: the visuotactile path removed in 0.1.4 is gone from them,
+and the follower motor stack and wrist rectification added since are in.
 
 The SDK in this repository is the **C++ / Python device-access layer
-only**. Higher-level products that build on top of it — dataset
-recording tools, ROS 2 hardware-interface packages, lerobot Robot
-adapters, the follower gripper with motor control — live in their own
-repositories and are out of scope here.
+only**. Higher-level products that build on top of it — dataset recording
+tools, ROS 2 hardware-interface packages, lerobot adapters — live in their own
+repositories and are out of scope here. The follower gripper's motor stack is
+*not* one of them: it lives here (see §8), because it is a device primitive
+rather than a policy.
 
 **Protocol tracked:** wire framing **V1.8** (the body between HEAD and TAIL
 is byte-stuffed; CRC over the unstuffed HEAD..PAYLOAD) + command set **V2.1**
@@ -87,33 +81,39 @@ for the single-threaded OTA flow, which is the only user.
 ┌────────────────────────────▼───────────────────────────────────────────┐
 │  L3  COMPONENTS                                                        │
 │  ─────────────                                                         │
-│   IMU            Encoder           Camera            TactileSensor     │
-│   ──────────     ──────────────    ──────────────    ──────────────    │
-│   read_once()    read_once()       read() (sync)     start(callback)   │
-│   on_data(cb)    on_data(cb)       start(callback)   stop()            │
-│                                    stop()            (rectified +      │
-│   ImuSample      EncoderSample     CameraFrame        raw cv::Mat)     │
-│   - mcu_ts_us    - mcu_ts_us       - host_time       TactileFrame      │
-│   - accel_mps2   - position_rad    - frame_index                       │
-│   - gyro_radps   - velocity_rad_s  - image (BGR8)                      │
-│   - mag_uT       - status                                              │
-│   - temp_c       - seq                                                 │
-│   - seq                                                                │
+│   IMU            Encoder           Camera            Motor            │
+│   ──────────     ──────────────    ──────────────    ──────────────   │
+│   read_once()    read_once()       read() (sync)     read_status()    │
+│   on_data(cb)    on_data(cb)       start(callback)   read_status_ext()│
+│                                    stop()            fault_report()   │
+│   ImuSample      EncoderSample     set_undistorter() enable()/disable()│
+│   - mcu_ts_us    - mcu_ts_us                                          │
+│   - accel_mps2   - position_rad    CameraFrame       MotorStatus      │
+│   - gyro_radps   - velocity_rad_s  - host_time       MotorStatusExt   │
+│   - mag_uT       - status          - frame_index     MotorFaultReport │
+│   - temp_c       - seq             - image (BGR8,                     │
+│   - seq                              rectified when                   │
+│                                      an undistorter                   │
+│   Calibration    Led / Key           is installed)                    │
+│   ──────────     ──────────────                                       │
+│   read_fisheye() set()/read()      FisheyeUndistorter                 │
+│   resolve_fisheye()                 - remap tables built once         │
+│   read/write_encoder_max()          - apply(cv::Mat)                  │
 └──────────┬─────────────────┬──────────────┬──────────────┬─────────────┘
            │                 │              │              │
            ▼                 ▼              ▼              ▼
-┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐
-│  L2a  ASYNC TRANSPORT│  │  L2b  V4L2 CAPTURE   │  │  L2c  LIBXENSE LITE │
-│  ───────────────────│  │  ───────────────────│  │  ───────────────────│
-│   Transport         │  │   cv::VideoCapture  │  │   xense::Sensor     │
-│   - background      │  │   (wrist camera     │  │   xense::Rectifier  │
-│     reader thread   │  │    only)            │  │   xense::Context    │
-│   - ACK matching    │  │                     │  │   (visuotactile path│
-│     (seq → promise)│  │                     │  │    incl. on-sensor  │
-│   - subscribe(cmd)  │  │                     │  │    flash calibration│
-│   - send_cmd_no_ack │  │                     │  │    via V4L2 XU)     │
-│   - host-side retry │  │                     │  │                     │
-└──────────┬──────────┘  └─────────────────────┘  └──────────┬──────────┘
+┌─────────────────────┐  ┌──────────────────────────────────────────────┐
+│  L2a  ASYNC TRANSPORT│  │  L2b  V4L2 CAPTURE                           │
+│  ───────────────────│  │  ────────────────────────────────────────────│
+│   Transport         │  │   cv::VideoCapture (wrist camera only)       │
+│   - background      │  │   cv::remap        (rectification, when an    │
+│     reader thread   │  │                     undistorter is installed) │
+│   - ACK matching    │  │                                              │
+│     (seq → promise)│  │   The visuotactile (OG) path is NOT here: it  │
+│   - subscribe(cmd)  │  │   left this SDK in 0.1.4 and lives at the     │
+│   - send_cmd_no_ack │  │   Python level via the `xensesdk` wheel.      │
+│   - host-side retry │  │                                              │
+└──────────┬──────────┘  └──────────────────────────────────────────────┘
            │                                                  │
            ▼                                                  │
 ┌─────────────────────┐                                       │
@@ -160,9 +160,7 @@ taccap-gripper/
 │   │   ├── error.hpp                             Error / ProtocolError /
 │   │   │                                          CrcError / IoError /
 │   │   │                                          TimeoutError
-│   │   ├── vision.hpp                            using-decls re-exporting
-│   │   │                                          libxense lite into the
-│   │   │                                          xense::taccap namespace
+│   │   ├── log.hpp                               spdlog facade
 │   │   ├── protocol/
 │   │   │   ├── commands.hpp / .cpp               L1  Address, FrameType,
 │   │   │   │                                          Cmd, ErrorCode enums
@@ -184,44 +182,64 @@ taccap-gripper/
 │   │   │   ├── encoder.hpp / .cpp                L3  EncoderSample +
 │   │   │   │                                          Encoder
 │   │   │   ├── camera.hpp / .cpp                 L3  cv::VideoCapture
-│   │   │   │                                          wrapper for wrist
-│   │   │   └── tactile_sensor.hpp / .cpp         L3  libxense Sensor +
-│   │   │                                              Rectifier facade
+│   │   │   │                                          wrapper for wrist,
+│   │   │   │                                          optional rectify
+│   │   │   ├── fisheye_undistorter.hpp / .cpp    L3  remap tables from the
+│   │   │   │                                          flash intrinsics
+│   │   │   ├── calibration.hpp / .cpp            L3  flash-persisted records
+│   │   │   │                                          (fisheye, encoder max)
+│   │   │   ├── motor.hpp / .cpp                  L3  FDCAN motor: status,
+│   │   │   │                                          diagnostics, params
+│   │   │   ├── led.hpp / .cpp                    L3  indicator LED
+│   │   │   ├── key.hpp / .cpp                    L3  on-gripper button
+│   │   │   └── sensor_errors.hpp / .cpp          L3  decoded fault words
+│   │   ├── gripper_position.hpp                  L4  normalized [0,1] map
+│   │   ├── control_loop.hpp                      L4  background resubmit
+│   │   ├── ota.hpp                               L4  firmware update
 │   │   ├── discovery.hpp                         L4 (helper) zero-config
-│   │   └── leader_gripper.hpp                    L4  aggregate object
-│   ├── src/                                      mirrors include/
+│   │   ├── leader_gripper.hpp                    L4  aggregate object
+│   │   └── follower_gripper.hpp                  L4  aggregate object
+│   ├── src/                                      mirrors include/, plus
+│   │                                              stream_rate.hpp and
+│   │                                              wrist_fisheye.hpp (internal)
 │   ├── examples/
-│   │   ├── taccap_hello.cpp                      smoke (no hardware)
 │   │   └── leader_demo.cpp                       5-second multistream on
 │   │                                              real hardware
-│   └── tests/
-│       ├── test_crc.cpp                          known CRC vectors
-│       ├── test_frame.cpp                        pack/parse + FrameParser
-│       ├── test_codec.cpp                        per-payload roundtrip
-│       ├── test_python_compat.cpp                C++ vs GUI Python parity
-│       ├── test_stuff.cpp                        byte-stuffing roundtrip
-│       ├── test_transport.cpp                    PTY-based fake firmware
-│       └── test_components.cpp                   unit conversions
+│   └── tests/                                    21 gtest files — codec per
+│                                                  command set (V1.6/1.7/2.1/
+│                                                  2.2), CRC, framing, byte
+│                                                  stuffing, PTY-based fake
+│                                                  firmware (transport,
+│                                                  calibration, OTA retry),
+│                                                  fisheye rectification,
+│                                                  stream rate, discovery,
+│                                                  C++ vs GUI Python parity
 │
 ├── python/
 │   ├── bindings/
 │   │   ├── module.cpp                            pybind11 entry point
 │   │   │                                          (enums, Frame, Transport,
 │   │   │                                          SerialBus, codec helpers)
-│   │   └── components.cpp                        (ImuSample/EncoderSample
-│   │                                              with numpy fields,
-│   │                                              IMU/Encoder/Camera/
-│   │                                              TactileSensor,
-│   │                                              LeaderGripper, discovery)
+│   │   ├── components.cpp                        (ImuSample/EncoderSample
+│   │   │                                          with numpy fields, IMU/
+│   │   │                                          Encoder/Camera/Motor/
+│   │   │                                          Calibration/Led/Key,
+│   │   │                                          FisheyeUndistorter,
+│   │   │                                          Leader/FollowerGripper,
+│   │   │                                          discovery)
+│   │   └── log.cpp                               logging controls
+│   ├── examples/                                 calibrate.py, fisheye_cal.py,
+│   │                                              OTA, MIT control, V4L2 probes
 │   └── xense/taccap/                             PEP 420 namespace package
 │       ├── __init__.py                           re-exports the C-extension
 │       └── _version.py
 │
-├── third_party/
-│   └── libxensesdk/                              git submodule pinned at
-│                                                  feat/lite-build@7d4687e
-│                                                  (XENSE_LITE_BUILD=ON,
-│                                                  no ML deps)
+├── firmware/                                     shipped leader + follower
+│                                                  images + manifest.json
+├── scripts/
+│   └── check_protocol_drift.py                   fails when the SDK's
+│                                                  hand-written protocol
+│                                                  drifts from the firmware
 │
 ├── docs/
 │   └── ARCHITECTURE.md                           ← you are here
@@ -310,10 +328,11 @@ taccap-gripper/
 > `queue_dropped` means the subscriber could not keep up, and
 > `callback_max_us` names it.
 
-> The Camera (3.3) and Tactile (3.4) paths below are **opt-in** — they run
-> only when the device was opened (a gripper constructed with
-> `open_cameras=true`, or a standalone `Camera` / `TactileSensor`). They are
-> not part of the default gripper lifecycle, which is MCU-only.
+> The Camera path below is **opt-in** — it runs only when the device was
+> opened (a gripper constructed with `open_cameras=true`, or a standalone
+> `Camera`). It is not part of the default gripper lifecycle, which is
+> MCU-only, and it is why the wrist camera is usually owned by whatever
+> external service already has the V4L2 device.
 
 ### 3.3 Camera (wrist, V4L2)
 
@@ -323,18 +342,24 @@ taccap-gripper/
   Camera::start → spawn capture_loop_ thread
         loop:
             cv::VideoCapture::read() → cv::Mat
+            [if an undistorter is installed: cv::remap → rectified cv::Mat;
+             on failure the raw frame passes through and the error is logged,
+             so a bad calibration never tears down the capture loop]
             CameraFrame{ host_time, frame_index, image }
             cb(CameraFrame)
                 Python: gil_scoped_acquire + numpy view via mat_to_numpy
 ```
 
-### 3.4 Tactile (visuotactile) — moved out of this SDK (0.1.4)
+### 3.4 Tactile (visuotactile) — not in this SDK
 
-The C++ visuotactile path (`TactileSensor` / `TactileFrame` + the `libxensesdk`
-dependency) was **removed in 0.1.4**. Visuotactile (OG) capture + rectification
-now live at the Python level via the prebuilt `xensesdk` wheel; `xense.taccap`
-is the gripper-protocol + wrist-camera surface only. See the `xensesdk`
-package for OG sensor capture.
+The gripper carries two OG-series visuotactile sensors, but nothing here drives
+them: `xense.taccap` is the gripper-protocol + wrist-camera surface only. OG
+capture and rectification live at the Python level in the prebuilt `xensesdk`
+wheel, which is where a consumer should go for them.
+
+They are ordinary UVC devices on the same hub, so a downstream tool wires them
+as cameras beside the wrist — that is what lerobot's gripper camera discovery
+does.
 
 ### 3.5 Follower motor control (MIT force-position)
 
@@ -431,8 +456,10 @@ with LeaderGripper.open() as g:          # MCU-only; cameras off by default
     g.stop_streaming()
 
 # Opt-in cameras: LeaderGripper(mcu_device, wrist_video=..., open_cameras=True)
-# then g.tactile_left.start(...) / g.wrist_camera.start(...); or use the
-# standalone Camera / TactileSensor classes directly.
+# then g.wrist_camera.start(...); or drive the standalone Camera class.
+# With undistort_wrist=True the frames arrive rectified from the intrinsics in
+# this gripper's flash; FisheyeUndistorter also works standalone, on frames
+# this SDK never captured.
 ```
 
 ---
@@ -445,7 +472,7 @@ with LeaderGripper.open() as g:          # MCU-only; cameras off by default
 | `Transport::reader_loop_`       | one per Transport          | open()→stop()                   |
 | `Transport::dispatch_loop_`     | one per Transport          | open()→stop()                   |
 | `Camera::capture_loop_`         | one per Camera::start()    | start()→stop()                  |
-| libxense sensor capture threads | libxense Sensor (×2 OG)    | TactileSensor::start()→stop()  |
+| `ControlLoop` resubmit thread   | one per ControlLoop        | start()→stop()                  |
 
 Transport subscriber callbacks fire on the **dispatcher**, never on the reader;
 they are serialised with each other and delivered in frame order, and
@@ -480,11 +507,8 @@ build-time:
                                                XenseRobotics SDKs)
 
 runtime (linked into libtaccap_core.so):
-   libxensesdk.so   ← from third_party/libxensesdk submodule
-                       (XENSE_LITE_BUILD=ON, NO onnxruntime / cuda /
-                        migraphx / hip / rknn / openvino / directml /
-                        coreml / directml. The lib weighs ~1.9 MB.)
-   libopencv_core.so / imgproc / imgcodecs / video / videoio
+   libopencv_core.so / imgproc / imgcodecs / video / videoio / calib3d
+                    (calib3d + imgproc are what FisheyeUndistorter needs)
    spdlog (fetched via FetchContent, header-only)
    pthread
 
@@ -503,7 +527,7 @@ will be implemented later:
 |--------------------------|-----------------------------------------|
 | Dataset recording (hdf5 / mcap, time alignment, episode markers) | a separate tool / script repo         |
 | ROS 2 node + hardware_interface package | `taccap_gripper_ros2` (separate repo) |
-| lerobot Robot adapter     | fork of `lerobot-xense feature/v5.1_dev` with a `taccap_gripper` Robot class |
+| lerobot integration       | `lerobot-xense`, where TacCap is a **gripper backend** (`type: taccap_follower`) that any arm can mount — not a Robot class of its own |
 | Master→slave follow / teleop loop, grasp state machine (contact/latch), episode orchestration | downstream apps / `taccap_gripper_ros2` — this SDK gives the realtime primitives (`ControlLoop`, `submit_*`, normalized position), not the policy |
 | Higher-level orchestration (episode controller, replay, visualisation) | downstream applications |
 
@@ -519,6 +543,10 @@ streams, no cameras) and assemble its own data-flow on top.
 
 ## 9. Verified end-to-end (real hardware)
 
+The unit suite is 263 gtest cases across 21 files, PTY-based fake-firmware
+tests included; it runs on any host, with no gripper attached. What follows is
+a hardware run, which is a different claim.
+
 5-second multistream capture on the lab leader (`OG000477` /
 `OG000478` / `XC000008`, MCU `5C2C247728`). This historical run was taken
 with the cameras opened (`open_cameras=true`); the default gripper
@@ -532,5 +560,4 @@ Tactile R   : 153 frames |  30.6 fps   (OG000478)
 Wrist cam   : 149 frames |  29.8 fps   (XC000008)
 
 discovery  : side=Right (MCU SN '5C2C247728' last digit 8 → even)
-test suite : 48 / 48 gtest pass (PTY-based transport tests included)
 ```
