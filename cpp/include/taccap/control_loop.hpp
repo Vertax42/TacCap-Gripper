@@ -106,6 +106,11 @@ public:
     // configuration loses 4% of its frames. Bench population changes the
     // answer, so measure on a bus populated like the one you ship on.
     //
+    // The margin is not tight. One 41-byte status frame at 3 Mbps fills ~137us
+    // of each 10ms period -- 1.4% -- so the window we aim at is ~9.86ms wide and
+    // the sub-millisecond jitter in "the MCU just finished sending" is nowhere
+    // near enough to matter.
+    //
     // What it does NOT protect, because the honest scope matters more than the
     // headline:
     //
@@ -126,11 +131,17 @@ public:
     //     877us to 489us mean on the quiet control arm -- by no longer blocking
     //     tasks on its debug logging. That is a real gain, but it is a gain in
     //     latency, not in collision immunity.)
-    //   - Streams with a high transmit duty cycle. One 41-byte status frame at
-    //     3 Mbps fills ~137us of each 10ms period -- 1.4%, so the idle window
-    //     we aim at is enormous and the USB delivery jitter in our estimate of
-    //     "the MCU just finished sending" does not matter. Turn on IMU and
-    //     encoder as well and that margin shrinks; this has not been measured.
+    //   - (This used to warn that turning on IMU and encoder would shrink the
+    //     idle window. It cannot: the follower firmware streams motor status
+    //     and nothing else -- every other source sits inside
+    //     #ifdef ENABLE_MASTER_GRIPPER in task_data_stream.c. FollowerGripper::
+    //     start_streaming() still takes imu_hz and encoder_hz and will set the
+    //     mask bits, but the follower ignores them; requesting 1000Hz of each
+    //     yields zero frames and leaves byte volume unchanged, measured. So the
+    //     transmit duty cycle here is fixed at that 1.4% and the margin cannot
+    //     erode. The warning was real for the leader, which does stream all
+    //     four sources -- but ControlLoop only takes a FollowerGripper, so it
+    //     never applies to this class.)
     //   - Callers that must write asynchronously by construction. If your
     //     architecture sends when an external event says to, no phase this loop
     //     chooses can help you.

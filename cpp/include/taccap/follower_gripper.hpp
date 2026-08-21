@@ -180,6 +180,13 @@ public:
     // matching the leader streaming surface; non-zero adds MotorStatus to
     // the source mask so on_status() subscribers receive at that cadence.
     //
+    // imu_hz and encoder_hz are accepted and do set their mask bits, but the
+    // FOLLOWER FIRMWARE IGNORES THEM: task_data_stream.c emits IMU, encoder and
+    // eskin only under #ifdef ENABLE_MASTER_GRIPPER, so a follower streams motor
+    // status and nothing else. Requesting 1000Hz of each was measured to yield
+    // zero frames and leave byte volume unchanged. The parameters stay for
+    // signature parity with the leader; do not read them as a capability.
+    //
     // Motor status is capped by the firmware at 100 Hz
     // (STREAM_MOTOR_MAX_RATE_HZ, "leave bandwidth for the control channel"),
     // so motor_hz=200 is served at 100 Hz. If you need faster feedback than

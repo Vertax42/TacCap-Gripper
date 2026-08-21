@@ -45,6 +45,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plugged in (4 USB devices instead of 8). With both attached, that same
   configuration loses 4% of its frames. Bench population changes the answer.
 
+  One caveat was **withdrawn as unreachable**. `ControlLoop` warned that enabling
+  IMU and encoder streaming would shrink the idle window stream-locking aims at.
+  It cannot: the follower firmware emits motor status and nothing else — every
+  other source sits inside `#ifdef ENABLE_MASTER_GRIPPER` in the firmware's
+  stream task. Requesting 1000 Hz of IMU and encoder was measured to yield zero
+  frames and leave byte volume unchanged, with stream-locked runs still at
+  2000 submits : 2000 frames : 0 missing. The transmit duty cycle on a follower
+  is fixed at ~1.4%, so the margin cannot erode. The warning was real for the
+  leader, which does stream all four sources — but `ControlLoop` only takes a
+  `FollowerGripper`, so it never applied to that class.
+
+  `FollowerGripper::start_streaming()` now says the same thing at the parameter
+  it affects: `imu_hz` and `encoder_hz` are accepted and do set their mask bits,
+  but a follower ignores them. They stay for signature parity with the leader
+  and should not be read as a capability.
+
   Two documentation corrections landed alongside it:
 
   - **`Motor::submit_*` no longer advertises a 500 Hz submission budget.** The
