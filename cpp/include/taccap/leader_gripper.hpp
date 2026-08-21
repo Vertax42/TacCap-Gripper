@@ -42,6 +42,7 @@
 #include <cerrno>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace xense::taccap {
@@ -122,6 +123,17 @@ public:
     Key&            key()            noexcept { return key_; }            // V1.4
     Led&            led()            noexcept { return led_; }            // V1.9
     SensorErrors&   sensor_errors()  noexcept { return errors_; }         // V1.6
+    // The firmware version reported at open(), or nullopt when the MCU did not
+    // answer GetVersion. Read once during open rather than on demand: the
+    // command competes with the sensor stream, and the answer cannot change
+    // while the port is held.
+    //
+    // The constructor always read this to build its log line; it just never
+    // kept it, so callers had to re-issue GetVersion by hand to gate on
+    // firmware age. FollowerGripper has had the accessor all along.
+    std::optional<protocol::FirmwareVersion> firmware_version() const noexcept {
+        return fw_version_;
+    }
     // Firmware UART counters and log control. Works on both roles; needs
     // firmware 1.1.3 (counters) / 1.1.4 (log control).
     Diagnostics&    diagnostics()    noexcept { return diag_; }           // fw 1.1.3
@@ -192,6 +204,7 @@ private:
     Key                             key_;       // V1.4
     Led                             led_;       // V1.9
     SensorErrors                    errors_;    // V1.6
+    std::optional<protocol::FirmwareVersion> fw_version_{};
     Diagnostics    diag_;
     Calibration                     cal_;       // V2.0/V2.1
     OtaSession                      ota_;       // V1.3

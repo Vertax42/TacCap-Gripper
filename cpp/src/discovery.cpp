@@ -78,7 +78,7 @@ ParsedSerial parse_serial(const std::string& s) noexcept {
 
 namespace {
 
-// Extract SN from "/dev/serial/by-id/usb-1a86_USB_Dual_Serial_5C2C247728-if02".
+// Extract SN from "/dev/serial/by-id/usb-1a86_USB_Dual_Serial_5CXXXXXXXX-if02".
 // Returns the SN portion or empty string on miss.
 std::string parse_ch343_serial(const std::string& path) {
     static const std::regex re(

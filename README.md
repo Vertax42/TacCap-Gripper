@@ -24,265 +24,75 @@ Both adapters consume this SDK; they do not reimplement device access.
 
 ## Status
 
-**v0.1.8 — wrist fisheye rectification + firmware V2.2 diagnostics.** Also the
-first tagged release since `v0.1.0`: 0.1.1 through 0.1.7 were written into the
-CHANGELOG but never tagged, so `git describe` had been understating the tree by
-seven releases. Tagging resumes at this one, and `git describe` is trustworthy
-from here.
+**v0.1.8.** Command set **V2.2**, wire framing **V1.8**. Hardware-validated on
+bilateral leader setups and on real follower grippers — including the V2.2
+follower diagnostics, the MIT force-position control path, and `ControlLoop`
+under a full production load (all cameras streaming, motor cycling).
 
-Tested on bilateral leader setups (left + right, ~280 MB/s outbound, both
-flashed to leader 1.2.1) and on a real follower gripper (MIT force-position
-control, normalized grasp, LED, auto-cal) against V2.1 firmware. The V2.2
-additions below are protocol-complete and unit-tested but **not yet
-hardware-validated**.
+**Firmware minimums:** leader >= 1.2.0, follower >= 1.1.0. V2.2 follower
+diagnostics need follower >= 1.1.2. These are floors, not exact matches —
+newer commands fail loudly with `ProtocolError(InvalidCmd)` rather than
+misbehaving, and payload length is never a version probe. Check what a device
+answers with `python python/examples/fisheye_cal.py show`.
 
-> **Firmware you need.** Command set V2.1 needs **leader >= 1.2.0** /
-> **follower >= 1.1.0**; the V2.2 follower diagnostics need **follower >=
-> 1.1.2**. Those are minimums, not exact matches. The images shipped in
-> `firmware/` are leader 1.2.1 (`6b4605a`) and follower 1.1.2 (`bf0a06e`) —
-> the two roles no longer share a source commit, since every V2.2 command is
-> follower-only. Check with `python python/examples/fisheye_cal.py show`, which
-> prints the version and whether each V2.0/V2.1 command answers.
->
-> The shipped follower image is a **local build, not yet hardware-validated** —
-> see [`firmware/README.md`](firmware/README.md) before flashing it.
->
-> **V2.2 is purely additive.** `Cmd::GetMotorStatus` (0x50) and the motor-status
-> DATA stream still carry the same 31-byte payload, so `read_status()`,
-> `on_status()` and `ControlLoop` behave identically on 1.1.1 and 1.1.2. Only
-> the new 0x3A/0x3B/0x52/0x53 commands need the newer firmware, and they fail
-> loudly with `ProtocolError(InvalidCmd)`. Payload length is *not* a version
-> probe — a 31-byte status frame says nothing about firmware age.
->
-> The SDK stays usable on older firmware — everything up to command set V1.9
-> behaves identically. Only the V2.0/V2.1 calibration commands are affected,
-> and they fail loudly with `ProtocolError(InvalidCmd)` rather than silently
-> misbehaving. `LeaderGripper(..., encoder_max_rad=<rad>)` supplies the travel
-> span from the host when the firmware cannot store it.
->
-> To build and flash: see [Firmware / PC GUI reference repos](#firmware--pc-gui-reference-repos).
+> **Both images in [`firmware/`](firmware/) are local builds**, hardware-
+> validated on two units each. They carry three fixes that live in code the two
+> roles share: a command-channel livelock under sustained high-rate input, a
+> blocking-log path that stalled realtime tasks, and an out-of-bounds write on
+> every boot. Note that leader 1.2.2 replaces an *official* 1.2.1, so it trades
+> that provenance for the fixes — see
+> [`firmware/README.md`](firmware/README.md).
 
-What's in:
+### What's in
 
-- TC-GU-01 protocol: **wire framing V1.8** (global byte stuffing) +
-  **command set V2.2**. Async transport with ACK matching, per-cmd DATA
-  subscribers.
-- **Follower motor control (MIT), validated on hardware.** `Motor` enable /
-  disable / clear-fault + four control modes (position / velocity / torque /
-  impedance). The MIT impedance frame *is* the force-position hybrid primitive
-  (kp/kd track position, feed-forward torque adds force). Two send paths:
-  blocking-ACK `set_*` and no-ACK `submit_*` for a host realtime loop up to the
-  firmware's 500 Hz control rate.
-- **Normalized gripper position** (`FollowerGripper.position()` /
-  `set_position(pos, kp, kd)`, 0 = closed, 1 = open) via `GripperPosition`,
-  plus **`ControlLoop`** — a C++ fixed-rate send/receive loop for embodied
-  control (`set_target(0..1)` + `observation()`, both non-blocking; obs from the
-  motor-status stream, not polling).
-- **Normalized leader position** — `LeaderGripper(..., normalize_position=True)`
-  fills `EncoderSample.position` with the opening in `[0,1]` (0 = closed,
-  1 = open) on one-shot reads *and* on every streamed sample, using the
-  firmware's encoder-max calibration. `position_rad` keeps reporting radians.
-  Same `position()` / `pos_to_rad()` / `rad_to_pos()` surface as the follower.
-- **V1.9 additions:** `motor_status_t` is 31 bytes; power-on auto-calibration
-  config (`get/set_auto_cal_config`); WS2812 `Led` control (`g.led`); private-
-  protocol single-parameter access (`get/set_private_param`, private-mode only).
-- **V2.2 additions (follower only, firmware >= 1.1.2):** motor diagnostics —
-  `motor.read_status_ext()` returns the 72-byte `MotorStatusExt` (the 31-byte
-  status plus the motor fault word, its power-on latched OR, a stop-time
-  snapshot and the raw CAN evidence); `motor.fault_report(force=False)` returns
-  the 64-byte `MotorFaultReport` that also folds in the MCU's own firmware-level
-  faults. Plus `motor.get/set_startup_limit_torque()` (the boot-time `0x700B`
-  limit torque, replacing the old hard-coded 6 Nm) and
-  `follower.set_auto_cal_stall_param()` for patching auto-cal stall settings
-  without a read-modify-write.
-- **Wrist fisheye undistortion.** `FisheyeUndistorter` turns the firmware's
-  stored intrinsics into cached remap tables and rectifies frames; standalone
-  (works on frames from any source) or wired automatically via
-  `undistort_wrist=True` on either gripper. `fisheye_balance` trades field of
-  view against black border (0 = calibrated focal length, 1 = 0.70x). Only the
-  calibrated 640×480 is accepted — the firmware record stores no image size.
-- **V2.0/V2.1 additions:** `Calibration` component (`g.calibration`) for the
-  two flash-persisted calibration records — fisheye camera intrinsics +
-  distortion (leader *and* follower) and the leader's encoder max travel angle.
-  Never-calibrated records read back as `None` (firmware `CalNotSet`), not
-  zeros.
-- MCU sensor components: IMU @ 100 Hz, encoder @ 100 Hz, motor status; opt-in
-  wrist UVC (@ 30 Hz) `Camera` (off by default — owned by an external service).
-- `LeaderGripper` / `FollowerGripper` aggregates, zero-config MCU discovery
-  (`scan_grippers` / `find_left` / `find_right` / `find_leader` /
-  `find_follower`). Side **and** role come from the firmware-burned SN only
-  (`Cmd::GetSn` / `parse_serial()`, e.g. `TCGU01A24Z0001m`), never the CH343
-  chip SN; `Side.Unknown` when neither firmware source answers.
-- Python bindings on 3.10 + 3.12 (system py3.10 for ROS 2 Humble, conda py3.12
-  for primary dev); single-instance spdlog logger shared with C++
-  (`~/.taccaplogs/`); OTA via `OtaSession`; encoder zero calibration.
+- **TC-GU-01 protocol** — async transport with ACK matching, per-command DATA
+  subscribers, byte-stuffed framing.
+- **Follower motor control (MIT force-position).** `Motor` enable / disable /
+  clear-fault + four control modes. Blocking-ACK `set_*` and no-ACK `submit_*`.
+- **`ControlLoop`** — the recommended way to drive a follower. Submits the
+  latest normalized target **in phase with the motor-status stream** and keeps
+  a thread-safe observation fresh, so your policy only touches
+  `set_target(0..1)` and `observation()`, both non-blocking. See
+  [Follower gripper control](#follower-gripper-control-mit-force-position) for
+  why the phase matters.
+- **Normalized position** on both roles — `[0, 1]`, 0 = closed, 1 = open, on
+  one-shot reads and on every streamed sample.
+- **`Diagnostics`** (`g.diagnostics`) — the firmware's own UART counters and a
+  runtime log switch. Answers a question the host cannot answer alone: when a
+  frame arrives short, did the MCU fail to send it, or was it lost afterwards?
+- **Wrist fisheye undistortion** — firmware-stored intrinsics turned into
+  cached remap tables, standalone or wired in via `undistort_wrist=True`.
+- **Calibration** (`g.calibration`) — the flash-persisted fisheye and
+  encoder-max records. See [docs/CALIBRATION.md](docs/CALIBRATION.md).
+- **LEDs, power-on auto-calibration, OTA, zero-config discovery** by
+  firmware-burned SN (never the CH343 chip SN).
 
-Visuotactile (OG) capture now lives at the Python level via the `xensesdk`
-wheel — `xense.taccap` is the gripper-protocol + wrist-camera surface only.
+Visuotactile (OG) capture lives at the Python level via the `xensesdk` wheel —
+`xense.taccap` is the gripper-protocol + wrist-camera surface only.
 
-Full per-commit changelog in [CHANGELOG.md](CHANGELOG.md).
+Full per-commit history in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
 ## Install
 
-The SDK has two consumable surfaces — the C++ shared library
-(`libtaccap_core.so`) and the Python extension (`xense.taccap`). Both are
-produced by the **same** top-level CMake project; you choose which surface
-to build.
-
-### 1. Prerequisites
-
-|                       | Required                                                                                            |
-| --------------------- | --------------------------------------------------------------------------------------------------- |
-| OS                    | Linux (Ubuntu 22.04+ tested). The capture path is V4L2 + UVC XU; macOS / Windows are not supported. |
-| Toolchain             | gcc/g++ ≥ 13, CMake ≥ 3.20, Ninja, pkg-config                                                       |
-| Python (for bindings) | CPython 3.12                                                                                        |
-| Recommended           | `mamba` / `conda` — `environment.yml` pins the entire toolchain & C++ deps to a known-good set      |
-
-> **Why mamba is recommended.** `environment.yml` ships gcc-14, OpenCV
-> 4.12, spdlog, gtest, pybind11 and scikit-build-core at a known-good set
-> of versions. If you build against system packages instead, you are on
-> your own for ABI compatibility.
-
-### 2. Clone
-
 ```bash
-git clone <repo-url> taccap-gripper
-cd taccap-gripper
+mamba env create -f environment.yml && mamba activate xense-taccap
+pip install -e . --no-build-isolation
+python -c "import xense.taccap as t; print(t.__version__)"
 ```
 
-There are no git submodules — the SDK builds standalone.
+Two gotchas that cost people an afternoon each:
 
-### 3. Create the development environment
+- Call `pip` from an **activated** env, not by absolute path. Otherwise cmake
+  finds a `ninja` on `PATH` that is actually GNU Make and fails with a
+  confusing version error.
+- A C++ or bindings change is **not live in a consumer env until you reinstall
+  there** — the editable install redirects Python sources to the checkout but
+  keeps serving the compiled extension from `site-packages`.
 
-```bash
-mamba env create -f environment.yml
-mamba activate taccap
-
-# Or, if you already have a conda env you want to add this to:
-mamba env update -f environment.yml -n <your-env>
-```
-
-This installs gcc-14, the C++ deps, Python 3.12, pybind11,
-scikit-build-core, numpy, pyserial, opencv-python==4.12.0.88 and
-rerun-sdk in one shot. After activation you should see:
-
-```bash
-which cmake     # → .../envs/taccap/bin/cmake
-which python    # → .../envs/taccap/bin/python
-gcc --version   # → 14.x
-```
-
-### 4. Device permissions (one-time)
-
-Plugged-in TacCap devices appear as `/dev/ttyACM*` (MCU) and
-`/dev/video*` (UVC cameras). Your user needs to be in the matching
-groups:
-
-```bash
-sudo usermod -aG dialout,video "$USER"
-# log out and back in (or `newgrp dialout && newgrp video`) for it to apply
-```
-
-### 5a. Python install (recommended for most users)
-
-`pyproject.toml` uses **scikit-build-core** as the build backend, which
-drives CMake under the hood with `TACCAP_BUILD_PYTHON=ON` and
-`TACCAP_BUILD_EXAMPLES=OFF`. A single `pip` invocation builds the C++
-core and the pybind11 extension, then co-locates them inside the wheel
-under `xense/taccap/`:
-
-```bash
-# Editable / development install (re-runs CMake on every `pip install -e .`):
-pip install -e .
-
-# Or a regular install (builds a wheel, installs it):
-pip install .
-```
-
-What ends up where (editable build):
-
-```
-python/xense/taccap/
-├── _taccap_native.cpython-312-x86_64-linux-gnu.so   # pybind11 module
-└── libtaccap_core.so.0.1.8   (+ .so.0 symlink)      # SDK core
-```
-
-These two are co-located on purpose — the rpath is set to `$ORIGIN`,
-so loading `xense.taccap` just works without `LD_LIBRARY_PATH`.
-
-Build artefacts for editable installs land under `build/{wheel_tag}/`
-(see `[tool.scikit-build] build-dir` in `pyproject.toml`). Delete that
-directory if you want a clean rebuild; `pip install -e .` will regenerate it.
-
-### 5b. C++-only build (no Python)
-
-If you don't need the Python bindings — e.g. you are integrating
-`libtaccap_core.so` into a ROS 2 package or another CMake project —
-build directly with CMake/Ninja:
-
-```bash
-cmake -B build -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DTACCAP_BUILD_PYTHON=OFF \
-    -DTACCAP_BUILD_EXAMPLES=ON \
-    -DTACCAP_BUILD_TESTS=ON
-
-cmake --build build -j
-```
-
-Output:
-
-```
-build/
-├── cpp/libtaccap_core.so(.0)(.0.1.8)
-├── cpp/examples/leader_demo
-└── cpp/tests/...                # gtest binaries; run via `ctest`
-```
-
-CMake options (top-level `CMakeLists.txt:19-21`):
-
-| Option                  | Default | Effect                                          |
-| ----------------------- | ------- | ----------------------------------------------- |
-| `TACCAP_BUILD_PYTHON`   | `ON`    | Build the `_taccap_native` pybind11 module      |
-| `TACCAP_BUILD_EXAMPLES` | `OFF`   | Build the `leader_demo` smoke binary            |
-| `TACCAP_BUILD_TESTS`    | `OFF`   | Build the gtest suite under `cpp/tests/`        |
-
-### 6. Verify
-
-```bash
-# Python — note `env -u PYTHONPATH`, see the note below
-env -u PYTHONPATH python -c "import xense.taccap as t; print(t.hello()); print(t.__version__)"
-# → taccap-gripper OK; version 0.1.8
-# → 0.1.8
-
-# Python tests (hardware-free cases always run; IMU cases skip without a gripper)
-env -u PYTHONPATH pytest python/tests
-
-# C++ tests (only if TACCAP_BUILD_TESTS=ON)
-ctest --test-dir build --output-on-failure
-```
-
-> **If `xense.taccap` resolves somewhere unexpected, check `PYTHONPATH`.**
-> Stacked conda activations can export another env's `site-packages` into
-> *every* interpreter, which then shadows this repo with whatever editable
-> install lives there — you end up testing a different checkout without any
-> error. `env -u PYTHONPATH python -c "import xense.taccap as t; print(t.__file__)"`
-> tells you which tree you are actually running.
-
-### 7. Rebuild / clean
-
-```bash
-# Python: blow away scikit-build-core's build dir
-rm -rf build/ && pip install -e .
-
-# Pure C++: incremental rebuild is fine
-cmake --build build -j
-
-# Full reset
-rm -rf build/
-```
+Prerequisites, device permissions, C++-only builds, rebuild/clean and the
+`PYTHONPATH` / `LD_LIBRARY_PATH` traps: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ---
 
@@ -464,8 +274,9 @@ g = t.FollowerGripper.open()
 g.motor.clear_fault()
 g.motor.enable()                 # required before anything moves
 
-# Raw motor control (rad). set_* block on an ACK; submit_* are no-ACK (fire-
-# and-forget) for a host realtime loop up to the firmware's 500 Hz rate.
+# Raw motor control (rad). set_* block on an ACK; submit_* are no-ACK
+# (fire-and-forget) for a host realtime loop. See the note below before
+# picking a submission rate — 500 Hz is not a budget to spend.
 g.motor.set_impedance(target_pos_rad=-0.5, kp_nm_per_rad=8, kd_nm_s_per_rad=1,
                       feedforward_torque_nm=0.0)
 st = g.motor.read_status()       # actual_pos/vel/torque, target_*, control_mode
@@ -481,13 +292,14 @@ g.set_position(0.5, kp=8, kd=1)           # go to 50% open (no-ACK, realtime)
 g.pos_to_rad(0.5), g.rad_to_pos(-0.59)    # explicit conversions
 ```
 
-**`ControlLoop`** — a C++ background thread submits the latest normalized target
-at a fixed rate while the motor-status stream keeps a thread-safe observation
-fresh. Ideal for embodied policies: your loop only touches `set_target(0..1)`
-and `observation()`, both non-blocking (no GIL fights, no status polling).
+**`ControlLoop`** — the recommended way to drive a follower. A C++ background
+thread submits the latest normalized target **in phase with the motor-status
+stream** while that stream keeps a thread-safe observation fresh. Your policy
+only touches `set_target(0..1)` and `observation()`, both non-blocking (no GIL
+fights, no status polling).
 
 ```python
-loop = t.ControlLoop(g, hz=200, kp=8, kd=1)
+loop = t.ControlLoop(g, kp=8, kd=1)        # SubmitPhase.STREAM_LOCKED by default
 loop.start()                              # seeds target = current pos (no jump)
 try:
     while running:
@@ -498,11 +310,28 @@ finally:
 g.motor.disable()
 ```
 
-> **Feedback rate.** The motor's `actual_*` telemetry refreshes at ~50–100 Hz
-> (firmware reads it back over CAN periodically). Read observations from the
-> **stream** (`ControlLoop` / `motor.on_status`), not by polling
-> `read_status()` — polling `GetMotorStatus` above ~100 Hz can stall the
-> firmware's refresh.
+> **Why the phase matters, and why 500 Hz is not a budget.** The firmware
+> applies the latest target at 500 Hz, but that says nothing about what
+> submitting at that rate costs. Every host→MCU frame that lands while the MCU
+> is transmitting makes it drop bytes out of the frame it is sending, and that
+> frame is discarded whole. A 41-byte status frame at 3 Mbps fills only ~137 µs
+> of each 10 ms period, so whether a submit collides depends on **when** it
+> lands, not how many you send: 250 Hz lost 154 status frames on one 60 s run
+> and none on the next.
+>
+> `SubmitPhase.STREAM_LOCKED` removes the collision instead of making it rarer —
+> one submit per received status frame, landing in the ~9.86 ms the MCU is known
+> to be idle. Measured with every camera on both grippers streaming and the
+> motor cycling: **6000 submits : 6000 frames : 0 missing**, four runs, both
+> units. Free-running at 100 Hz on the same bench lost 156–308 frames per run.
+>
+> It does not protect ACK responses — the loop knows when the MCU emits
+> telemetry, not when it is answering somebody's command. Those survive because
+> commands retry, at ~31 ms of latency each.
+>
+> **Feedback rate.** The motor's `actual_*` telemetry refreshes at ~50–100 Hz.
+> Read observations from the **stream**, not by polling `read_status()` —
+> polling `GetMotorStatus` above ~100 Hz can stall the firmware's refresh.
 
 **LEDs and power-on auto-calibration (V1.9):**
 
@@ -520,152 +349,43 @@ Runnable demos: `python/examples/gripper_control_test.py` (interactive
 open/close via both `set_position` and `ControlLoop`) and
 `python/examples/motor_mit_control.py` (raw `submit_impedance` + health).
 
+## Diagnostics
+
+`g.diagnostics` wraps the firmware's own UART counters (firmware 1.1.3+) and a
+runtime log switch (1.1.4+). Both work on either gripper role.
+
+```python
+s = g.diagnostics.uart_stats()
+# tx_calls_ok / tx_bytes_ok  — what the firmware's transmit call accepted,
+#                              i.e. what actually reached the MCU's TX register
+# tx_fail_timeout            — the firmware truncated frames itself
+# rx_overflow                — the firmware's command task fell behind the host
+# debug_tx_bytes             — bytes out the DEBUG UART; quantifies logging cost
+```
+
+The point of `tx_calls_ok` is attribution. Compare it against what the host
+decoded over the same window: if the counts agree but bytes are missing, the
+loss happened **after** the bytes left the MCU (cable or USB-serial bridge) and
+no firmware change reaches it.
+
+```python
+from xense.taccap import LogLevel, LOG_OUTPUT_UART
+g.diagnostics.set_log_config(LogLevel.DEBUG, LOG_OUTPUT_UART)   # on
+g.diagnostics.disable_logging()                                  # off again
+```
+
+> **Logging is a diagnostic lever, not a setting.** Firmware 1.1.4 ships with it
+> off because the log sink is a blocking polled UART write (~0.5 ms per line at
+> 921600) that stalls whichever task emitted the line — logging on every received
+> command is what livelocked the command channel. Output also goes to the MCU's
+> DEBUG UART, which is **not routed over USB**: without a probe on that pin you
+> pay the realtime cost and see nothing.
+
 ## Examples
 
-All scripts live under `python/examples/`. Enable C++ examples with
-`-DTACCAP_BUILD_EXAMPLES=ON` (they're off by default).
-
-| Script                           | What it does                                                                                                                                                                                                                                                                                                                                                                                |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rerun_dual_with_tracker.py`     | Dual-gripper IMU/encoder + Pico4 motion-tracker 6-DoF poses in one viewer. Requires [`xensevr_pc_service_sdk`](https://github.com/Vertax42/Xense-Pico-Teleop-Interface) and the XenseVR PC Service running. Use `--left-tracker-sn` / `--right-tracker-sn` to map tracker SNs to sides. (Cameras are owned by the external camera service and not shown here.)                                  |
-| `calibrate.py`                   | Per-gripper encoder calibration CLI, selected by `left` / `right` (or an explicit SN) — latches the zero **and stores the measured travel span** (`Cmd::EncoderMaxCal`), which is what unlocks normalized position. Shows raw + cooked side-by-side, then a live `raw \| cooked \| position 0..1` readout. Checks firmware support before writing anything. See [Calibration](#calibration).                                                          |
-| `gripper_control_test.py`        | Interactive follower open/close test — steps through positions via both one-shot `set_position(0..1)` and the realtime `ControlLoop`, reading position back. See [Follower gripper control](#follower-gripper-control-mit-force-position).                                                                                                                                                    |
-| `motor_mit_control.py`           | Primitive demo of the raw MIT submission API (`submit_impedance`) with the out-of-band health channel (`control_stats` / `read_status`).                                                                                                                                                                                                                                                    |
-| `fisheye_cal.py`                 | Read/write the flash-persisted calibration records (V2.0/V2.1): `show`, `set-fisheye` (flags or an OpenCV `.npz` holding `K`/`D`), `set-encoder-max`, and `measure-encoder-max` — the guided close-zero → open-sample → store flow that unlocks normalized leader position.                                                                                                                     |
-| `leader_normalized_position.py`  | Streams a leader gripper's opening as `0..1` via `normalize_position=True`, with a live bar. Needs the encoder-max record (or `--encoder-max-rad` to bypass the firmware read).                                                                                                                                                                                                              |
-| `ota_update.py`                  | Firmware OTA flashing CLI with progress + post-flash status probe. **Risky — wrong artefact bricks the MCU.**                                                                                                                                                                                                                                                                               |
-| `v4l2_probe.py`, `v4l2_sweep.py` | Manual V4L2 bringup probes for the wrist / OG cameras (discovery is MCU-only and no longer enumerates them). Also handy when a firmware SN isn't burned yet.                                                                                                                                                                                                                                  |
-| `leader_demo` (C++)              | Reports streaming rates for a single leader gripper over 5 seconds.                                                                                                                                                                                                                                                                                                                         |
-
-### Bench-specific tracker ↔ gripper binding (this checkout)
-
-`rerun_dual_with_tracker.py` needs explicit `--left-tracker-sn` /
-`--right-tracker-sn` because the Pico4 trackers are physically glued to a
-specific gripper — software can't re-derive which is which. We maintain
-two bilateral pairs on **this bench**; figure out which one is plugged in
-(`scan_grippers` reports the firmware SNs) and use the matching row.
-
-> **Note — legacy SNs.** The firmware-SN column below predates the TacCap
-> SN scheme (`TCGU01A24…`); these units still report the old `SN0000NN`
-> strings until they're re-burned. The **CH343 SN** column is the stable
-> key that never changes, so match on that. Once re-burned, `.role`
-> (leader/follower) becomes available via the new SN too.
-
-**Pair A** — verified 2026-05-27 by shaking each gripper and watching the
-matching ellipsoid move in the rerun 3D view:
-
-| Side  | Gripper firmware SN | Gripper CH343 SN | Pico4 tracker SN    |
-| ----- | ------------------- | ---------------- | ------------------- |
-| LEFT  | `SN000001`          | `5C2C247734`     | `PC2310MLK7080553G` |
-| RIGHT | `SN000002`          | `5C2C247736`     | `PC2310MLL1091974G` |
-
-**Pair B** — verified 2026-05-29 by the same shake-test:
-
-| Side  | Gripper firmware SN | Gripper CH343 SN | Pico4 tracker SN    |
-| ----- | ------------------- | ---------------- | ------------------- |
-| LEFT  | `SN000003`          | `5C2C246526`     | `PC2310MLL3200579G` |
-| RIGHT | `SN000004`          | `5C2C246523`     | `PC2310MLL3200496G` |
-
-Canonical invocations:
-
-
-```bash
-# Pair A
-python python/examples/rerun_dual_with_tracker.py --left-tracker-sn  PC2310MLK7080553G --right-tracker-sn PC2310MLL1091974G
-
-# Pair B
-python python/examples/rerun_dual_with_tracker.py \
-    --left-tracker-sn  PC2310MLL3200579G \
-    --right-tracker-sn PC2310MLL3200496G
-```
-
-> **Heads-up for forks / other benches.** These SNs identify _our_
-> hardware, not yours. If you clone this repo onto a different setup,
-> replace them with whatever `xensevr_pc_service_sdk` reports for your
-> trackers, then re-verify by shaking one gripper at a time. Also note:
-> the C SDK's "device found" log line may list a third SN — that's the
-> Pico headset itself, not a tracker.
-
-## Calibration
-
-Mechanical slop and small post-zero drift can make the encoder report
-~0.05–0.10 rad when the gripper is held "fully closed". The SDK
-absorbs this two ways:
-
-- **Auto-clamp**: `Encoder::read_once()` and `on_data` callbacks return
-  `position_rad >= 0`. Negative raw drift becomes `0.0` to keep
-  downstream consumers' math sane. The unclamped value is preserved
-  in `raw.position_rad` (C++) / `raw_position_rad` (Python) for
-  diagnostics.
-- **Drift warning**: if the raw negative drift exceeds **-0.1 rad** the
-  logger emits a rate-limited warning (1 / s per `Encoder` instance)
-  pointing at calibration or mechanical issues.
-
-To calibrate a gripper, run `calibrate.py` against the side you want to fix
-(or its SN, if you'd rather be explicit):
-
-```bash
-python python/examples/calibrate.py left               # by side
-python python/examples/calibrate.py TCGU01A28Z0023m    # by firmware SN
-```
-
-The script:
-
-1. Resolves `left`/`right` (or the SN you passed) to one `mcu_device`, and
-   prints the firmware SN it picked plus every gripper it can see, so the
-   pick is verifiable. Side comes from the firmware-burned SN read over the
-   wire (`Cmd::GetSn`), not the CH343 chip serial.
-2. **Pre-flight:** checks the firmware implements `Cmd::EncoderMaxCal`
-   (0x2C). This runs *before* anything is written — step 4 persists a new
-   zero, so a pre-V2.1 gripper is refused while still untouched rather than
-   left half-calibrated with a new zero and no span.
-3. Prints the current encoder reading (both `raw` and clamped) so the
-   existing drift is visible.
-4. Prompts "hold the gripper **FULLY CLOSED**, press [Enter]", sends
-   `Cmd::SetEncoderZero`, re-reads, and validates the new raw reading is
-   within ± 0.01 rad.
-5. Prompts "open to the **MECHANICAL LIMIT**, press [Enter]" and **stores**
-   the measured angle as the travel span (`Cmd::EncoderMaxCal`). That span
-   is what `normalize_position=True` divides by.
-6. Live 10 Hz readout (`raw | cooked | position 0..1`) until Ctrl+C.
-
-There is deliberately **no expected full-open angle** to check against. The
-measured span *is* the calibration — it is whatever the mechanism does, and
-it is what the SDK normalizes by. (An earlier 1.7 rad "design baseline" was
-stale and fired false alarms on healthy hardware: three measurements across
-two units gave 1.1582 / 1.1589 / 1.1486 rad, i.e. ~66°.) The only checks
-left are the ones that catch a genuinely broken measurement — a non-positive
-span, a zero that did not take, a write that did not stick.
-
-`--skip-open-probe` latches only the zero; normalized position then stays
-unavailable until the span is measured.
-
-The firmware latches whatever raw count it sees the moment it
-processes the command, so the gripper must already be at the target
-pose before pressing Enter.
-
-### Flash-persisted calibration records (V2.0 / V2.1)
-
-Two more records live in MCU flash behind `g.calibration`. Note the encoder
-zero above is **also** flash-persisted — `cmd_handler_set_encoder_zero` calls
-`storage_write_encoder_calibration()`, so none of these need a power cycle
-and none of them are lost on reboot:
-
-| Record | Command | Scope | Accessor |
-| --- | --- | --- | --- |
-| Fisheye camera `fx, fy, cx, cy, k1..k4` | `0x2B` | leader + follower | `read_fisheye()` / `write_fisheye()` |
-| Encoder max travel angle (rad) | `0x2C` | **leader only** | `read_encoder_max_rad()` / `write_encoder_max_rad()` |
-
-Both survive power cycles. A record that was never written reads back as
-`None` — the firmware answers `ErrorCode.CalNotSet` instead of returning
-zeros, so "never calibrated" is distinguishable from "calibrated to exactly
-0". Every other firmware error still raises `ProtocolError`; on a follower or
-on pre-V2.1 firmware the encoder-max methods raise with `InvalidCmd`.
-
-```bash
-python python/examples/fisheye_cal.py show                  # print both records
-python python/examples/fisheye_cal.py measure-encoder-max   # guided: zero, open, store
-```
+All scripts live under `python/examples/`; the table is in
+**[docs/EXAMPLES.md](docs/EXAMPLES.md)**. Enable C++ examples with
+`-DTACCAP_BUILD_EXAMPLES=ON` (off by default).
 
 ## Logging
 
@@ -719,105 +439,19 @@ taccap-gripper/
 └── CMakeLists.txt             # Top-level build orchestrator
 ```
 
-## Firmware / PC GUI reference repos
-
-The wire protocol this SDK speaks is defined by the firmware that runs
-on the gripper's STM32H562 MCU. The protocol PDF + Python prototype
-(in PyQt) live in two **internal** repos that we **read but don't
-ship** — they have separate release cadences and build toolchains and
-shouldn't be linked into this SDK's git history. Ask the firmware team
-for access if you are working on the wire format.
-
-If you have them, clone into `third_party/firmware/tc-gu-01` and
-`third_party/firmware/tc-gu-01-pc`: both paths are in `.gitignore`, so
-they sit next to the SDK for easy `grep` / IDE discovery but never
-appear in `git status`.
-
-You do **not** need either to flash a gripper — the released images ship
-in [`firmware/`](firmware/).
-
-What's in them:
-
-- `tc-gu-01/App/protocol/protocol_cmd.h` + `protocol_data.h` — canonical
-  command enum + POD payload layouts. The SDK's
-  `cpp/include/taccap/protocol/{commands.hpp,payloads.hpp}` mirror these
-  1:1 with `static_assert(sizeof(...) == ...)` size checks. Currently
-  mirrored from branch `hw_v1.1.0` @ `bf0a06e` (command set V2.2).
-- `tc-gu-01/App/protocol/PROTOCOL_SPEC.md` + `tc-gu-01/docs/PROTOCOL.md` —
-  the human-readable spec, including the §10 offset table for the 72-byte
-  extended motor status that `test_codec_v22.cpp` is transcribed from.
-- `tc-gu-01/App/tasks/task_data_stream.c` + `task_imu.c` +
-  `task_encoder.c` — explains why IMU/encoder unique-data rate caps at
-  ~60 Hz even when you request 100 (see the SDK's stream-dup note in
-  the Claude memory).
-- `tc-gu-01-pc/core/protocol.py` + `core/serial_worker.py` — Python
-  reference implementation of the same wire protocol; useful as a
-  cross-check when debugging the C++ codec.
-
-### Building the firmware (Ubuntu) and flashing it over OTA
-
-The firmware builds with a plain Makefile — no CubeIDE needed. `GRIPPER` is
-mandatory; it selects `-DENABLE_MASTER_GRIPPER` / `-DENABLE_SLAVE_GRIPPER`,
-which is what splits the command table and the version constant.
-
-```bash
-sudo apt install gcc-arm-none-eabi
-
-cd third_party/firmware/tc-gu-01
-env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=master -j"$(nproc)"
-env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=slave  -j"$(nproc)"
-# -> build/master/tc-gu-01-master.bin   (leader 1.2.1)
-# -> build/slave/tc-gu-01-slave.bin     (follower 1.1.2 at bf0a06e)
-```
-
-> **`env -u CFLAGS ...` is load-bearing.** The `taccap` conda env exports host
-> x86 build flags (`-march=nocona -mtune=haswell -isystem <env>/include`), and
-> the firmware Makefile uses `CFLAGS +=`, so they get appended to the ARM
-> cross-compile and it fails with `unrecognized -march target: nocona`.
-> `conda deactivate` works too.
-
-Then flash over the wire — no SWD probe. The plain `.bin` is the OTA artifact:
-the image always links at `0x08000000`, and the firmware writes it to the
-inactive bank and uses the STM32H5 bank swap, so one build serves both banks.
-
-```bash
-python python/examples/ota_update.py \
-    third_party/firmware/tc-gu-01/build/master/tc-gu-01-master.bin \
-    --side left --target-version 1.2.1
-```
-
-> Only builds you made yourself need that path. To flash the **released**
-> images, name them and let the script find them in [`firmware/`](firmware/) —
-> that resolves from any working directory, including a parent repo that
-> vendors this one as a submodule:
->
-> ```bash
-> python python/examples/ota_update.py tc-gu-01-master.bin \
->     --side left --target-version 1.2.1
-> ```
-
-Notes:
-
-- **`make` succeeding does not mean it will flash.** The linker script declares
-  the full 2048K, but OTA caps a single bank at 456 KB — check
-  `ls -l build/*/tc-gu-01-*.bin` (builds at `bf0a06e` with
-  `arm-none-eabi-gcc 13.2.1`: master 117,612 B, slave 156,048 B, i.e. 25% / 33%
-  of the cap). Sizes vary by several hundred bytes across toolchains, so treat
-  these as approximate.
-- Flash the artifact matching the *role*, not the side. A gripper's role is the
-  `m` / `s` suffix on its firmware SN; both leaders take the `master` build.
-- `make download` is Windows-only (`STM32_Programmer_CLI.exe`, and it flashes
-  the `.elf`). On Ubuntu use the OTA path above.
-- `Cmd::GetVersion` returns the **compiled-in** constant, not the OTA bank
-  metadata, so `--target-version` is bookkeeping only — the version you read
-  back afterwards is proof of what actually got flashed.
 
 ## Documentation
 
-- [Architecture overview](docs/ARCHITECTURE.md) — layered stack, module
-  map, data-flow diagrams, threading model, USB-topology discovery, and
-  the explicit boundary between this SDK and downstream consumers
-  (dataset recording / ROS 2 / lerobot adapters).
+- **[docs/INSTALL.md](docs/INSTALL.md)** — prerequisites, C++-only builds,
+  device permissions, rebuild/clean, environment traps.
+- **[docs/CALIBRATION.md](docs/CALIBRATION.md)** — encoder zero + travel span,
+  the flash-persisted records, drift handling.
+- **[docs/FIRMWARE.md](docs/FIRMWARE.md)** — reference repos, building the
+  firmware, and flashing over OTA. **Read the power-cycle note before you
+  measure anything after a flash.**
+- **[docs/EXAMPLES.md](docs/EXAMPLES.md)** — what each example script does.
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — layered stack, module map,
+  threading model, and the boundary between this SDK and downstream consumers.
 
 ## License
 
