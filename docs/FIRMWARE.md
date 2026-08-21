@@ -32,7 +32,7 @@ What's in them:
   command enum + POD payload layouts. The SDK's
   `cpp/include/taccap/protocol/{commands.hpp,payloads.hpp}` mirror these
   1:1 with `static_assert(sizeof(...) == ...)` size checks. Currently
-  mirrored from branch `hw_v1.1.0` @ `02bec6f` (command set V2.2 plus the
+  mirrored from branch `hw_v1.1.0` @ `81835a6` (command set V2.2 plus the
   0x54 / 0x55 diagnostic pair).
 - `tc-gu-01/App/protocol/PROTOCOL_SPEC.md` + `tc-gu-01/docs/PROTOCOL.md` —
   the human-readable spec, including the §10 offset table for the 72-byte

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.9] - 2026-08-21
+
+追一个客户报的"夹爪状态流偶发降频"，最后拆出四个性质不同的问题，这一版是其中
+落在 SDK 侧的部分。
+
+核心结论：**状态帧丢失不是固件缺陷**——用新加的固件计数器证明了字节是在离开 MCU
+的发送寄存器之后丢的。SDK 能做的是不去触发它：`ControlLoop` 现在默认把提交锁相
+到状态流之后，让写入永远落在 MCU 不发送的窗口里。实测在两只夹爪、所有相机取流、
+电机往复开合的条件下，6000 次提交对 6000 帧、零丢失。
+
+同时撤回了三处会误导使用方的说法：500Hz 不是可以花掉的提交预算、`ControlLoop`
+不是固定速率、以及一条根本不可能发生在从爪上的警告。撤回的依据都在条目里。
+
+`firmware/` 里的两个镜像都更新并经过硬件验证（leader 1.2.2 / follower 1.1.5），
+它们带的三条固件修复对主从都成立。**刷完固件必须断电重插**——软复位会让设备停在
+一个所有计数器都干净、却在悄悄丢帧的状态。
+
 ### Added
 
 - **`Diagnostics` component** — `gripper.diagnostics()` on both leader and
