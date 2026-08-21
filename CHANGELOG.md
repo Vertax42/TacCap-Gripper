@@ -31,6 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DEBUG UART, which is not routed over USB, so enabling it without a probe on
   that pin costs the realtime penalty and shows nothing.
 
+  `ControlLoop`'s stream-locked phase is now documented as holding under a full
+  production load, which is the condition that actually matters to callers: with
+  every camera on both grippers streaming (4 tactile at 640x480 MJPG 120 fps + 2
+  wrist at 30 fps, same USB tree), four 60 s runs came back at exactly 6000
+  submits : 6000 frames : 0 missing. Free-running at 100 Hz on the same bench
+  lost 156-308 frames per run with or without the cameras — the camera load
+  barely moves it, because what matters is *when* a write lands, not how busy
+  the bus is.
+
+  The header also now warns about a trap we fell into: an early 600 s
+  free-running run at 100 Hz came back clean, but only one gripper assembly was
+  plugged in (4 USB devices instead of 8). With both attached, that same
+  configuration loses 4% of its frames. Bench population changes the answer.
+
   Two documentation corrections landed alongside it:
 
   - **`Motor::submit_*` no longer advertises a 500 Hz submission budget.** The

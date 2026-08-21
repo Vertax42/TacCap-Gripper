@@ -90,6 +90,22 @@ public:
     // receive. Measured: 8 runs of 60s, free-running lost 5..154 status frames
     // per run, stream-locked lost none while putting MORE traffic on the link.
     //
+    // It also holds under a full production load. With every camera on both
+    // grippers streaming (4 tactile at 640x480 MJPG 120fps + 2 wrist at 30fps,
+    // all on the same USB tree), four 60s runs came back at exactly 6000
+    // submits : 6000 frames : 0 missing. Not "close to zero" -- every submit
+    // matched by a frame. Free-running at 100Hz on the same bench lost 156..308
+    // frames per run, with or without the cameras; the camera load barely moved
+    // it, because the variable that matters is *when* a write lands, not how
+    // busy the bus is.
+    //
+    // A warning for whoever re-measures this: an early 600s free-running run at
+    // 100Hz came back completely clean, and that was wrong to generalise from.
+    // Only one gripper assembly was plugged in at the time (4 USB devices
+    // instead of 8). With both assemblies attached, the same 100Hz free-running
+    // configuration loses 4% of its frames. Bench population changes the
+    // answer, so measure on a bus populated like the one you ship on.
+    //
     // What it does NOT protect, because the honest scope matters more than the
     // headline:
     //
