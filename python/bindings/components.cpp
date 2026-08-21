@@ -15,6 +15,7 @@
 #include <pybind11/functional.h>
 
 #include <taccap/components/calibration.hpp>
+#include <taccap/components/diagnostics.hpp>
 #include <taccap/components/imu.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/components/camera.hpp>
@@ -651,6 +652,88 @@ void bind_components(py::module_& m) {
             return std::string(buf);
         });
 
+    // ---- Diagnostics: UART counters + log control (fw 1.1.3 / 1.1.4) ----
+    py::class_<protocol::UartStats>(m, "UartStats",
+        "Free-running firmware UART counters since MCU boot (Cmd 0x54).\n\n"
+        "Take a reading before and after a measurement window and subtract.\n"
+        "tx_bytes_ok / tx_calls_ok count only what the firmware's transmit call\n"
+        "accepted, i.e. what reached the MCU's transmit register -- compare them\n"
+        "against what the host decoded to tell 'the MCU never sent it' apart from\n"
+        "'it was lost after leaving the MCU'.\n\n"
+        "log_dropped reads 0 on firmware 1.1.3, which had no such field; that is\n"
+        "not distinguishable from a genuine zero.")
+        .def_readonly("tx_bytes_ok",     &protocol::UartStats::tx_bytes_ok)
+        .def_readonly("tx_calls_ok",     &protocol::UartStats::tx_calls_ok)
+        .def_readonly("tx_fail_timeout", &protocol::UartStats::tx_fail_timeout)
+        .def_readonly("tx_fail_other",   &protocol::UartStats::tx_fail_other)
+        .def_readonly("rx_bytes",        &protocol::UartStats::rx_bytes)
+        .def_readonly("rx_overflow",     &protocol::UartStats::rx_overflow)
+        .def_readonly("debug_tx_bytes",  &protocol::UartStats::debug_tx_bytes)
+        .def_readonly("rb_used",         &protocol::UartStats::rb_used)
+        .def_readonly("rb_free",         &protocol::UartStats::rb_free)
+        .def_readonly("log_dropped",     &protocol::UartStats::log_dropped)
+        .def("__repr__", [](const protocol::UartStats& s) {
+            char buf[220];
+            std::snprintf(buf, sizeof(buf),
+                "UartStats(tx_calls_ok=%u, tx_bytes_ok=%u, tx_fail_timeout=%u, "
+                "rx_overflow=%u, debug_tx_bytes=%u, log_dropped=%u)",
+                static_cast<unsigned>(s.tx_calls_ok),
+                static_cast<unsigned>(s.tx_bytes_ok),
+                static_cast<unsigned>(s.tx_fail_timeout),
+                static_cast<unsigned>(s.rx_overflow),
+                static_cast<unsigned>(s.debug_tx_bytes),
+                static_cast<unsigned>(s.log_dropped));
+            return std::string(buf);
+        });
+
+    py::class_<protocol::LogConfig>(m, "LogConfig")
+        .def_readonly("level",       &protocol::LogConfig::level)
+        .def_readonly("output_mask", &protocol::LogConfig::output_mask)
+        .def("__repr__", [](const protocol::LogConfig& c) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "LogConfig(level=%u, output_mask=0x%02X)",
+                          c.level, c.output_mask);
+            return std::string(buf);
+        });
+
+    py::enum_<protocol::LogLevel>(m, "LogLevel")
+        .value("NONE",    protocol::LogLevel::None)
+        .value("ERROR",   protocol::LogLevel::Error)
+        .value("WARN",    protocol::LogLevel::Warn)
+        .value("INFO",    protocol::LogLevel::Info)
+        .value("DEBUG",   protocol::LogLevel::Debug)
+        .value("VERBOSE", protocol::LogLevel::Verbose);
+
+    m.attr("LOG_OUTPUT_NONE") = py::int_(protocol::LogOutput::None);
+    m.attr("LOG_OUTPUT_UART") = py::int_(protocol::LogOutput::Uart);
+
+    py::class_<Diagnostics>(m, "Diagnostics",
+        "Firmware UART counters and log control. Available on both gripper\n"
+        "roles; needs firmware 1.1.3 (counters) / 1.1.4 (log control).")
+        .def("uart_stats", [](Diagnostics& self, unsigned timeout_ms) {
+                py::gil_scoped_release g;
+                return self.uart_stats(std::chrono::milliseconds(timeout_ms));
+            }, py::arg("timeout_ms") = 100u)
+        .def("set_log_config", [](Diagnostics& self, protocol::LogLevel level,
+                                  uint8_t output_mask, unsigned timeout_ms) {
+                py::gil_scoped_release g;
+                return self.set_log_config(level, output_mask,
+                                           std::chrono::milliseconds(timeout_ms));
+            },
+            py::arg("level"), py::arg("output_mask") = protocol::LogOutput::None,
+            py::arg("timeout_ms") = 100u,
+            "Turn firmware logging on or off. DIAGNOSTIC LEVER, NOT A SETTING:\n"
+            "the firmware log sink is a blocking polled UART write (~0.5 ms per\n"
+            "line at 921600) that stalls whichever task emitted the line -- that\n"
+            "is what livelocked the command channel before logging was switched\n"
+            "off by default. Output also goes to the MCU's DEBUG UART, which is\n"
+            "not routed over USB, so without a probe on that pin you pay the\n"
+            "realtime cost and see nothing. Turn it on, look, turn it back off.")
+        .def("disable_logging", [](Diagnostics& self, unsigned timeout_ms) {
+                py::gil_scoped_release g;
+                return self.disable_logging(std::chrono::milliseconds(timeout_ms));
+            }, py::arg("timeout_ms") = 100u);
+
     py::class_<protocol::MotorControlStats>(m, "MotorControlStats")
         .def_readonly("running",             &protocol::MotorControlStats::running)
         .def_readonly("mode",                &protocol::MotorControlStats::mode)
@@ -856,8 +939,12 @@ void bind_components(py::module_& m) {
             py::arg("feedforward_torque_nm"),
             py::arg("feedforward_vel_radps") = 0.0f)  // V1.7; MIT only
         // ---- High-rate control submission (no ACK) -------------------------
-        // Fire-and-forget for a realtime loop (up to the firmware's 500Hz). No
-        // ACK, no NACK, no retry, no throw on a rejected target — the only
+        // Fire-and-forget for a realtime loop. The firmware applies the latest
+        // target at 500Hz, but that is not a submission budget: every frame
+        // that lands while the MCU is transmitting costs a status frame, and
+        // whether it collides depends on *when* it lands, not the rate. Prefer
+        // ControlLoop with STREAM_LOCKED. See motor.hpp for the measurements.
+        // No ACK, no NACK, no retry, no throw on a rejected target — the only
         // exception is IoError on a stopped transport. MIT is assumed. Poll
         // control_stats() (off the loop) for health: applied_seq, actual_hz,
         // error_count, last_error. The follow/teleop loop + grasp FSM live in
@@ -1176,6 +1263,7 @@ void bind_components(py::module_& m) {
         .def_property_readonly("key",           [](LeaderGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("led",           [](LeaderGripper& g) -> Led&            { return g.led(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](LeaderGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("diagnostics", [](LeaderGripper& g) -> Diagnostics&    { return g.diagnostics(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("calibration",   [](LeaderGripper& g) -> Calibration&    { return g.calibration(); },   py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](LeaderGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](LeaderGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)
@@ -1280,14 +1368,22 @@ void bind_components(py::module_& m) {
             py::gil_scoped_release gil;
             return FollowerGripper::open();
         })
-        .def("start_streaming", [](FollowerGripper& self,
-                                   unsigned imu_hz, unsigned enc_hz, unsigned motor_hz) {
+        .def("start_streaming", [](FollowerGripper& self, unsigned motor_hz) {
             py::gil_scoped_release gil;
-            self.start_streaming(imu_hz, enc_hz, motor_hz);
-        }, py::arg("imu_hz") = 100u,
-           py::arg("encoder_hz") = 100u,
-           py::arg("motor_hz") = 0u,
-           "Start the MCU sensor stream.\n\nA rate of 0 turns that source OFF (its source_mask bit is cleared). Passing 0 used to stream the source at the firmware's 100 Hz default instead; raises IoError(EINVAL) if every rate is 0.\n\nThe firmware divides a 1 kHz tick by an integer, so only divisors of 1000 arrive at the requested rate -- 300 Hz becomes 333 Hz, 150 Hz becomes 167 Hz, and anything above 1000 Hz collapses to 100 Hz. Motor status is additionally capped at 100 Hz. None of this is NACKed by the firmware, so the SDK logs a warning when it applies.")
+            self.start_streaming(motor_hz);
+        }, py::arg("motor_hz") = 100u,
+           "Start the motor-status stream.\n\n"
+           "Motor status is the ONLY source a follower streams -- the firmware\n"
+           "compiles IMU, encoder and eskin streaming out on this role. This used\n"
+           "to take imu_hz and encoder_hz for parity with the leader; they set\n"
+           "their mask bits and produced nothing, and the old defaults\n"
+           "(imu=100, encoder=100, motor=0) meant a bare start_streaming() call\n"
+           "started a stream carrying NOTHING and reported success.\n\n"
+           "motor_hz=0 raises IoError(EINVAL) rather than starting an empty\n"
+           "stream. The firmware caps motor status at 100 Hz and divides a 1 kHz\n"
+           "tick by an integer, so only divisors of 1000 arrive at the requested\n"
+           "rate. It never NACKs a rate it had to adjust, so the SDK logs a\n"
+           "warning when that happens.")
         .def("stop_streaming", [](FollowerGripper& self) {
             py::gil_scoped_release gil;
             self.stop_streaming();
@@ -1299,6 +1395,7 @@ void bind_components(py::module_& m) {
         .def_property_readonly("key",           [](FollowerGripper& g) -> Key&            { return g.key(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("led",           [](FollowerGripper& g) -> Led&            { return g.led(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("sensor_errors", [](FollowerGripper& g) -> SensorErrors&   { return g.sensor_errors(); }, py::return_value_policy::reference_internal)
+        .def_property_readonly("diagnostics", [](FollowerGripper& g) -> Diagnostics&    { return g.diagnostics(); }, py::return_value_policy::reference_internal)
         .def_property_readonly("calibration",   [](FollowerGripper& g) -> Calibration&    { return g.calibration(); },   py::return_value_policy::reference_internal)
         .def_property_readonly("ota",           [](FollowerGripper& g) -> OtaSession&     { return g.ota(); },           py::return_value_policy::reference_internal)
         .def_property_readonly("transport",     [](FollowerGripper& g) -> bus::Transport& { return g.transport(); },     py::return_value_policy::reference_internal)

@@ -104,6 +104,11 @@ enum class Cmd : uint8_t {
     GetMotorFault       = 0x52,    // V2.2 — MotorFaultReport (64B); req 0B (cached)
                                    //        or 1B non-zero (force a CAN read)
     GetMotorStatusExt   = 0x53,    // V2.2 — MotorStatusExt (72B), superset of 0x50
+    // Diagnostics, firmware 1.1.3+ / 1.1.4+. Present on leader and follower
+    // alike: the counters live in the firmware's UART layer, not in a
+    // gripper-role-specific subsystem.
+    GetUartStats        = 0x54,    // fw 1.1.3 — UartStats (36B); req 0B
+    SetLogConfig        = 0x55,    // fw 1.1.4 — req LogConfig (2B), resp 2B
 
     // Config (0x60–0x6F)
     SetImuConfig        = 0x60,

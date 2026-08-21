@@ -217,6 +217,27 @@ MotorControlStats decode_motor_control_stats(const uint8_t* data, std::size_t le
     return pod_from_bytes<MotorControlStats>(data, len, "MotorControlStats");
 }
 
+// Firmware 1.1.3 answered 0x54 with 32 bytes; 1.1.4 appended log_dropped for 36.
+// Accept either and zero-fill the tail, so one SDK build works against both
+// without the caller having to branch on firmware_version().
+UartStats decode_uart_stats(const uint8_t* data, std::size_t len) {
+    constexpr std::size_t kWithoutLogDropped = sizeof(UartStats) - sizeof(uint32_t);
+    if (data == nullptr || len < kWithoutLogDropped) {
+        throw ProtocolError(
+            "decode UartStats: expected >= " + std::to_string(kWithoutLogDropped) +
+            " bytes, got " + std::to_string(len));
+    }
+    UartStats out{};
+    std::memcpy(&out, data, std::min(len, sizeof(out)));
+    return out;
+}
+
+LogConfig decode_log_config(const uint8_t* data, std::size_t len) {
+    return pod_from_bytes<LogConfig>(data, len, "LogConfig");
+}
+
+std::vector<uint8_t> encode(const LogConfig& c) { return encode_pod(c); }
+
 // V2.2 — 0x53. Accepts the three documented prefix lengths (31 / 59 / 72) and
 // anything in between, zero-filling the tail. A short frame is not an error
 // here: the 31-byte prefix is exactly what 0x50 and the DATA stream carry, so

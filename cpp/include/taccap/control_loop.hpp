@@ -90,23 +90,58 @@ public:
     // receive. Measured: 8 runs of 60s, free-running lost 5..154 status frames
     // per run, stream-locked lost none while putting MORE traffic on the link.
     //
+    // It also holds under a full production load. With every camera on both
+    // grippers streaming (4 tactile at 640x480 MJPG 120fps + 2 wrist at 30fps,
+    // all on the same USB tree), four 60s runs came back at exactly 6000
+    // submits : 6000 frames : 0 missing. Not "close to zero" -- every submit
+    // matched by a frame. Free-running at 100Hz on the same bench lost 156..308
+    // frames per run, with or without the cameras; the camera load barely moved
+    // it, because the variable that matters is *when* a write lands, not how
+    // busy the bus is.
+    //
+    // A warning for whoever re-measures this: an early 600s free-running run at
+    // 100Hz came back completely clean, and that was wrong to generalise from.
+    // Only one gripper assembly was plugged in at the time (4 USB devices
+    // instead of 8). With both assemblies attached, the same 100Hz free-running
+    // configuration loses 4% of its frames. Bench population changes the
+    // answer, so measure on a bus populated like the one you ship on.
+    //
+    // The margin is not tight. One 41-byte status frame at 3 Mbps fills ~137us
+    // of each 10ms period -- 1.4% -- so the window we aim at is ~9.86ms wide and
+    // the sub-millisecond jitter in "the MCU just finished sending" is nowhere
+    // near enough to matter.
+    //
     // What it does NOT protect, because the honest scope matters more than the
     // headline:
     //
     //   - ACK responses. The loop knows when the MCU emits *telemetry*; it has
     //     no idea when the MCU is answering somebody's command. Measured with
-    //     no stream running and a 100Hz GetMotorStatusExt poll: adding 250Hz of
-    //     concurrent no-ACK traffic corrupted 5-6 responses per 6000 commands,
-    //     against zero in the control runs. The saving grace is that commands
-    //     RETRY -- every one of those was recovered, costing ~31ms each and
-    //     surfacing to the caller as latency, never as failure. Stream frames
-    //     have no retry, which is why the same defect reads as a rate drop on
-    //     telemetry and as nothing at all on commands.
-    //   - Streams with a high transmit duty cycle. One 41-byte status frame at
-    //     3 Mbps fills ~137us of each 10ms period -- 1.4%, so the idle window
-    //     we aim at is enormous and the USB delivery jitter in our estimate of
-    //     "the MCU just finished sending" does not matter. Turn on IMU and
-    //     encoder as well and that margin shrinks; this has not been measured.
+    //     no stream running and a 100Hz GetMotorStatusExt poll, adding 250Hz of
+    //     concurrent no-ACK traffic corrupts responses that the control runs
+    //     never lose -- on firmware 1.1.2.0 that was 5-6 per 6000 commands, and
+    //     on 1.1.4.0 (logging off) 1-2. The count dropped; the exposure did
+    //     not. Control runs stayed at zero on both, test runs non-zero on both.
+    //     The saving grace is that commands RETRY -- every one of those was
+    //     recovered, costing ~31ms each and surfacing to the caller as latency,
+    //     never as failure. Stream frames have no retry, which is why the same
+    //     defect reads as a rate drop on telemetry and as nothing at all on
+    //     commands.
+    //
+    //     (Firmware 1.1.4.0 also roughly halved command latency outright --
+    //     877us to 489us mean on the quiet control arm -- by no longer blocking
+    //     tasks on its debug logging. That is a real gain, but it is a gain in
+    //     latency, not in collision immunity.)
+    //   - (This used to warn that turning on IMU and encoder would shrink the
+    //     idle window. It cannot: the follower firmware streams motor status
+    //     and nothing else -- every other source sits inside
+    //     #ifdef ENABLE_MASTER_GRIPPER in task_data_stream.c. FollowerGripper::
+    //     start_streaming() still takes imu_hz and encoder_hz and will set the
+    //     mask bits, but the follower ignores them; requesting 1000Hz of each
+    //     yields zero frames and leaves byte volume unchanged, measured. So the
+    //     transmit duty cycle here is fixed at that 1.4% and the margin cannot
+    //     erode. The warning was real for the leader, which does stream all
+    //     four sources -- but ControlLoop only takes a FollowerGripper, so it
+    //     never applies to this class.)
     //   - Callers that must write asynchronously by construction. If your
     //     architecture sends when an external event says to, no phase this loop
     //     chooses can help you.

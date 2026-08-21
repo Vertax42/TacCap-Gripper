@@ -9,6 +9,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Diagnostics` component** — `gripper.diagnostics()` on both leader and
+  follower, wrapping the two firmware commands added in tc-gu-01 1.1.3/1.1.4.
+
+  `uart_stats()` (Cmd 0x54) returns the firmware's free-running UART counters.
+  It exists to answer a question nothing on the host can: when a status frame
+  arrives a couple of bytes short, did the MCU fail to send them, or were they
+  lost after leaving it? `tx_bytes_ok` / `tx_calls_ok` count only what the
+  firmware's transmit call accepted, so comparing them against what the host
+  decoded over the same window separates the two. That comparison is what
+  established the byte loss is downstream of the MCU (tc-gu-01#1): firmware
+  reported 6013 frames and 246417 bytes out with zero failures while the host
+  still lost 40 frames.
+
+  `set_log_config()` / `disable_logging()` (Cmd 0x55) turn firmware logging on
+  and off at runtime. Firmware 1.1.4 ships with logging off because its log
+  sink is a blocking polled UART write (~0.5 ms per line at 921600) that stalls
+  whichever task emitted the line — logging on every received command is what
+  livelocked the firmware's command channel. Treat this as a diagnostic lever,
+  not a setting: the docstrings say so, and note the output goes to the MCU's
+  DEBUG UART, which is not routed over USB, so enabling it without a probe on
+  that pin costs the realtime penalty and shows nothing.
+
+  `ControlLoop`'s stream-locked phase is now documented as holding under a full
+  production load, which is the condition that actually matters to callers: with
+  every camera on both grippers streaming (4 tactile at 640x480 MJPG 120 fps + 2
+  wrist at 30 fps, same USB tree), four 60 s runs came back at exactly 6000
+  submits : 6000 frames : 0 missing. Free-running at 100 Hz on the same bench
+  lost 156-308 frames per run with or without the cameras — the camera load
+  barely moves it, because what matters is *when* a write lands, not how busy
+  the bus is.
+
+  The header also now warns about a trap we fell into: an early 600 s
+  free-running run at 100 Hz came back clean, but only one gripper assembly was
+  plugged in (4 USB devices instead of 8). With both attached, that same
+  configuration loses 4% of its frames. Bench population changes the answer.
+
+  One caveat was **withdrawn as unreachable**. `ControlLoop` warned that enabling
+  IMU and encoder streaming would shrink the idle window stream-locking aims at.
+  It cannot: the follower firmware emits motor status and nothing else — every
+  other source sits inside `#ifdef ENABLE_MASTER_GRIPPER` in the firmware's
+  stream task. Requesting 1000 Hz of IMU and encoder was measured to yield zero
+  frames and leave byte volume unchanged, with stream-locked runs still at
+  2000 submits : 2000 frames : 0 missing. The transmit duty cycle on a follower
+  is fixed at ~1.4%, so the margin cannot erode. The warning was real for the
+  leader, which does stream all four sources — but `ControlLoop` only takes a
+  `FollowerGripper`, so it never applied to that class.
+
+### Changed
+
+- **BREAKING: `FollowerGripper::start_streaming()` takes only `motor_hz`.**
+  It was `(imu_hz = 100, encoder_hz = 100, motor_hz = 0)`, mirroring the
+  leader — and on a follower those first two rates set their mask bits and then
+  produced nothing, because the firmware compiles IMU, encoder and eskin
+  streaming out on this role. The defaults made it worse than misleading: the
+  bare call `g.start_streaming()` requested two sources the follower ignores and
+  *no* motor status, so it started a stream that carried nothing and returned
+  success.
+
+  Now `start_streaming(motor_hz = 100)`, and `motor_hz = 0` raises
+  `IoError(EINVAL)` instead of starting an empty stream. Nothing in this repo
+  passed IMU or encoder rates to a follower, so nothing here needed updating;
+  callers that did were getting silence for them anyway. Verified on hardware:
+  the bare call now yields 100 Hz, `motor_hz=0` throws, and the old keyword
+  arguments are gone from Python.
+
+  Two documentation corrections landed alongside it:
+
+  - **`Motor::submit_*` no longer advertises a 500 Hz submission budget.** The
+    firmware really does apply the latest target at 500 Hz, but that was being
+    read as "submitting at 500 Hz is free", and it is not: every host->MCU frame
+    that lands while the MCU is transmitting costs a whole status frame
+    (tc-gu-01#1). Rate does not predict the loss — 250 Hz lost 154 frames on one
+    60 s run and none on the next, 300 Hz was clean where 250 Hz was not, and
+    1000 Hz has produced both 0 and 146 on the same firmware. It only sets how
+    many chances to collide you take per second. The header now says that, and
+    points at `SubmitPhase::StreamLocked`.
+  - **`ControlLoop`'s ACK-response caveat now carries firmware 1.1.4.0 numbers.**
+    Concurrent traffic still corrupts command responses that the quiet control
+    runs never lose (1-2 per 6000 commands on 1.1.4.0, 5-6 on 1.1.2.0; control
+    arms zero on both). The count fell, the exposure did not. 1.1.4.0 separately
+    halved command latency (877 us -> 489 us mean) by no longer blocking tasks
+    on debug logging — a latency gain, not collision immunity.
+
+  `decode_uart_stats()` accepts both the 32-byte packet firmware 1.1.3 answers
+  with and the 36-byte one from 1.1.4, zero-filling the missing tail, so one
+  SDK build talks to either. `log_dropped` therefore reads 0 against 1.1.3 and
+  is not distinguishable from a genuine zero — gate on `firmware_version()` if
+  that matters. `cpp/tests/test_diagnostics_codec.cpp` pins both lengths.
+
 - **`ControlLoop` submits in phase with the status stream**, via
   `Config::phase` (`SubmitPhase::StreamLocked`, the new default; the old
   behaviour is `SubmitPhase::FreeRunning`). StreamLocked fires one MIT frame

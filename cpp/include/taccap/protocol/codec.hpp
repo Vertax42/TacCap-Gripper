@@ -40,6 +40,7 @@ std::vector<uint8_t> encode(const MotorVelCtrl&);
 std::vector<uint8_t> encode(const MotorTorqueCtrl&);
 std::vector<uint8_t> encode(const MotorImpedanceCtrl&);
 std::vector<uint8_t> encode(const GripperConfig&);   // V1.7
+std::vector<uint8_t> encode(const LogConfig&);       // fw 1.1.4
 std::vector<uint8_t> encode(const GripperAutoCalConfig&);  // V1.9
 std::vector<uint8_t> encode(const GripperAutoCalStallParam&);    // V2.2 (10B)
 std::vector<uint8_t> encode(const GripperAutoCalStallParamEx&);  // V2.2 (16B)
@@ -104,6 +105,10 @@ MotorFaultReport   decode_motor_fault_report(const uint8_t* data, std::size_t le
 GripperConfig      decode_gripper_config(const uint8_t* data, std::size_t len);
 GripperAutoCalConfig decode_gripper_auto_cal_config(const uint8_t* data, std::size_t len);  // V1.9
 MotorControlStats  decode_motor_control_stats(const uint8_t* data, std::size_t len);
+// fw 1.1.3 shipped a 32-byte packet; 1.1.4 appended log_dropped. Both decode
+// here, with the missing tail zero-filled, so one SDK build talks to either.
+UartStats          decode_uart_stats(const uint8_t* data, std::size_t len);
+LogConfig          decode_log_config(const uint8_t* data, std::size_t len);
 StreamConfig       decode_stream_config(const uint8_t* data, std::size_t len);
 AckPayload         decode_ack(const uint8_t* data, std::size_t len);
 // V1.4+

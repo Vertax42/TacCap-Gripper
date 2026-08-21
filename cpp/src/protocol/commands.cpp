@@ -76,6 +76,8 @@ const char* to_string(Cmd c) noexcept {
         case Cmd::GetMotorControlStats: return "GetMotorControlStats";
         case Cmd::GetMotorFault:       return "GetMotorFault";
         case Cmd::GetMotorStatusExt:   return "GetMotorStatusExt";
+        case Cmd::GetUartStats:        return "GetUartStats";
+        case Cmd::SetLogConfig:        return "SetLogConfig";
 
         case Cmd::SetImuConfig:        return "SetImuConfig";
         case Cmd::GetImuConfig:        return "GetImuConfig";
