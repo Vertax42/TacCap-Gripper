@@ -10,27 +10,40 @@ directory's git history, not from extra files.
 | Image | Role | Version | Protocol | Source | Size | CRC32 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.1** | V2.1 | `6b4605a` | 116,840 B | `0xEC491CBD` |
-| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.2** | V2.2 | `bf0a06e` | 156,048 B | `0x866B1800` |
+| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.5** | V2.2 | `8f03cd2` | 156,412 B | `0x01B5A052` |
 
 Both from firmware branch `hw_v1.1.0`. `manifest.json` has the same data
 machine-readably, per image — the two roles no longer share one source commit
 or one protocol level, because every V2.2 command is follower-only and the
 leader had no reason to be rebuilt.
 
-> ### ⚠️ The follower image is a local build
+> ### ⚠️ Both images are local builds, and the leader one is now behind
 >
-> `tc-gu-01-slave.bin` 1.1.2 was built here with `arm-none-eabi-gcc 13.2.1`,
-> **not** by the firmware team's release toolchain. It is a faithful build of
-> `bf0a06e`, but it is not the official artifact — replace it when that lands.
+> Neither `.bin` here came from the firmware team's release toolchain — both
+> were built with `arm-none-eabi-gcc 13.2.1`. Their size and CRC32 are
+> therefore **not comparable** with pre-1.1.2 entries: rebuilding the older
+> 1.1.1 image from its own commit with this toolchain also fails to reproduce
+> it (150,044 B against the shipped 149,256 B), so a few hundred bytes of any
+> size delta is toolchain, not firmware code.
 >
-> **Its size and CRC32 are not comparable with the 1.1.1 row's.** Rebuilding
-> the *previous* image from its *own* commit with this toolchain also fails to
-> reproduce it (150,044 B against the shipped 149,256 B), so roughly 800 bytes
-> of the jump from 149,256 to 156,048 is toolchain, not new firmware code.
-> Do not read the delta as a measure of what V2.2 added.
+> **The follower image is hardware-validated.** 1.1.5 was flashed to two
+> follower units and exercised: the command channel survives sustained 1000 Hz
+> `CMD_NO_ACK` input, `rx_overflow` and `debug_tx_bytes` are both 0, and
+> stream-locked control loses no status frames with all cameras streaming and
+> the motor cycling.
 >
-> It has **not been validated on hardware yet.** The SDK's V2.2 support is
-> unit-tested against the wire format only.
+> **The leader image is not, and it predates three fixes that also apply to
+> it.** `tc-gu-01-master.bin` is still built from `6b4605a`, before:
+>
+> - the command-channel livelock under sustained high-rate input (fw 1.1.3),
+> - logging being switched off by default — its sink is a blocking polled UART
+>   write that stalls whichever task emitted the line (fw 1.1.4),
+> - a one-byte out-of-bounds write that happens on **every boot** (fw 1.1.5).
+>
+> All three live in code shared by both roles, so a leader running `6b4605a` is
+> exposed to all three. It was not rebuilt here because doing so honestly needs
+> a leader version bump (otherwise two different images both report 1.2.1) and
+> a leader to validate on, and there is none on this bench.
 
 **Leader 1.2.1 changes the status LED only** — protocol byte-identical to
 1.2.0, so upgrading the leader is optional from the SDK's point of view:
@@ -51,7 +64,53 @@ the open stall records the frame *before* the trigger, and 0.013 rad is
 subtracted from the saved `max_open` as a safety margin. **Re-run calibration
 after upgrading** if you depend on the exact span — expect it slightly smaller.
 
+**Follower 1.1.3 / 1.1.4 / 1.1.5 fix three real defects**, all in code the
+leader shares. The protocol surface is unchanged apart from two added
+diagnostic commands, so the SDK behaves identically otherwise.
+
+- **1.1.3 — the command channel could be livelocked into permanent silence.**
+  Sustained high-rate input made the command task log one blocking UART line
+  per received frame; at 1000 frames/s the printing alone needed more than a
+  second per second, the RX ring buffer overflowed, and the overflow handler
+  logged *from the interrupt*, amplifying it. The device kept streaming at a
+  healthy 100 Hz the whole time, which is what made it so hard to spot: every
+  command timed out, nothing recovered, and only a power cycle brought it back.
+  Also adds `CMD_GET_UART_STATS` (0x54) — the counters the SDK's
+  `g.diagnostics.uart_stats()` reads.
+- **1.1.4 — logging is off by default**, with `CMD_SET_LOG_CONFIG` (0x55) to
+  turn it back on at runtime. Deleting individual log lines only treats the
+  symptom: the sink is a blocking polled UART write (~0.5 ms per line at
+  921600) that stalls whichever task emitted the line, so *any* chatty code can
+  reproduce 1.1.3's failure. The firmware was emitting 34.8 KB/s of it while
+  completely idle. Command latency dropped from 877 µs to 489 µs as a
+  side-effect. Treat 0x55 as a diagnostic lever, not a setting.
+- **1.1.5 — a one-byte out-of-bounds write on every boot.** The UART ring-buffer
+  array is sized to exclude the DEBUG port, but 16 of its 17 access sites
+  validated the index against the full port range, which includes the one index
+  past the end. `log_init()` hit it every startup. What it corrupted depended on
+  linker layout.
+
 ---
+
+## ⚠️ Power-cycle the gripper after flashing
+
+The bank-swap reboot is a **soft** reset: it restarts the MCU but never powers
+the USB-serial bridge down. The device comes back in a degraded state that is
+indistinguishable from a healthy one — right version string, stream running,
+`uart_stats()` counters all clean — while quietly dropping status frames.
+
+Measured on hardware, same unit, same firmware, same cable, 60-second runs:
+
+| | status frames lost |
+| --- | --- |
+| after OTA alone | 35–39 per run, three runs |
+| after unplug + replug | **0**, three runs |
+
+This cost us two wrong conclusions before we caught it: first a unit was
+written off as having a degrading cable, then two firmware versions were
+compared using numbers that only differed by whether the gripper had been
+power-cycled. **Any measurement taken before the replug is suspect.** Firmware
+tracking: tc-gu-01 issue #6.
 
 ## ⚠️ Update the SDK *before* flashing
 
@@ -87,7 +146,8 @@ python python/examples/fisheye_cal.py show
 python python/examples/ota_update.py tc-gu-01-master.bin \
     --side left --target-version 1.2.1
 
-# 3. Confirm — GetVersion returns the compiled-in constant, so the version
+# 3. Power-cycle the gripper. Not optional — see below.
+# 4. Confirm — GetVersion returns the compiled-in constant, so the version
 #    you read back is proof of what actually landed.
 python python/examples/fisheye_cal.py show --sn <SN>
 ```

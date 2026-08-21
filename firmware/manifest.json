@@ -15,18 +15,18 @@
     },
     "slave": {
       "file": "tc-gu-01-slave.bin",
-      "version": "1.1.2",
-      "size_bytes": 156048,
-      "crc32": "0x866B1800",
+      "version": "1.1.5",
+      "size_bytes": 156412,
+      "crc32": "0x01B5A052",
       "sn_suffix": "s",
       "protocol": "V2.2",
       "source": {
         "branch": "hw_v1.1.0",
-        "commit": "bf0a06e"
+        "commit": "8f03cd237a0c8733ce896a72b65cfc5639309d44"
       },
       "build": "local",
       "toolchain": "arm-none-eabi-gcc 13.2.1 (15:13.2.rel1-2)",
-      "note": "Built locally, NOT by the firmware team's release toolchain. Rebuilding the previous 1.1.1 image from its own commit with this toolchain also fails to reproduce it (150044 B vs the shipped 149256 B), so the size/CRC32 here are not comparable with pre-1.1.2 entries. Replace with the official artifact when it is available."
+      "note": "Built locally, NOT by the firmware team's release toolchain. Hardware-validated on two follower units: command channel survives sustained 1000Hz CMD_NO_ACK, rx_overflow and debug_tx_bytes both 0, stream-locked control loses no status frames. Size/CRC32 are not comparable with pre-1.1.2 entries (toolchain differs from the official one). POWER-CYCLE THE GRIPPER AFTER FLASHING - the bank-swap reboot is a soft reset and leaves the device dropping frames while every counter reads clean; see tc-gu-01 issue #6."
     }
   }
 }
