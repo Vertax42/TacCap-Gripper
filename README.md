@@ -35,11 +35,12 @@ newer commands fail loudly with `ProtocolError(InvalidCmd)` rather than
 misbehaving, and payload length is never a version probe. Check what a device
 answers with `python python/examples/fisheye_cal.py show`.
 
-> **The follower image in [`firmware/`](firmware/) is 1.1.2 and predates three
-> fixes** that landed in the firmware repo afterwards: a command-channel
-> livelock under sustained high-rate input, a blocking-log path that stalled
-> realtime tasks, and an out-of-bounds write on every boot. Build from the
-> firmware repo if you need those — see [docs/FIRMWARE.md](docs/FIRMWARE.md).
+> **The leader image in [`firmware/`](firmware/) is behind.** The follower one
+> is 1.1.5 and hardware-validated, but `tc-gu-01-master.bin` is still built from
+> `6b4605a` — before three fixes that live in code both roles share: a
+> command-channel livelock under sustained high-rate input, a blocking-log path
+> that stalled realtime tasks, and an out-of-bounds write on every boot. See
+> [`firmware/README.md`](firmware/README.md).
 
 ### What's in
 
