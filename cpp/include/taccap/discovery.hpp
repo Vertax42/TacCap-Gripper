@@ -80,7 +80,7 @@ ParsedSerial parse_serial(const std::string& s) noexcept;
 // identification only — it is NOT a side source (see header note).
 struct McuEndpoint {
     std::string device;          // e.g. /dev/serial/by-id/...-if02
-    std::string serial_number;   // CH343 chip SN, e.g. "5C2C247728"
+    std::string serial_number;   // CH343 chip SN, e.g. "5CXXXXXXXX"
 };
 
 // One complete gripper unit, identified by its MCU board.
@@ -93,7 +93,7 @@ struct GripperEndpoints {
     Side        side = Side::Unknown;     // firmware SN / GetDevType; Unknown if
                                           // neither firmware source answered
     std::string mcu_device;
-    std::string mcu_serial;               // CH343 chip SN, e.g. "5C2C247728"
+    std::string mcu_serial;               // CH343 chip SN, e.g. "5CXXXXXXXX"
     std::string firmware_sn;              // STM32 flash SN read via Cmd::GetSn,
                                           // e.g. "TCGU01A24Z0002m" — drives `side`
     Role        role = Role::Unknown;     // leader/follower from the SN patch

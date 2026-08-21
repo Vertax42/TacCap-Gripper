@@ -547,17 +547,17 @@ The unit suite is 263 gtest cases across 21 files, PTY-based fake-firmware
 tests included; it runs on any host, with no gripper attached. What follows is
 a hardware run, which is a different claim.
 
-5-second multistream capture on the lab leader (`OG000477` /
-`OG000478` / `XC000008`, MCU `5C2C247728`). This historical run was taken
+5-second multistream capture on the lab leader (`OGXXXXXX` /
+`OGXXXXXX` / `XCXXXXXX`, MCU `5CXXXXXXXX`). This historical run was taken
 with the cameras opened (`open_cameras=true`); the default gripper
 lifecycle is now MCU-only (IMU + encoder):
 
 ```
 IMU         : 506 frames | 101.2 fps   (firmware caps at ~100 Hz)
 Encoder     : 506 frames | 101.2 fps
-Tactile L   : 156 frames |  31.2 fps   (OG000477)
-Tactile R   : 153 frames |  30.6 fps   (OG000478)
-Wrist cam   : 149 frames |  29.8 fps   (XC000008)
+Tactile L   : 156 frames |  31.2 fps   (OGXXXXXX)
+Tactile R   : 153 frames |  30.6 fps   (OGXXXXXX)
+Wrist cam   : 149 frames |  29.8 fps   (XCXXXXXX)
 
-discovery  : side=Right (MCU SN '5C2C247728' last digit 8 → even)
+discovery  : side=Right (MCU SN '5CXXXXXXXX' last digit 8 → even)
 ```
