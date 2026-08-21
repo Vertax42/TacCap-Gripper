@@ -1,5 +1,12 @@
 # 固件参考与刷写
 
+> 本文讲的是**怎么构建和刷写**，不记录版本号——那会变成又一处会过时的硬编码。
+> 仓库里当前发布的镜像版本、大小、CRC32 和源提交，以
+> [`firmware/manifest.json`](../firmware/manifest.json) 为准，人读的说明在
+> [`firmware/README.md`](../firmware/README.md)。设备上实际跑的版本用
+> `GetVersion` 查（`gripper.firmware_version`）——它返回的是编译进镜像的常量，
+> 是唯一能证明刷进去了什么的东西。
+
 <!-- 从 README.md 拆出，保持内容不变；README 只保留入门路径。 -->
 
 ## Firmware / PC GUI reference repos
@@ -25,7 +32,8 @@ What's in them:
   command enum + POD payload layouts. The SDK's
   `cpp/include/taccap/protocol/{commands.hpp,payloads.hpp}` mirror these
   1:1 with `static_assert(sizeof(...) == ...)` size checks. Currently
-  mirrored from branch `hw_v1.1.0` @ `bf0a06e` (command set V2.2).
+  mirrored from branch `hw_v1.1.0` @ `02bec6f` (command set V2.2 plus the
+  0x54 / 0x55 diagnostic pair).
 - `tc-gu-01/App/protocol/PROTOCOL_SPEC.md` + `tc-gu-01/docs/PROTOCOL.md` —
   the human-readable spec, including the §10 offset table for the 72-byte
   extended motor status that `test_codec_v22.cpp` is transcribed from.
@@ -49,7 +57,8 @@ sudo apt install gcc-arm-none-eabi
 cd third_party/firmware/tc-gu-01
 env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=master -j"$(nproc)"
 env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS make GRIPPER=slave  -j"$(nproc)"
-# -> build/master/tc-gu-01-master.bin   (leader 1.2.1)
+# -> build/master/tc-gu-01-master.bin   (leader — version is a compiled-in
+#                                        constant, check it with GetVersion)
 # -> build/slave/tc-gu-01-slave.bin     (follower — version is a compiled-in
 #                                        constant, check it with GetVersion)
 ```

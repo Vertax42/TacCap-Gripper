@@ -30,7 +30,7 @@ Usage:
     # Tag the target version (informational; firmware uses it for the
     # post-install verification log + bank metadata).
     python python/examples/ota_update.py tc-gu-01-master.bin \\
-        --target-version 1.2.1
+        --target-version 1.2.2
 
     # Just probe — don't flash anything
     python python/examples/ota_update.py --get-status

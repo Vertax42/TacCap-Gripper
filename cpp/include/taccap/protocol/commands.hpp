@@ -12,12 +12,19 @@
 // bus/frame.cpp) + **command set V2.2** (V1.7 motor / CAN-id / gripper-config
 // commands; V1.9 WS2812 + private motor params; V2.0/V2.1 fisheye-camera and
 // leader-encoder-max calibration; V2.2 follower startup limit-torque, motor
-// fault report and extended motor status). The follower-only V1.7 commands are
-// implemented but not yet hardware-validated.
+// fault report and extended motor status), plus the two diagnostic commands
+// below (0x54 / 0x55), which are NOT part of a V2.x level and are available on
+// both roles. All of it is hardware-validated.
 //
 // Firmware builds carrying command set V2.1: leader (master) 1.2.0,
-// follower (slave) 1.1.0. V2.2 adds follower (slave) 1.1.2; the leader is
-// unchanged at 1.2.1 because every V2.2 command is follower-only.
+// follower (slave) 1.1.0. V2.2 adds follower (slave) 1.1.2 — every V2.2 command
+// is follower-only, so the leader stayed at 1.2.1 for it.
+//
+// The diagnostic pair arrived later and on both roles: follower 1.1.3 (0x54)
+// and 1.1.4 (0x55), leader 1.2.2 for both. The leader's version moved not for
+// those commands alone but because three fixes from the 1.1.x line live in code
+// the two roles share, which changed the leader binary while its version
+// constant had stayed put.
 //
 // V2.2 is purely additive — Cmd::GetMotorStatus (0x50) and the MotorStatus DATA
 // stream still carry the 31-byte layout. Payload length is therefore NOT a
