@@ -6,6 +6,15 @@ TacCap-Gripper firmware over-the-air (OTA) update demo.
 Pushes a firmware .bin to the MCU's inactive Flash bank, verifies its
 CRC32, and triggers the bank-swap reboot. No SWD probe needed.
 
+POWER-CYCLE THE GRIPPER AFTERWARDS. The bank-swap reboot is a soft reset: it
+restarts the MCU but never powers down the USB-serial bridge, and the device
+comes back in a degraded state that is indistinguishable from a healthy one --
+right version string, stream running, counters clean. The only symptom is that
+it quietly drops status frames. Measured on hardware, same unit, same firmware,
+same cable, 60-second runs: 35-39 frames lost per run after OTA alone, zero
+after unplugging and replugging, three runs each way. Treat the replug as part
+of the update, not as troubleshooting.
+
 The released images ship in this repo under `firmware/`, so the usual
 argument is just their name — it resolves against that directory from any
 working directory, including a parent repo that vendors this one.
@@ -311,6 +320,17 @@ def _cmd_update(args: argparse.Namespace, g: LeaderGripper, eps) -> int:
     print("Firmware is rebooting now.")
     print("Wait ~3 s for USB re-enumeration, then re-open the gripper")
     print("to confirm GetVersion returns the new version.")
+    print()
+    print("!! POWER-CYCLE THE GRIPPER BEFORE YOU TRUST ANY MEASUREMENT.")
+    print("   The reboot above is a SOFT reset: it restarts the MCU but does")
+    print("   not power the USB-serial bridge down, and the device comes back")
+    print("   in a degraded state that looks completely healthy. Measured on")
+    print("   hardware, same unit, same firmware, same cable, 60s runs:")
+    print("     after OTA alone   35-39 status frames lost per run")
+    print("     after power cycle 0 lost, three runs in a row")
+    print("   Nothing in the version string, the stream, or the counters")
+    print("   distinguishes the two states -- the only symptom is that your")
+    print("   numbers are quietly wrong. Unplug and replug it.")
     return 0
 
 

@@ -222,7 +222,12 @@ archive format never changes (keeps historical greps parseable).
 
 ## Risky actions — confirm before
 - Running `python/examples/ota_update.py` (flashes firmware; wrong artifact
-  bricks the MCU).
+  bricks the MCU). **Always power-cycle the gripper after an OTA.** The
+  bank-swap reboot is a soft reset and leaves the device in a degraded state
+  that looks entirely healthy — right version, stream running, counters clean —
+  while quietly dropping status frames. Measured: 35-39 lost per 60s run after
+  OTA alone, zero after a replug, same unit and firmware both ways. Any number
+  you take before replugging is suspect.
 - Any change under `third_party/firmware/` or to the firmware-protocol
   mirror headers in `cpp/include/taccap/protocol/`.
 - `git push --force*` to `main` (the only remote here is GitHub `origin`).
