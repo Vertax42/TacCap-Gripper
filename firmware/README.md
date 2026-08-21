@@ -9,7 +9,7 @@ directory's git history, not from extra files.
 
 | Image | Role | Version | Protocol | Source | Size | CRC32 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.1** | V2.1 | `6b4605a` | 116,840 B | `0xEC491CBD` |
+| `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.2** | V2.1 + 0x54/0x55 | `02bec6f` | 117,980 B | `0x28742359` |
 | `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.5** | V2.2 | `8f03cd2` | 156,412 B | `0x01B5A052` |
 
 Both from firmware branch `hw_v1.1.0`. `manifest.json` has the same data
@@ -17,7 +17,7 @@ machine-readably, per image — the two roles no longer share one source commit
 or one protocol level, because every V2.2 command is follower-only and the
 leader had no reason to be rebuilt.
 
-> ### ⚠️ Both images are local builds, and the leader one is now behind
+> ### ⚠️ Both images are local builds; the leader one is not hardware-validated
 >
 > Neither `.bin` here came from the firmware team's release toolchain — both
 > were built with `arm-none-eabi-gcc 13.2.1`. Their size and CRC32 are
@@ -26,27 +26,33 @@ leader had no reason to be rebuilt.
 > it (150,044 B against the shipped 149,256 B), so a few hundred bytes of any
 > size delta is toolchain, not firmware code.
 >
-> **The follower image is hardware-validated.** 1.1.5 was flashed to two
-> follower units and exercised: the command channel survives sustained 1000 Hz
-> `CMD_NO_ACK` input, `rx_overflow` and `debug_tx_bytes` are both 0, and
-> stream-locked control loses no status frames with all cameras streaming and
-> the motor cycling.
+> **Follower 1.1.5 is hardware-validated.** Flashed to two follower units and
+> exercised: the command channel survives sustained 1000 Hz `CMD_NO_ACK` input,
+> `rx_overflow` and `debug_tx_bytes` are both 0, and stream-locked control loses
+> no status frames with all cameras streaming and the motor cycling.
 >
-> **The leader image is not, and it predates three fixes that also apply to
-> it.** `tc-gu-01-master.bin` is still built from `6b4605a`, before:
+> **Leader 1.2.2 is NOT.** There was no leader unit to test on. It replaces an
+> *official, validated* 1.2.1 image, so the trade is explicit: three defect
+> fixes that live in code both roles share, against the loss of that
+> provenance. The fixes are real for a leader —
 >
-> - the command-channel livelock under sustained high-rate input (fw 1.1.3),
-> - logging being switched off by default — its sink is a blocking polled UART
->   write that stalls whichever task emitted the line (fw 1.1.4),
-> - a one-byte out-of-bounds write that happens on **every boot** (fw 1.1.5).
+> - the command-channel livelock under sustained high-rate input,
+> - logging stalling realtime tasks (its sink is a blocking polled UART write),
+> - a one-byte out-of-bounds write on **every boot**,
 >
-> All three live in code shared by both roles, so a leader running `6b4605a` is
-> exposed to all three. It was not rebuilt here because doing so honestly needs
-> a leader version bump (otherwise two different images both report 1.2.1) and
-> a leader to validate on, and there is none on this bench.
+> — all three sit in `bsp_uart.c` / `log.c` / `protocol_handler.c`, which both
+> roles compile. But **validate on a leader before relying on this image**,
+> especially the out-of-bounds fix: it touched the UART accessor that every
+> received byte passes through.
 
-**Leader 1.2.1 changes the status LED only** — protocol byte-identical to
-1.2.0, so upgrading the leader is optional from the SDK's point of view:
+**Leader 1.2.2 = 1.2.1 plus the three shared fixes below.** The version bump
+exists so the two builds are distinguishable: everything from 1.1.3 onward
+changed the leader's binary too, while its version constant stayed at 1.2.1.
+It also picks up the two diagnostic commands (`0x54` UART counters, `0x55` log
+switch), which are registered in the common command table.
+
+**Leader 1.2.1 changed the status LED only** — protocol byte-identical to
+1.2.0:
 
 - normal state: solid **white** at brightness 20 (was solid green at 10)
 - fault state: blinks at 500 ms (was 1000 ms)

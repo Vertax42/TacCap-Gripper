@@ -2,16 +2,18 @@
   "images": {
     "master": {
       "file": "tc-gu-01-master.bin",
-      "version": "1.2.1",
-      "size_bytes": 116840,
-      "crc32": "0xEC491CBD",
+      "version": "1.2.2",
+      "size_bytes": 117980,
+      "crc32": "0x28742359",
       "sn_suffix": "m",
-      "protocol": "V2.1",
+      "protocol": "V2.1 + 0x54/0x55 diagnostics",
       "source": {
         "branch": "hw_v1.1.0",
-        "commit": "6b4605ab1682a43084a4cbfec1fdead657a58fe0"
+        "commit": "02bec6f150846bb1521f304b56b6bb52e8113bd3"
       },
-      "build": "official"
+      "build": "local",
+      "toolchain": "arm-none-eabi-gcc 13.2.1 (15:13.2.rel1-2)",
+      "note": "Built locally, NOT by the firmware team's release toolchain, and NOT VALIDATED ON HARDWARE - no leader unit was available. It replaces an official, validated 1.2.1 image; the trade is three defect fixes that live in code both roles share (command-channel livelock, blocking-log stalls, a per-boot out-of-bounds write) against the loss of that provenance. Validate on a leader before relying on it. POWER-CYCLE THE GRIPPER AFTER FLASHING - see tc-gu-01 issue #6."
     },
     "slave": {
       "file": "tc-gu-01-slave.bin",
