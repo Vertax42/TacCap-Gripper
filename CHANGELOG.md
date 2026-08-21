@@ -56,10 +56,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leader, which does stream all four sources — but `ControlLoop` only takes a
   `FollowerGripper`, so it never applied to that class.
 
-  `FollowerGripper::start_streaming()` now says the same thing at the parameter
-  it affects: `imu_hz` and `encoder_hz` are accepted and do set their mask bits,
-  but a follower ignores them. They stay for signature parity with the leader
-  and should not be read as a capability.
+### Changed
+
+- **BREAKING: `FollowerGripper::start_streaming()` takes only `motor_hz`.**
+  It was `(imu_hz = 100, encoder_hz = 100, motor_hz = 0)`, mirroring the
+  leader — and on a follower those first two rates set their mask bits and then
+  produced nothing, because the firmware compiles IMU, encoder and eskin
+  streaming out on this role. The defaults made it worse than misleading: the
+  bare call `g.start_streaming()` requested two sources the follower ignores and
+  *no* motor status, so it started a stream that carried nothing and returned
+  success.
+
+  Now `start_streaming(motor_hz = 100)`, and `motor_hz = 0` raises
+  `IoError(EINVAL)` instead of starting an empty stream. Nothing in this repo
+  passed IMU or encoder rates to a follower, so nothing here needed updating;
+  callers that did were getting silence for them anyway. Verified on hardware:
+  the bare call now yields 100 Hz, `motor_hz=0` throws, and the old keyword
+  arguments are gone from Python.
 
   Two documentation corrections landed alongside it:
 

@@ -17,9 +17,9 @@
 // are read at the Python level via the xensesdk wheel.)
 //
 // Streaming lifecycle (extends LeaderGripper with optional motor telemetry):
-//   start_streaming(imu_hz, encoder_hz, motor_hz=0)
-//     - motor_hz=0 → motor status not streamed (read on demand via motor().read_status())
-//     - motor_hz>0 → StreamSrc::MotorStatus added to source_mask
+//   start_streaming(motor_hz=100)
+//     - motor status is the only source a follower streams; 0 throws rather
+//       than starting a stream that would carry nothing
 //   stop_streaming()
 //
 // Discovery is shared with LeaderGripper: hardware enumeration cannot
@@ -176,16 +176,16 @@ public:
 
     bus::Transport& transport()      noexcept { return t_; }
 
-    // Streaming lifecycle. motor_hz=0 means "don't stream motor status",
-    // matching the leader streaming surface; non-zero adds MotorStatus to
-    // the source mask so on_status() subscribers receive at that cadence.
+    // Streaming lifecycle.
     //
-    // imu_hz and encoder_hz are accepted and do set their mask bits, but the
-    // FOLLOWER FIRMWARE IGNORES THEM: task_data_stream.c emits IMU, encoder and
-    // eskin only under #ifdef ENABLE_MASTER_GRIPPER, so a follower streams motor
-    // status and nothing else. Requesting 1000Hz of each was measured to yield
-    // zero frames and leave byte volume unchanged. The parameters stay for
-    // signature parity with the leader; do not read them as a capability.
+    // Motor status is the ONLY thing a follower streams. This used to mirror
+    // the leader's (imu_hz, encoder_hz, motor_hz) signature, which was worse
+    // than useless: the follower firmware emits IMU, encoder and eskin only
+    // under #ifdef ENABLE_MASTER_GRIPPER, so those two rates set their mask
+    // bits and then produced nothing (measured: 1000Hz of each yields zero
+    // frames and leaves byte volume unchanged). Worse, the old defaults were
+    // imu=100, encoder=100, motor=0 -- so the bare call `g.start_streaming()`
+    // started a stream that carried NOTHING and reported success.
     //
     // Motor status is capped by the firmware at 100 Hz
     // (STREAM_MOTOR_MAX_RATE_HZ, "leave bandwidth for the control channel"),
@@ -202,9 +202,7 @@ public:
     // anything above 1000 Hz collapses to 100 Hz. StartStream is never NACKed
     // for a bad rate, so the SDK logs a warning whenever it has to adjust one.
     // See cpp/src/stream_rate.hpp for the firmware model this mirrors.
-    void start_streaming(unsigned imu_hz     = 100,
-                         unsigned encoder_hz = 100,
-                         unsigned motor_hz   = 0);
+    void start_streaming(unsigned motor_hz = 100);
     void stop_streaming();
     bool is_streaming() const noexcept { return streaming_; }
 

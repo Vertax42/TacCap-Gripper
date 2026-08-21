@@ -1368,14 +1368,22 @@ void bind_components(py::module_& m) {
             py::gil_scoped_release gil;
             return FollowerGripper::open();
         })
-        .def("start_streaming", [](FollowerGripper& self,
-                                   unsigned imu_hz, unsigned enc_hz, unsigned motor_hz) {
+        .def("start_streaming", [](FollowerGripper& self, unsigned motor_hz) {
             py::gil_scoped_release gil;
-            self.start_streaming(imu_hz, enc_hz, motor_hz);
-        }, py::arg("imu_hz") = 100u,
-           py::arg("encoder_hz") = 100u,
-           py::arg("motor_hz") = 0u,
-           "Start the MCU sensor stream.\n\nA rate of 0 turns that source OFF (its source_mask bit is cleared). Passing 0 used to stream the source at the firmware's 100 Hz default instead; raises IoError(EINVAL) if every rate is 0.\n\nThe firmware divides a 1 kHz tick by an integer, so only divisors of 1000 arrive at the requested rate -- 300 Hz becomes 333 Hz, 150 Hz becomes 167 Hz, and anything above 1000 Hz collapses to 100 Hz. Motor status is additionally capped at 100 Hz. None of this is NACKed by the firmware, so the SDK logs a warning when it applies.")
+            self.start_streaming(motor_hz);
+        }, py::arg("motor_hz") = 100u,
+           "Start the motor-status stream.\n\n"
+           "Motor status is the ONLY source a follower streams -- the firmware\n"
+           "compiles IMU, encoder and eskin streaming out on this role. This used\n"
+           "to take imu_hz and encoder_hz for parity with the leader; they set\n"
+           "their mask bits and produced nothing, and the old defaults\n"
+           "(imu=100, encoder=100, motor=0) meant a bare start_streaming() call\n"
+           "started a stream carrying NOTHING and reported success.\n\n"
+           "motor_hz=0 raises IoError(EINVAL) rather than starting an empty\n"
+           "stream. The firmware caps motor status at 100 Hz and divides a 1 kHz\n"
+           "tick by an integer, so only divisors of 1000 arrive at the requested\n"
+           "rate. It never NACKs a rate it had to adjust, so the SDK logs a\n"
+           "warning when that happens.")
         .def("stop_streaming", [](FollowerGripper& self) {
             py::gil_scoped_release gil;
             self.stop_streaming();
