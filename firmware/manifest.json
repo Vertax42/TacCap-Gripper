@@ -13,7 +13,7 @@
       },
       "build": "local",
       "toolchain": "arm-none-eabi-gcc 13.2.1 (15:13.2.rel1-2)",
-      "note": "Built locally, NOT by the firmware team's release toolchain, and NOT VALIDATED ON HARDWARE - no leader unit was available. It replaces an official, validated 1.2.1 image; the trade is three defect fixes that live in code both roles share (command-channel livelock, blocking-log stalls, a per-boot out-of-bounds write) against the loss of that provenance. Validate on a leader before relying on it. POWER-CYCLE THE GRIPPER AFTER FLASHING - see tc-gu-01 issue #6."
+      "note": "Built locally, NOT by the firmware team's release toolchain. Hardware-validated on two leader units upgraded from 1.2.0: IMU and encoder both stream at ~99 Hz under a concurrent 100 Hz command load with zero retries or ACK timeouts, the two diagnostic commands answer with real data (they NACK on 1.2.0), and debug_tx_bytes stays 0. It replaces an official, validated 1.2.1 image; the trade is three defect fixes that live in code both roles share - command-channel livelock, blocking-log stalls, a per-boot out-of-bounds write - against the loss of that provenance. POWER-CYCLE THE GRIPPER AFTER FLASHING; see tc-gu-01 issue #6."
     },
     "slave": {
       "file": "tc-gu-01-slave.bin",

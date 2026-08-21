@@ -17,7 +17,7 @@ machine-readably, per image — the two roles no longer share one source commit
 or one protocol level, because every V2.2 command is follower-only and the
 leader had no reason to be rebuilt.
 
-> ### ⚠️ Both images are local builds; the leader one is not hardware-validated
+> ### ⚠️ Both images are local builds
 >
 > Neither `.bin` here came from the firmware team's release toolchain — both
 > were built with `arm-none-eabi-gcc 13.2.1`. Their size and CRC32 are
@@ -26,24 +26,30 @@ leader had no reason to be rebuilt.
 > it (150,044 B against the shipped 149,256 B), so a few hundred bytes of any
 > size delta is toolchain, not firmware code.
 >
-> **Follower 1.1.5 is hardware-validated.** Flashed to two follower units and
-> exercised: the command channel survives sustained 1000 Hz `CMD_NO_ACK` input,
-> `rx_overflow` and `debug_tx_bytes` are both 0, and stream-locked control loses
-> no status frames with all cameras streaming and the motor cycling.
+> **Both are hardware-validated**, on two units each.
 >
-> **Leader 1.2.2 is NOT.** There was no leader unit to test on. It replaces an
-> *official, validated* 1.2.1 image, so the trade is explicit: three defect
-> fixes that live in code both roles share, against the loss of that
-> provenance. The fixes are real for a leader —
+> Follower 1.1.5: the command channel survives sustained 1000 Hz `CMD_NO_ACK`
+> input, `rx_overflow` and `debug_tx_bytes` are both 0, and stream-locked
+> control loses no status frames with all cameras streaming and the motor
+> cycling.
 >
-> - the command-channel livelock under sustained high-rate input,
-> - logging stalling realtime tasks (its sink is a blocking polled UART write),
-> - a one-byte out-of-bounds write on **every boot**,
+> Leader 1.2.2, upgraded from 1.2.0: IMU and encoder both stream at ~99 Hz
+> under a concurrent 100 Hz command load, with zero retries and zero ACK
+> timeouts. The comparison against 1.2.0 on the same bench is the point —
 >
-> — all three sit in `bsp_uart.c` / `log.c` / `protocol_handler.c`, which both
-> roles compile. But **validate on a leader before relying on this image**,
-> especially the out-of-bounds fix: it touched the UART accessor that every
-> received byte passes through.
+> | | IMU / encoder | resync bytes |
+> | --- | --- | --- |
+> | 1.2.0 | 97.7 / 99.4 Hz | 5681 |
+> | 1.2.2 | 100.0 / 100.0 Hz | 0 |
+>
+> — and under an unthrottled command flood the gap is starker still: 1.2.0's
+> stream was starved to **0 Hz** while it processed 34k commands, where 1.2.2
+> kept streaming and processed 294k. That is the blocking-log cost, and it was
+> always there on the leader too.
+>
+> **Leader 1.2.2 still replaces an *official* 1.2.1**, so the provenance trade
+> stands even though the validation gap is closed: three shared-code defect
+> fixes against an artifact the firmware team built and signed off.
 
 **Leader 1.2.2 = 1.2.1 plus the three shared fixes below.** The version bump
 exists so the two builds are distinguishable: everything from 1.1.3 onward
