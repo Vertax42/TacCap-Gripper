@@ -132,6 +132,31 @@ numbers are much closer to correct than no rectification at all — which is why
 `install_wrist_undistorter()` now installs undistortion **always**, and logs
 which of the two calibrations it used.
 
+> **Watch out: the optical axis is not necessarily at the image centre.**
+>
+> A rectified frame can look off-centre, or subtly tilted, **while the
+> calibration is perfectly correct**. The sensor is not always mounted exactly at
+> the lens's optical centre, and rectification is built around the principal
+> point, not around the middle of the frame.
+>
+> Measured on one TC-GU-01 leader: `cx = 359.1` on a 640-wide frame — the optical
+> axis sits **39 px right of the image centre**. Confirmed independently of the
+> calibration, from the picture itself: the two gripper jaws are mechanically
+> symmetric about the optical axis, and the midpoint between their tips lands at
+> x = 360.1, within about a pixel of the calibrated `cx`. Forcing `cx` back to 320
+> moved the jaws *further* off centre and introduced a tilt — that is the check
+> worth repeating before concluding a calibration is wrong.
+>
+> Raw fisheye hides this: barrel distortion compresses the periphery, so a 39 px
+> offset is not visible. Rectification expands the periphery and the same offset
+> becomes obvious. **Rectification reveals the offset, it does not cause it, and
+> `cx` is not the thing to "fix"** — an offset this size is an assembly matter.
+> If the framing matters, crop around the optical axis afterwards, and update the
+> camera matrix to match or anything measuring in pixels will be wrong.
+>
+> On that same unit `FISHEYE_FALLBACK_CAL` sits 37.7 px away from the real
+> optical axis, which is what "approximate" means here in practice.
+
 **It is not a substitute for calibrating a unit.** Lens placement varies between
 assemblies, so the principal point in particular drifts per unit. Anything that
 measures in pixels off a rectified frame needs this unit's own calibration —

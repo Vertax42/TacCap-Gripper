@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uniformly black frame. Documented, with `is_usable_fisheye_cal()` as the test
   to use. First seen on firmware 1.1.1 and still the behaviour on **1.2.2**
   (measured on two leader units), so it is not an old version's quirk.
+- **`docs/CALIBRATION.md` gains a caveat on the optical axis.** A rectified frame
+  can look off-centre or tilted while the calibration is correct: the sensor is
+  not always mounted at the lens's optical centre, and rectification is built
+  around the principal point rather than the middle of the frame. Measured on one
+  unit, the axis sits 39 px right of centre — corroborated by the gripper jaws,
+  which are mechanically symmetric about it — and `FISHEYE_FALLBACK_CAL` is
+  37.7 px away from it. Raw fisheye hides the offset by compressing the
+  periphery; rectification reveals it. Written down because the natural reaction
+  is to "correct" `cx`, which makes it worse.
 - **The fisheye fallback was undocumented outside the headers.**
   `docs/CALIBRATION.md` gains a section on `resolve_fisheye()`: the three ways a
   unit fails to supply its own calibration, the reference values that stand in,
