@@ -78,9 +78,10 @@ zeros, so "never calibrated" is distinguishable from "calibrated to exactly
 0". Every other firmware error still raises `ProtocolError`; on a follower or
 on pre-V2.1 firmware the encoder-max methods raise with `InvalidCmd`.
 
-**`None` is not the only way "never calibrated" arrives, though.** Firmware
-1.1.1 answers the fisheye read with a record that is *present* and entirely
-zero. It passes any `if params is None` check, and building remap tables from
+**`None` is not the only way "never calibrated" arrives, though.** An
+uncalibrated unit may answer the fisheye read with a record that is *present*
+and entirely zero — observed on firmware 1.1.1 and still on **1.2.2**, so treat
+it as how the firmware behaves rather than as one old version's quirk. It passes any `if params is None` check, and building remap tables from
 `fx = fy = 0` maps every pixel outside the source image — so the "rectified"
 frame comes out uniformly black, with nothing raising. Test the record with
 `is_usable_fisheye_cal()` (finite, positive `fx`/`fy`) rather than for `None`,

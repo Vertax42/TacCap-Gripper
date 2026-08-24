@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interchangeable, and a reader trusting the old line would treat them as such.
   Corrected in place, since it describes what that release shipped.
 - **`docs/CALIBRATION.md` claimed an unwritten record always reads back as
-  `None`.** Firmware 1.1.1 answers the fisheye read with a *present*, all-zero
-  record, which passes an `is None` check and then rectifies to a uniformly
-  black frame. Documented, with `is_usable_fisheye_cal()` as the test to use.
+  `None`.** An uncalibrated unit may answer the fisheye read with a *present*,
+  all-zero record, which passes an `is None` check and then rectifies to a
+  uniformly black frame. Documented, with `is_usable_fisheye_cal()` as the test
+  to use. First seen on firmware 1.1.1 and still the behaviour on **1.2.2**
+  (measured on two leader units), so it is not an old version's quirk.
 - **The fisheye fallback was undocumented outside the headers.**
   `docs/CALIBRATION.md` gains a section on `resolve_fisheye()`: the three ways a
   unit fails to supply its own calibration, the reference values that stand in,
