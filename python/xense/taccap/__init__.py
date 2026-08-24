@@ -67,6 +67,7 @@ FisheyeUndistorter = _taccap_native.FisheyeUndistorter  # applies them to frames
 # Reference intrinsics for the TC-GU-01 wrist lens, for units whose firmware was
 # never calibrated. Approximate by construction — see the C++ header — so every
 # path that uses it should say so.
+ColorMode = _taccap_native.ColorMode
 FISHEYE_FALLBACK_CAL = _taccap_native.FISHEYE_FALLBACK_CAL
 is_usable_fisheye_cal = _taccap_native.is_usable_fisheye_cal
 FirmwareVersion = _taccap_native.FirmwareVersion
@@ -167,6 +168,7 @@ __all__ = [
     "GripperPosition",
     "CameraFisheyeCal",
     "FisheyeUndistorter",
+    "ColorMode",
     "FISHEYE_FALLBACK_CAL",
     "is_usable_fisheye_cal",
     "FirmwareVersion",

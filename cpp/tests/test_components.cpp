@@ -5,6 +5,7 @@
 // flow is exercised in test_transport.cpp + the real-hardware demo.
 
 #include <gtest/gtest.h>
+#include <taccap/components/camera.hpp>
 #include <taccap/components/imu.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/protocol/payloads.hpp>
@@ -107,4 +108,26 @@ TEST(ImuDecode, FlagBitsRecognisedIndividually) {
     EXPECT_FALSE(s.valid_flag & tp::ImuValid::Gyro);
     EXPECT_FALSE(s.valid_flag & tp::ImuValid::Mag);
     EXPECT_FALSE(s.valid_flag & tp::ImuValid::Temp);
+}
+
+// ---- Camera colour mode ---------------------------------------------------
+//
+// Camera itself needs a real V4L2 device, so the conversion cannot be exercised
+// here. What can — and what actually matters — is the default: every caller
+// written before ColorMode existed assumes BGR, and flipping it would invert
+// their colours with nothing raised. Pin it.
+
+TEST(CameraColorMode, DefaultsToBgrForBackwardCompatibility) {
+    const xense::taccap::Camera::Config cfg{};
+    EXPECT_EQ(cfg.color_mode, xense::taccap::ColorMode::Bgr);
+}
+
+TEST(CameraColorMode, IsCarriedByTheConfigRatherThanAGlobal) {
+    // Two cameras in one process must be able to disagree — a rig running the
+    // wrist camera into a dataset (RGB) alongside a viewer (BGR) is the case.
+    xense::taccap::Camera::Config a{};
+    xense::taccap::Camera::Config b{};
+    b.color_mode = xense::taccap::ColorMode::Rgb;
+    EXPECT_EQ(a.color_mode, xense::taccap::ColorMode::Bgr);
+    EXPECT_EQ(b.color_mode, xense::taccap::ColorMode::Rgb);
 }

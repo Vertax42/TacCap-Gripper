@@ -1103,12 +1103,24 @@ void bind_components(py::module_& m) {
             return std::string(buf);
         });
 
+    py::enum_<ColorMode>(m, "ColorMode",
+        "Channel order of the frames a Camera hands out.\n\n"
+        "BGR is the default and is OpenCV's own convention, so imshow/imwrite on\n"
+        "a frame straight out of read() looks right. Pick RGB when the frames\n"
+        "feed a machine-learning pipeline — LeRobot datasets store RGB — so the\n"
+        "conversion happens once in the capture path rather than at every call\n"
+        "site, or worse, gets forgotten and records swapped channels.")
+        .value("BGR", ColorMode::Bgr)
+        .value("RGB", ColorMode::Rgb);
+
     py::class_<Camera>(m, "Camera")
-        .def(py::init([](const std::string& dev, int w, int h, double fps, bool mjpg) {
-            return std::make_unique<Camera>(Camera::Config{dev, w, h, fps, mjpg});
+        .def(py::init([](const std::string& dev, int w, int h, double fps, bool mjpg,
+                         ColorMode color_mode) {
+            return std::make_unique<Camera>(Camera::Config{dev, w, h, fps, mjpg, color_mode});
         }),
             py::arg("device"), py::arg("width") = 640, py::arg("height") = 480,
-            py::arg("fps") = 30.0, py::arg("use_mjpg") = true)
+            py::arg("fps") = 30.0, py::arg("use_mjpg") = true,
+            py::arg("color_mode") = ColorMode::Bgr)
         .def("read", [](Camera& self, unsigned timeout_ms) -> py::object {
             CameraFrame f;
             bool ok;
@@ -1201,7 +1213,8 @@ void bind_components(py::module_& m) {
                          uint32_t baud, unsigned ack_ms, unsigned retries,
                          bool open_cameras, bool normalize_position,
                          float encoder_max_rad,
-                         bool undistort_wrist, float fisheye_balance) {
+                         bool undistort_wrist, float fisheye_balance,
+                         ColorMode wrist_color_mode) {
                 LeaderGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
@@ -1213,6 +1226,7 @@ void bind_components(py::module_& m) {
                 cfg.encoder_max_rad      = encoder_max_rad;
                 cfg.undistort_wrist      = undistort_wrist;
                 cfg.fisheye_balance      = fisheye_balance;
+                cfg.wrist_cam_extra.color_mode = wrist_color_mode;
                 py::gil_scoped_release gil;
                 return std::make_unique<LeaderGripper>(cfg);
              }),
@@ -1235,7 +1249,11 @@ void bind_components(py::module_& m) {
              // a warning when it does not; raises if the camera is not at the
              // calibrated 640x480.
              py::arg("undistort_wrist")     = false,
-             py::arg("fisheye_balance")     = 0.0f)
+             py::arg("fisheye_balance")     = 0.0f,
+             // Channel order of the wrist frames. BGR (OpenCV native) by default;
+             // RGB for pipelines that expect it, so the conversion happens once
+             // in the capture path instead of at every call site.
+             py::arg("wrist_color_mode")    = ColorMode::Bgr)
         .def_static("open", [](bool normalize_position, float encoder_max_rad) {
             py::gil_scoped_release gil;
             if (!normalize_position && encoder_max_rad <= 0.0f) {
@@ -1334,7 +1352,8 @@ void bind_components(py::module_& m) {
         .def(py::init([](const std::string& mcu, const std::string& wrist,
                          uint32_t baud, unsigned ack_ms, unsigned retries,
                          bool open_cameras,
-                         bool undistort_wrist, float fisheye_balance) {
+                         bool undistort_wrist, float fisheye_balance,
+                         ColorMode wrist_color_mode) {
                 FollowerGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
@@ -1344,6 +1363,7 @@ void bind_components(py::module_& m) {
                 cfg.open_cameras         = open_cameras;
                 cfg.undistort_wrist      = undistort_wrist;
                 cfg.fisheye_balance      = fisheye_balance;
+                cfg.wrist_cam_extra.color_mode = wrist_color_mode;
                 py::gil_scoped_release gil;
                 return std::make_unique<FollowerGripper>(cfg);
              }),
@@ -1356,7 +1376,11 @@ void bind_components(py::module_& m) {
              py::arg("open_cameras")        = false,
              // See LeaderGripper above — same semantics and same failure policy.
              py::arg("undistort_wrist")     = false,
-             py::arg("fisheye_balance")     = 0.0f)
+             py::arg("fisheye_balance")     = 0.0f,
+             // Channel order of the wrist frames. BGR (OpenCV native) by default;
+             // RGB for pipelines that expect it, so the conversion happens once
+             // in the capture path instead of at every call site.
+             py::arg("wrist_color_mode")    = ColorMode::Bgr)
         .def_property_readonly("firmware_version",
             [](const FollowerGripper& g) -> py::object {
                 auto v = g.firmware_version();

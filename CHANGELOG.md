@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Camera::Config::color_mode`** (`ColorMode::Bgr` / `Rgb`, default `Bgr`) —
+  the channel order frames are handed out in. BGR stays the default because it
+  is OpenCV's own convention and what this SDK has always returned; flipping it
+  silently would invert the colours of every existing `imshow`/`imwrite` caller
+  with nothing raised to notice.
+
+  RGB is there for consumers feeding a machine-learning pipeline. LeRobot
+  datasets store RGB, so an integration that keeps BGR either converts on the
+  Python side at every call site or, worse, forgets and records swapped
+  channels. Asking for RGB here converts once in the capture path.
+
+  Conversion runs **after** undistortion, so `FisheyeUndistorter` still only ever
+  sees BGR and its contract is unchanged — `remap` is per-channel, so the order
+  of the two steps cannot change the result anyway.
+
+  Exposed in Python as `ColorMode` plus a `color_mode` argument on `Camera` and a
+  `wrist_color_mode` argument on `LeaderGripper` / `FollowerGripper` (both
+  defaulting to BGR). In C++ it also arrives through the existing
+  `Config::wrist_cam_extra`.
+
 ### Fixed
 
 - **The 0.1.8 entry described the wrong fisheye behaviour.** It said a unit that
