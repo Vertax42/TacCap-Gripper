@@ -98,6 +98,7 @@ for the single-threaded OTA flow, which is the only user.
 │   ──────────     ──────────────                                       │
 │   read_fisheye() set()/read()      FisheyeUndistorter                 │
 │   resolve_fisheye()                 - remap tables built once         │
+│   ColorMode (BGR default / RGB)     - converted after undistortion    │
 │   read/write_encoder_max()          - apply(cv::Mat)                  │
 └──────────┬─────────────────┬──────────────┬──────────────┬─────────────┘
            │                 │              │              │

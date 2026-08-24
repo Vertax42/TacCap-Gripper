@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: the wrist camera now hands out RGB by default.** Its consumers are
+  vision and learning pipelines and every one of them wants RGB — LeRobot
+  datasets store RGB — so a BGR default meant each consumer converting at its own
+  call site, or forgetting to and recording swapped channels with nothing raised
+  to notice. `LeaderGripper::Config::wrist_color_mode` /
+  `FollowerGripper::Config::wrist_color_mode` default to `ColorMode::Rgb`; pass
+  `ColorMode::Bgr` to get the old behaviour back.
+
+  **What breaks:** code that takes a wrist frame straight to `cv::imshow`,
+  `cv::imwrite` or any other OpenCV sink and does not say `ColorMode::Bgr` will
+  render with red and blue swapped. It will not raise — check any such call site.
+
+  **A bare `Camera` is unaffected** and keeps OpenCV's native BGR: it can be any
+  V4L2 device and its frames go anywhere, so the convention every OpenCV caller
+  already assumes still holds there.
+
+### Added
+
+- **`Camera::Config::color_mode`** (`ColorMode::Bgr` / `Rgb`) — the channel order
+  a camera hands frames out in, and the mechanism behind the wrist default above.
+
+  Conversion runs **after** undistortion, so `FisheyeUndistorter` still only ever
+  sees BGR and its contract is unchanged — `remap` is per-channel, so the order
+  of the two steps cannot change the result anyway.
+
+  Exposed in Python as `ColorMode`, a `color_mode` argument on `Camera`
+  (defaulting to BGR), and a `wrist_color_mode` argument on `LeaderGripper` /
+  `FollowerGripper` (defaulting to RGB).
+
 ### Fixed
 
 - **The 0.1.8 entry described the wrong fisheye behaviour.** It said a unit that

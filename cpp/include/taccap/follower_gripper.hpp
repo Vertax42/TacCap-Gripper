@@ -84,6 +84,15 @@ public:
         // default); 1 = 0.70x focal length for the widest field of view, with
         // correspondingly more black border. Clamped to [0,1].
         float       fisheye_balance     = 0.0f;
+
+        // Channel order the wrist frames come out in. **RGB by default**, unlike
+        // the bare Camera (which keeps OpenCV's native BGR): the wrist stream's
+        // consumers are vision/learning pipelines, and every one of them wants
+        // RGB — LeRobot datasets store RGB, so a BGR default meant each of them
+        // converting at its own call site, or forgetting to and recording
+        // swapped channels with nothing raised. Set Bgr here to get the old
+        // behaviour back for code that feeds cv::imshow/imwrite directly.
+        ColorMode   wrist_color_mode    = ColorMode::Rgb;
     };
 
     explicit FollowerGripper(const Config& cfg);

@@ -5,6 +5,7 @@
 #include <taccap/error.hpp>
 #include <taccap/log.hpp>
 
+#include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
 #include <cerrno>
@@ -80,6 +81,12 @@ void Camera::maybe_undistort_(cv::Mat& image) const {
     }
 }
 
+void Camera::maybe_convert_colour_(cv::Mat& image) const {
+    if (cfg_.color_mode == ColorMode::Bgr) return;   // capture-native, nothing to do
+    if (image.empty() || image.channels() != 3) return;
+    cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
+}
+
 bool Camera::read(CameraFrame& out, std::chrono::milliseconds /*timeout*/) {
     // VideoCapture::read is blocking up to its internal V4L2 timeout; the
     // `timeout` arg is currently informational. (Add poll/select wrapping
@@ -97,6 +104,7 @@ bool Camera::read(CameraFrame& out, std::chrono::milliseconds /*timeout*/) {
         return false;
     }
     maybe_undistort_(frame);
+    maybe_convert_colour_(frame);
     out.host_time   = std::chrono::steady_clock::now();
     out.frame_index = ++total_;
     out.image       = std::move(frame);
@@ -127,6 +135,7 @@ void Camera::capture_loop_(Callback cb) {
             continue;
         }
         maybe_undistort_(frame);
+        maybe_convert_colour_(frame);
         const auto now = clock::now();
         CameraFrame cf{};
         cf.host_time   = now;
