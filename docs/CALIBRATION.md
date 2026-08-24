@@ -72,14 +72,74 @@ and none of them are lost on reboot:
 | Fisheye camera `fx, fy, cx, cy, k1..k4` | `0x2B` | leader + follower | `read_fisheye()` / `write_fisheye()` |
 | Encoder max travel angle (rad) | `0x2C` | **leader only** | `read_encoder_max_rad()` / `write_encoder_max_rad()` |
 
-Both survive power cycles. A record that was never written reads back as
-`None` — the firmware answers `ErrorCode.CalNotSet` instead of returning
+Both survive power cycles. A record that was never written normally reads back
+as `None` — the firmware answers `ErrorCode.CalNotSet` instead of returning
 zeros, so "never calibrated" is distinguishable from "calibrated to exactly
 0". Every other firmware error still raises `ProtocolError`; on a follower or
 on pre-V2.1 firmware the encoder-max methods raise with `InvalidCmd`.
+
+**`None` is not the only way "never calibrated" arrives, though.** Firmware
+1.1.1 answers the fisheye read with a record that is *present* and entirely
+zero. It passes any `if params is None` check, and building remap tables from
+`fx = fy = 0` maps every pixel outside the source image — so the "rectified"
+frame comes out uniformly black, with nothing raising. Test the record with
+`is_usable_fisheye_cal()` (finite, positive `fx`/`fy`) rather than for `None`,
+or let `resolve_fisheye()` below do it for you.
 
 ```bash
 python python/examples/fisheye_cal.py show                  # print both records
 python python/examples/fisheye_cal.py measure-encoder-max   # guided: zero, open, store
 ```
+
+### An uncalibrated wrist lens falls back, it does not degrade to raw
+
+`Calibration::resolve_fisheye()` is the one home for the read-and-fall-back
+policy, so every consumer makes the same decision instead of re-deriving it.
+**Prefer it over `read_fisheye()`** unless you specifically need to know what
+the flash holds.
+
+C++ returns a `ResolvedFisheyeCal` (`calibration`, `is_reference`, `reason`);
+Python returns the same three as a plain tuple:
+
+```python
+cal, is_reference, reason = g.calibration.resolve_fisheye()
+if is_reference:
+    log.warning("rectifying with the SDK's reference intrinsics: %s", reason)
+```
+
+`reason` is non-empty exactly when `is_reference` is true.
+
+Three ways a unit fails to supply its own calibration, all of which fall back:
+
+| What happened | How it is detected |
+| --- | --- |
+| The lens was never calibrated | `read_fisheye()` → `None` (`CalNotSet`) |
+| Firmware answered with an all-zero record | `!is_usable_fisheye_cal()` — see above |
+| Firmware predates command set V2.0 | `ProtocolError` (`InvalidCmd`) on `0x2B` |
+
+What stands in is `FISHEYE_FALLBACK_CAL`, a reference calibration measured on a
+sample TC-GU-01 and compiled into the SDK
+(`cpp/include/taccap/components/fisheye_undistorter.hpp`):
+
+```text
+fx 213.0303  fy 212.7928   cx 321.4000  cy 239.9500
+k1  -0.0172  k2   0.0091   k3  -0.0146  k4   0.0051
+```
+
+Every unit carries the same lens on the same 640x480 sensor, so these shared
+numbers are much closer to correct than no rectification at all — which is why
+`install_wrist_undistorter()` now installs undistortion **always**, and logs
+which of the two calibrations it used.
+
+**It is not a substitute for calibrating a unit.** Lens placement varies between
+assemblies, so the principal point in particular drifts per unit. Anything that
+measures in pixels off a rectified frame needs this unit's own calibration —
+store one with `fisheye_cal.py set-fisheye`. Every fallback path warns and says
+so.
+
+The one case that still throws rather than falling back is a camera running at
+something other than the calibrated 640x480: the firmware record holds only the
+8 intrinsic/distortion floats and no image size, so serving another resolution
+would mean guessing a scale factor and rectifying wrongly without a trace. That
+is a caller bug to fix, not something to paper over.
 

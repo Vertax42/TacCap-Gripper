@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The 0.1.8 entry described the wrong fisheye behaviour.** It said a unit that
+  cannot supply a calibration "degrades to raw frames with a warning" — the
+  behaviour before `39e4a24`, which landed in that same release. What 0.1.8 and
+  0.1.9 actually do is fall back to `FISHEYE_FALLBACK_CAL`. The distinction
+  matters downstream: reference-rectified frames and raw fisheye frames are not
+  interchangeable, and a reader trusting the old line would treat them as such.
+  Corrected in place, since it describes what that release shipped.
+- **`docs/CALIBRATION.md` claimed an unwritten record always reads back as
+  `None`.** Firmware 1.1.1 answers the fisheye read with a *present*, all-zero
+  record, which passes an `is None` check and then rectifies to a uniformly
+  black frame. Documented, with `is_usable_fisheye_cal()` as the test to use.
+- **The fisheye fallback was undocumented outside the headers.**
+  `docs/CALIBRATION.md` gains a section on `resolve_fisheye()`: the three ways a
+  unit fails to supply its own calibration, the reference values that stand in,
+  the per-assembly principal-point drift that makes them approximate, and why a
+  non-640x480 camera throws instead of falling back.
 
 ## [0.1.9] - 2026-08-21
 
@@ -271,9 +288,12 @@ tree by seven releases. Tagging resumes here.
     the raw frame passes through and the error is logged rather than killing
     the capture loop.
   - `Config::undistort_wrist` / `Config::fisheye_balance` on both grippers wire
-    it automatically at `open()`. Missing calibration (`CalNotSet`) or firmware
-    older than command set V2.0 (`InvalidCmd`) degrades to raw frames with a
-    warning; a camera not at the calibrated resolution throws.
+    it automatically at `open()`. A unit that cannot supply a calibration —
+    never calibrated (`CalNotSet`), an all-zero record, or firmware older than
+    command set V2.0 (`InvalidCmd`) — falls back to `FISHEYE_FALLBACK_CAL`, the
+    SDK's reference intrinsics, with a warning naming which of the three it was.
+    Undistortion is therefore always installed; only a camera that is not at the
+    calibrated resolution throws.
   - `balance` interpolates the output focal length from the calibrated value
     (0, the default and the PC tool's default) to 0.70x (1, widest field of
     view). Only fx/fy move — the principal point stays put so the view does not
