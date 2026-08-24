@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 #include <taccap/components/camera.hpp>
+#include <taccap/follower_gripper.hpp>
+#include <taccap/leader_gripper.hpp>
 #include <taccap/components/imu.hpp>
 #include <taccap/components/encoder.hpp>
 #include <taccap/protocol/payloads.hpp>
@@ -117,9 +119,35 @@ TEST(ImuDecode, FlagBitsRecognisedIndividually) {
 // written before ColorMode existed assumes BGR, and flipping it would invert
 // their colours with nothing raised. Pin it.
 
-TEST(CameraColorMode, DefaultsToBgrForBackwardCompatibility) {
+TEST(CameraColorMode, BareCameraKeepsOpenCvsBgr) {
+    // A Camera can be any V4L2 device and its frames go anywhere, so it keeps
+    // the convention every OpenCV caller already assumes.
     const xense::taccap::Camera::Config cfg{};
     EXPECT_EQ(cfg.color_mode, xense::taccap::ColorMode::Bgr);
+}
+
+TEST(CameraColorMode, WristCameraDefaultsToRgb) {
+    // The wrist stream is different: its consumers are vision/learning
+    // pipelines, and all of them want RGB. Defaulting it to BGR meant each one
+    // converting at its own call site — or forgetting to, and recording swapped
+    // channels with nothing raised. Both roles agree on this.
+    EXPECT_EQ(xense::taccap::LeaderGripper::Config{}.wrist_color_mode,
+              xense::taccap::ColorMode::Rgb);
+    EXPECT_EQ(xense::taccap::FollowerGripper::Config{}.wrist_color_mode,
+              xense::taccap::ColorMode::Rgb);
+}
+
+TEST(CameraColorMode, WristColorModeIsNotSilentlyIgnored) {
+    // Regression: the Python binding first wrote the caller's choice into
+    // Config::wrist_cam_extra.color_mode, which make_wrist_config then
+    // overwrote with Config::wrist_color_mode — so asking for BGR quietly kept
+    // giving RGB. Only hardware caught it. wrist_color_mode is the one field
+    // that decides, and it must survive round-tripping through a Config.
+    xense::taccap::LeaderGripper::Config cfg{};
+    cfg.wrist_color_mode = xense::taccap::ColorMode::Bgr;
+    EXPECT_EQ(cfg.wrist_color_mode, xense::taccap::ColorMode::Bgr);
+    // wrist_cam_extra keeps the generic Camera default and does NOT decide.
+    EXPECT_EQ(cfg.wrist_cam_extra.color_mode, xense::taccap::ColorMode::Bgr);
 }
 
 TEST(CameraColorMode, IsCarriedByTheConfigRatherThanAGlobal) {

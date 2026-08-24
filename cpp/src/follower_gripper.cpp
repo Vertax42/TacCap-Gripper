@@ -30,7 +30,11 @@ bus::Transport::Config make_transport_config(const FollowerGripper::Config& cfg)
 
 Camera::Config make_wrist_config(const FollowerGripper::Config& cfg) {
     Camera::Config c = cfg.wrist_cam_extra;
-    c.device = cfg.wrist_video;
+    c.device     = cfg.wrist_video;
+    // Config::wrist_color_mode is the wrist-specific default (RGB); it wins over
+    // wrist_cam_extra's generic Camera default (BGR), which callers reaching for
+    // wrist_cam_extra are not setting deliberately.
+    c.color_mode = cfg.wrist_color_mode;
     if (c.width  <= 0) c.width  = 640;
     if (c.height <= 0) c.height = 480;
     if (c.fps    <= 0) c.fps    = 30.0;
