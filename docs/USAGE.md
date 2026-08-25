@@ -278,8 +278,8 @@ cam.set_undistorter(undist)      # 装进采集路径:read() 和回调拿到的�
 ### 2.4 一条命令看效果
 
 ```bash
-python python/examples/wrist_camera.py right                 # 矫正(默认)
-python python/examples/wrist_camera.py right --no-undistort  # 原始鱼眼
+python python/examples/wrist_camera.py right                 # 原始鱼眼(默认)
+python python/examples/wrist_camera.py right --undistort     # 矫正
 python python/examples/wrist_camera.py right --compare       # 左右对照
 python python/examples/wrist_camera.py XCA28Z0116m           # 也可以直接给序列号
 python python/examples/wrist_camera.py right --no-mcu --no-display \
@@ -287,6 +287,9 @@ python python/examples/wrist_camera.py right --no-mcu --no-display \
 ```
 
 选择器就是 `left` / `right`,和其它示例一致 —— 内参会自动去**同侧**的夹爪上读。
+**去畸变默认关**,和 SDK 本身一致(裸 `Camera` 不带 undistorter,夹爪的
+`undistort_wrist` 默认 `False`);窗口模式下即使起在 raw 也会先把内参读好,
+因为 `u` 随时可能切到矫正。无头 + raw 是唯一不会去碰夹爪的组合。
 窗口里 `u` 键在 原始 / 矫正 / 对照 之间循环切,`[` `]` 调 balance,`s` 存图。
 没插夹爪时加 `--no-mcu` 走参考内参;`--from-npz` 用离线标定文件。完整参数 `--help`。
 

@@ -7,7 +7,7 @@ Pick the gripper the same way every other example does — `left` / `right`
 (or an explicit serial):
 
     python python/examples/wrist_camera.py left
-    python python/examples/wrist_camera.py right --no-undistort
+    python python/examples/wrist_camera.py right --undistort
     python python/examples/wrist_camera.py XCA24Z0003m --compare
 
 **This opens the XC wrist camera only.** Xense visuotactile (OG/GSPS) sensors
@@ -46,10 +46,17 @@ Where the intrinsics come from (in order):
 
 Undistortion switch:
 
-    --undistort       start rectified (default)
-    --no-undistort    start on raw fisheye frames
-    --compare         start with raw | rectified side by side
+    (default)         raw fisheye frames — the SDK's own default, where neither
+                      a bare `Camera` nor a gripper (`undistort_wrist=False`)
+                      rectifies anything until asked to
+    --undistort       rectify inside the capture path
+    --compare         raw | rectified side by side
     u                 cycle those three live, in the viewer window
+
+Note `undistort_wrist=True` does not "degrade to raw" when a unit has no stored
+calibration: undistortion is always installed, with the SDK's reference
+intrinsics standing in and a warning. Off-by-default is about the switch, not
+about whether a switched-on path might silently skip the remap.
 
 Note the undistorter is built for the calibrated 640x480 only: the firmware
 record carries no image size, so rescaling the intrinsics would be a guess and
@@ -60,9 +67,10 @@ Usage:
     # what is plugged in, and which of it this script can open
     python python/examples/wrist_camera.py --list
 
-    python python/examples/wrist_camera.py left
+    python python/examples/wrist_camera.py left                # raw fisheye
+    python python/examples/wrist_camera.py left --undistort    # rectified
     python python/examples/wrist_camera.py left --compare --balance 1.0
-    python python/examples/wrist_camera.py left --no-mcu
+    python python/examples/wrist_camera.py left --undistort --no-mcu
 
     # headless: no window, just rate stats (plus one PNG/s with --save-dir)
     python python/examples/wrist_camera.py left --no-display --duration 10
@@ -369,9 +377,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="List the connected Xense video devices and exit.")
 
     p.add_argument("--undistort", action=argparse.BooleanOptionalAction,
-                   default=True,
-                   help="Rectify frames in the capture path (default: on). "
-                        "--no-undistort starts on raw fisheye frames.")
+                   default=False,
+                   help="Rectify frames in the capture path. Off by default, "
+                        "matching the SDK itself: neither a bare Camera nor a "
+                        "gripper (undistort_wrist=False) rectifies unless asked.")
     p.add_argument("--compare", action="store_true",
                    help="Start showing raw | rectified side by side.")
     p.add_argument("--balance", type=float, default=0.0,
@@ -437,10 +446,18 @@ def main(argv=None) -> int:
             "The firmware record stores no image size; rescaling the "
             "intrinsics would be a guess."))
 
+    # Resolve the intrinsics up front whenever rectification is reachable — that
+    # includes staying raw in the viewer, where `u` can switch to rectified at
+    # any moment and an MCU round-trip mid-loop would stall the capture.
+    # Headless AND raw is the one case that can never rectify, so it skips the
+    # gripper entirely rather than opening a serial link for nothing.
+    wants_undistort = args.undistort or args.compare
+    reachable = calibrated_size and (wants_undistort or not args.no_display)
+
     undist = None
     cal = provenance = None
     is_reference = False
-    if calibrated_size:
+    if reachable:
         cal, provenance, is_reference = resolve_calibration(args, cam_info)
         undist = FisheyeUndistorter(cal, CALIB_W, CALIB_H, args.balance)
 
