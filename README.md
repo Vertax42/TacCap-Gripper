@@ -14,17 +14,17 @@ tactile data-collection gripper. Exposes a single namespace
   The **visuotactile (OG) sensors are not handled in this SDK**; capture and
   rectification live at the Python level via the `xensesdk` wheel.
 
-This repository is the foundation for two adapter repos that will follow:
+Two adapter repos build on it and are released independently:
 
-- `taccap-gripper-ros2` — ROS2 (Humble + Jazzy) hardware interface package
-- a fork of `lerobot-xense` (`feature/v5.1_dev`) with a `taccap_gripper`
-  robot class
+- `taccap_gripper_ros2` — ROS2 (Humble + Jazzy) hardware interface package
+- a fork of `lerobot-xense` with a `taccap_gripper` robot class
 
-Both adapters consume this SDK; they do not reimplement device access.
+Both only *import* the `xense.taccap` package; neither reimplements device
+access, and neither is required to use this SDK.
 
 ## Status
 
-**v0.1.8.** Command set **V2.2**, wire framing **V1.8**. Hardware-validated on
+**v0.1.9.** Command set **V2.2**, wire framing **V1.8**. Hardware-validated on
 bilateral leader setups and on real follower grippers — including the V2.2
 follower diagnostics, the MIT force-position control path, and `ControlLoop`
 under a full production load (all cameras streaming, motor cycling).
@@ -288,7 +288,7 @@ Note this is distinct from `g.motor.set_position()` (raw rad).
 
 ```python
 print(g.position())                       # -> 0.97   (nearly open)
-g.set_position(0.5, kp=8, kd=1)           # go to 50% open (no-ACK, realtime)
+g.set_position(0.5, kp_nm_per_rad=8, kd_nm_s_per_rad=1)   # 50% open (no-ACK, realtime)
 g.pos_to_rad(0.5), g.rad_to_pos(-0.59)    # explicit conversions
 ```
 
@@ -442,6 +442,8 @@ taccap-gripper/
 
 ## Documentation
 
+- **[docs/USAGE.md](docs/USAGE.md)** — 使用文档(中文):把触觉(OG)、视觉
+  (腕相机)、夹爪读数与控制三路数据分别开起来的端到端步骤。
 - **[docs/INSTALL.md](docs/INSTALL.md)** — prerequisites, C++-only builds,
   device permissions, rebuild/clean, environment traps.
 - **[docs/CALIBRATION.md](docs/CALIBRATION.md)** — encoder zero + travel span,

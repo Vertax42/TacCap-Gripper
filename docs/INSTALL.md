@@ -84,7 +84,7 @@ What ends up where (editable build):
 ```
 python/xense/taccap/
 ├── _taccap_native.cpython-312-x86_64-linux-gnu.so   # pybind11 module
-└── libtaccap_core.so.0.1.8   (+ .so.0 symlink)      # SDK core
+└── libtaccap_core.so.<version>  (+ .so.0 symlink)   # SDK core
 ```
 
 These two are co-located on purpose — the rpath is set to `$ORIGIN`,
@@ -114,7 +114,7 @@ Output:
 
 ```
 build/
-├── cpp/libtaccap_core.so(.0)(.0.1.8)
+├── cpp/libtaccap_core.so(.0)(.<version>)
 ├── cpp/examples/leader_demo
 └── cpp/tests/...                # gtest binaries; run via `ctest`
 ```
@@ -132,8 +132,8 @@ CMake options (top-level `CMakeLists.txt:19-21`):
 ```bash
 # Python — note `env -u PYTHONPATH`, see the note below
 env -u PYTHONPATH python -c "import xense.taccap as t; print(t.hello()); print(t.__version__)"
-# → taccap-gripper OK; version 0.1.8
-# → 0.1.8
+# → taccap-gripper OK; version <version>
+# → <version>          # both lines match python/xense/taccap/_version.py
 
 # Python tests (hardware-free cases always run; IMU cases skip without a gripper)
 env -u PYTHONPATH pytest python/tests
