@@ -21,7 +21,100 @@ import math
 import os
 import sys
 
-from xense.taccap import ProtocolError
+from xense.taccap import ProtocolError, Side, scan_grippers
+
+# ---- device selection, shared by every example CLI --------------------------
+#
+# One selector across the repo: a positional ``left`` / ``right`` (or a literal
+# firmware SN). Deliberately NOT a ``--sn`` / ``--device`` flag — a rig has a
+# left and a right of everything (gripper, wrist camera, tactile pair), and the
+# side is the only handle that means the same thing for all of them. Wrist
+# cameras carry the *same* sequence number as the gripper they sit on, so
+# ``left`` picks out one physical half of the rig everywhere it appears.
+#
+# Side always comes from the firmware SN read over the wire (Cmd::GetSn), never
+# from the CH343 USB-chip SN — that one is burned independently of which hand
+# the gripper is.
+
+# Accepted spellings of the side selector. Anything else on the command line is
+# treated as a literal firmware SN, so the two forms can never collide (Xense
+# SNs start with "TCGU01…").
+SIDE_ALIASES = {
+    "left": Side.Left,
+    "l": Side.Left,
+    "right": Side.Right,
+    "r": Side.Right,
+}
+
+
+def side_str(side) -> str:
+    return {Side.Left: "Left", Side.Right: "Right"}.get(side, "Unknown")
+
+
+def listing(all_eps) -> str:
+    return (", ".join(f"{e.firmware_sn} ({side_str(e.side)})" for e in all_eps)
+            or "(none)")
+
+
+def resolve_target(target: str | None):
+    """``left`` / ``right`` / a firmware SN / ``None`` -> one endpoint.
+
+    ``None`` means "the only gripper plugged in" and fails loudly when that is
+    not what is plugged in — an example must never guess which half of a
+    bilateral rig the user meant.
+
+    Returns ``(endpoint, by_side, all_endpoints)``.
+    """
+    all_eps = scan_grippers()
+
+    if target is None:
+        if len(all_eps) == 1:
+            return all_eps[0], False, all_eps
+        sys.exit(
+            f"error: {len(all_eps)} grippers plugged in — say which one: "
+            "'left', 'right', or a firmware SN.\n"
+            f"       currently visible: {listing(all_eps)}"
+        )
+
+    side = SIDE_ALIASES.get(target.strip().lower())
+    by_side = side is not None
+    if by_side:
+        matches = [e for e in all_eps if e.side == side]
+        what = f"side={side_str(side)}"
+    else:
+        matches = [e for e in all_eps if e.firmware_sn == target]
+        what = f"firmware SN={target!r}"
+
+    if not matches:
+        hint = "" if by_side else "\n       (you can also just pass 'left' or 'right')"
+        sys.exit(
+            f"error: no gripper matching {what} is plugged in.\n"
+            f"       currently visible: {listing(all_eps)}{hint}"
+        )
+    if len(matches) > 1:
+        if by_side:
+            sys.exit(
+                f"error: {len(matches)} plugged-in grippers report {what} — "
+                f"their firmware SNs are "
+                f"{', '.join(e.firmware_sn for e in matches)}. Fix the burned "
+                "SNs, or pass the SN you want explicitly."
+            )
+        sys.exit(
+            f"error: {len(matches)} grippers report SN={target!r} — "
+            "firmware-SN collision, check firmware burning."
+        )
+    return matches[0], by_side, all_eps
+
+
+def add_target_argument(parser, *, required: bool = False) -> None:
+    """Attach the repo-wide positional selector to an argparse parser."""
+    parser.add_argument(
+        "target", nargs=None if required else "?", metavar="left|right|SN",
+        help="Which gripper: 'left' / 'right' (side comes from the firmware SN), "
+             "or an explicit SN such as TCGU01A28Z0116m."
+             + ("" if required else " Omit when exactly one is plugged in."),
+    )
+
 
 # Tolerance for the "did the new zero actually take" check. The firmware
 # latches whatever it sees the instant it processes the command, so any
@@ -139,7 +232,7 @@ def require_support(gripper, fw_version: str | None = None) -> None:
             f"  {e}\n"
             f"  Nothing was changed. Flash it first:\n"
             f"      python {_ota_script_path()} tc-gu-01-master.bin \\\n"
-            f"          --side <left|right> --target-version 1.2.1\n"
+            f"          <left|right> --target-version 1.2.1\n"
             f"  (that image ships in this SDK under firmware/; pick it by the\n"
             f"   gripper's ROLE — the last character of its firmware SN, 'm'\n"
             f"   for master and 's' for slave — not by which hand it is on.)"

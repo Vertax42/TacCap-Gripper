@@ -75,71 +75,6 @@ def _rad_to_deg(r: float) -> float:
     return r * 180.0 / math.pi
 
 
-# Accepted spellings of the side selector. Anything else on the command
-# line is treated as a literal firmware SN, so the two forms can never
-# collide (Xense SNs start with "TCGU01…").
-_SIDE_ALIASES = {
-    "left": Side.Left,
-    "l": Side.Left,
-    "right": Side.Right,
-    "r": Side.Right,
-}
-
-
-def _side_str(side) -> str:
-    return {Side.Left: "Left", Side.Right: "Right"}.get(side, "Unknown")
-
-
-def _listing(all_eps) -> str:
-    return (
-        ", ".join(f"{e.firmware_sn} ({_side_str(e.side)})" for e in all_eps)
-        or "(none)"
-    )
-
-
-def _resolve_target(target: str):
-    """Resolve ``left``/``right`` (or a literal firmware SN) to one endpoint.
-
-    Side is whatever the firmware SN says (``scan_grippers()`` reads it over
-    the wire via Cmd::GetSn) — deliberately not the CH343 chip serial, which
-    is unrelated to which hand the gripper is.
-    """
-    all_eps = scan_grippers()
-    side = _SIDE_ALIASES.get(target.strip().lower())
-    by_side = side is not None
-
-    if by_side:
-        matches = [e for e in all_eps if e.side == side]
-        what = f"side={_side_str(side)}"
-    else:
-        matches = [e for e in all_eps if e.firmware_sn == target]
-        what = f"firmware SN={target!r}"
-
-    if not matches:
-        hint = (
-            ""
-            if by_side
-            else "\n       (you can also just pass 'left' or 'right')"
-        )
-        sys.exit(
-            f"error: no gripper matching {what} is plugged in.\n"
-            f"       currently visible: {_listing(all_eps)}{hint}"
-        )
-    if len(matches) > 1:
-        if by_side:
-            sys.exit(
-                f"error: {len(matches)} plugged-in grippers report "
-                f"{what} — their firmware SNs are "
-                f"{', '.join(e.firmware_sn for e in matches)}. Fix the "
-                "burned SNs, or pass the SN you want explicitly."
-            )
-        sys.exit(
-            f"error: {len(matches)} grippers report SN={target!r} — "
-            "firmware-SN collision, check firmware burning."
-        )
-    return matches[0], by_side, all_eps
-
-
 def _open_gripper(eps) -> LeaderGripper:
     # Calibration only talks to the MCU (encoder); cameras stay off.
     return LeaderGripper(eps.mcu_device)
@@ -168,7 +103,7 @@ def _prompt(msg: str) -> None:
 
 
 def calibrate(target: str, *, skip_open_probe: bool) -> int:
-    eps, by_side, all_eps = _resolve_target(target)
+    eps, by_side, all_eps = _calib_flow.resolve_target(target)
 
     print()
     print(_cyan("=" * 64))
@@ -177,13 +112,13 @@ def calibrate(target: str, *, skip_open_probe: bool) -> int:
     print(f"  requested    : {_bold(target)}"
           f"{'  (resolved by side)' if by_side else ''}")
     print(f"  firmware SN  : {_bold(eps.firmware_sn)}")
-    print(f"  side         : {_bold(_side_str(eps.side))}")
+    print(f"  side         : {_bold(_calib_flow.side_str(eps.side))}")
     print(f"  mcu serial   : {eps.mcu_serial}")
     print(f"  mcu device   : {eps.mcu_device}")
     if by_side:
         # Show the whole scan when the SN was chosen for the user — it is
         # the only way they can tell the pick was the one they meant.
-        print(f"  visible      : {_listing(all_eps)}")
+        print(f"  visible      : {_calib_flow.listing(all_eps)}")
     print()
 
     g = _open_gripper(eps)
@@ -301,13 +236,7 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument(
-        "target",
-        metavar="left|right|SN",
-        help="Which leader gripper to calibrate: 'left' / 'right' (the "
-             "firmware SN is looked up and printed for you), or an explicit "
-             "firmware SN such as TCGU01A28Z0023m.",
-    )
+    _calib_flow.add_target_argument(p, required=True)
     p.add_argument(
         "--skip-open-probe",
         action="store_true",

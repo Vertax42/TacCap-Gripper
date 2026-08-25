@@ -76,7 +76,7 @@ inactive bank and uses the STM32H5 bank swap, so one build serves both banks.
 ```bash
 python python/examples/ota_update.py \
     third_party/firmware/tc-gu-01/build/master/tc-gu-01-master.bin \
-    --side left --target-version 1.2.1
+    left --target-version 1.2.1
 ```
 
 > **刷完必须断电重插，这是升级流程的一部分，不是排障手段。**
@@ -100,7 +100,7 @@ python python/examples/ota_update.py \
 >
 > ```bash
 > python python/examples/ota_update.py tc-gu-01-master.bin \
->     --side left --target-version 1.2.1
+>     left --target-version 1.2.1
 > ```
 
 Notes:

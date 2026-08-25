@@ -25,7 +25,8 @@ Usage:
     python python/examples/ota_update.py tc-gu-01-master.bin
 
     # Bilateral: pick a side explicitly
-    python python/examples/ota_update.py tc-gu-01-master.bin --side left
+    python python/examples/ota_update.py tc-gu-01-master.bin left
+    python python/examples/ota_update.py --get-status right
 
     # Tag the target version (informational; firmware uses it for the
     # post-install verification log + bank metadata).
@@ -61,25 +62,15 @@ from xense.taccap import (
     OtaTargetVersion,
     Side,
     crc32_iso_hdlc,
-    find_left,
-    find_one,
-    find_right,
     log,
 )
 
 import _calib_flow
 
 
-def _open_gripper(side: str) -> tuple[LeaderGripper, object]:
-    """Resolve `side` ('auto' | 'left' | 'right') → LeaderGripper + endpoints."""
-    if side == "auto":
-        eps = find_one()
-    elif side == "left":
-        eps = find_left()
-    elif side == "right":
-        eps = find_right()
-    else:
-        raise ValueError(f"bad --side: {side!r}")
+def _open_gripper(target: str | None) -> tuple[LeaderGripper, object]:
+    """Resolve the repo-wide selector (`left` / `right` / SN / None) → gripper."""
+    eps, _by_side, _all = _calib_flow.resolve_target(target)
     # OTA only needs the MCU control link; cameras stay off (the default).
     g = LeaderGripper(mcu_device=eps.mcu_device)
     return g, eps
@@ -340,9 +331,10 @@ def main(argv=None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("firmware", nargs="?",
                    help="Path to firmware .bin (omit with --get-status)")
-    p.add_argument("--side", choices=("auto", "left", "right"),
-                   default="auto",
-                   help="Which gripper to flash (default: auto = single-gripper)")
+    p.add_argument("target", nargs="?", metavar="left|right|SN",
+                   help="Which gripper to flash: 'left' / 'right' (side comes "
+                        "from the firmware SN), or an explicit SN. Omit when "
+                        "exactly one gripper is plugged in.")
     p.add_argument("--target-version", default=None,
                    help="Target version MAJOR.MINOR.PATCH "
                         "(informational; default 0.0.0)")
@@ -357,6 +349,15 @@ def main(argv=None) -> int:
                    help="Print current firmware-side OTA state machine + exit")
     args = p.parse_args(argv)
 
+    # `--get-status` takes no firmware, so a lone positional there is the
+    # gripper selector, not a path. Without this, `--get-status right` reports
+    # "firmware file not found: right", which is a confusing way to say
+    # "positional order differs when you are not flashing".
+    if args.get_status and args.firmware and not args.target:
+        args.firmware, args.target = None, args.firmware
+    if args.get_status and args.firmware:
+        p.error("--get-status takes no firmware image "
+                f"(got {args.firmware!r}); pass only the gripper selector")
     if not args.get_status and not args.firmware:
         p.error("firmware argument required unless --get-status is given")
 
@@ -368,7 +369,7 @@ def main(argv=None) -> int:
             return 1
 
     log.set_level("info")
-    g, eps = _open_gripper(args.side)
+    g, eps = _open_gripper(args.target)
     side = "left" if eps.side == Side.Left else "right"
     print(f"[discovery] {side}  ch343={eps.mcu_serial}  fw_sn={eps.firmware_sn!r}")
     print(f"            {eps.mcu_device}")

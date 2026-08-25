@@ -3,6 +3,26 @@
 """
 Stand-alone wrist-camera viewer, with fisheye undistortion on a switch.
 
+Pick the gripper the same way every other example does — `left` / `right`
+(or an explicit serial):
+
+    python python/examples/wrist_camera.py left
+    python python/examples/wrist_camera.py right --no-undistort
+    python python/examples/wrist_camera.py XCA24Z0003m --compare
+
+**This opens the XC wrist camera only.** Xense visuotactile (OG/GSPS) sensors
+sit on `/dev/video*` right beside it, and they are NOT usable here: their
+capture and rectification live in the `xensesdk` wheel, not in this SDK.
+Selection is therefore by serial grammar, never by device index — a GSPS serial
+or a raw `/dev/videoN` path is refused rather than opened.
+
+    Wrist camera   XC<batch><line><seq><m|s>    e.g. XCA24Z0003m
+    Visuotactile   GSPS01<batch><line><seq>     e.g. GSPS01A24Z0001   (refused here)
+
+Side comes from the sequence's last digit — odd = left, even = right — the same
+rule the firmware SN uses, so a wrist camera resolves to the same side as the
+gripper it is mounted on. The `m` / `s` patch letter is leader / follower.
+
 The wrist UVC device is normally owned by an external camera service, so
 `LeaderGripper.open()` does not touch it (`open_cameras` defaults to False).
 This script opens it directly as a bare `Camera` — the same C++ class the
@@ -16,7 +36,7 @@ Where the intrinsics come from (in order):
                     `fisheye_cal.py set-fisheye --from-npz` writes to flash.
   --no-mcu          skip the gripper entirely and use FISHEYE_FALLBACK_CAL,
                     the SDK's shared reference calibration.
-  (default)         ask the gripper over the MCU link via
+  (default)         ask the gripper **on the same side** over the MCU link via
                     `Calibration.resolve_fisheye()`, which applies the
                     read-and-fall-back policy for you and reports whether the
                     unit supplied its own numbers or the reference ones stood
@@ -37,19 +57,15 @@ is refused rather than silently wrong. Ask for another size and undistortion
 is unavailable at that size (the script says so and stays on raw frames).
 
 Usage:
-    # list what V4L2 devices exist, then pick one
+    # what is plugged in, and which of it this script can open
     python python/examples/wrist_camera.py --list
 
-    python python/examples/wrist_camera.py --device /dev/video2
-    python python/examples/wrist_camera.py --device /dev/video2 --no-undistort
-    python python/examples/wrist_camera.py --device /dev/video2 --compare \
-        --balance 1.0                      # widest FoV, more black border
-    python python/examples/wrist_camera.py --device /dev/video2 --no-mcu
-    python python/examples/wrist_camera.py --device /dev/video2 --sn TCGU01A24Z0001m
+    python python/examples/wrist_camera.py left
+    python python/examples/wrist_camera.py left --compare --balance 1.0
+    python python/examples/wrist_camera.py left --no-mcu
 
     # headless: no window, just rate stats (plus one PNG/s with --save-dir)
-    python python/examples/wrist_camera.py --device /dev/video2 \
-        --no-display --duration 10
+    python python/examples/wrist_camera.py left --no-display --duration 10
 
 Keys (viewer window):
     q / ESC   quit            u   cycle raw / rectified / compare
@@ -69,6 +85,7 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import re
 import sys
 import time
 
@@ -84,6 +101,7 @@ from xense.taccap import (
     LeaderGripper,
     ProtocolError,
     Role,
+    Side,
     log,
     scan_grippers,
 )
@@ -112,55 +130,120 @@ def _yellow(s):
 
 
 # ---- device selection -------------------------------------------------------
+#
+# Serial grammar, shared with the firmware SN rule (see discovery.hpp) and with
+# the sibling lerobot integration's serial_discovery.py — keep the three in step.
+#
+#   wrist camera   XC<batch><line><seq><m|s>   XCA24Z0003m
+#   visuotactile   GSPS01<batch><line><seq>    GSPS01A24Z0001
+#
+# The /dev/v4l/by-id name embeds the serial, which is why selection goes through
+# it rather than through /dev/videoN: the index moves with plug order, and the
+# node right next to the wrist camera is usually a visuotactile sensor.
+BYID_DIR = "/dev/v4l/by-id"
+CAMERA_SN_RE = re.compile(r"(XC[A-Z]\d{2}[ZA]\d{4}[ms])")
+TACTILE_SN_RE = re.compile(r"(GSPS01[A-Z]\d{2}[ZA]\d{4})")
+
+SIDES = ("left", "right")
+PATCH_ROLE = {"m": "leader", "s": "follower"}
 
 
-def list_video_devices() -> list[tuple[str, str, str]]:
-    """(node, human name, stable /dev/v4l/by-id path or "") for each V4L2 node."""
-    by_id = {}
-    for link in glob.glob("/dev/v4l/by-id/*"):
-        try:
-            by_id[os.path.realpath(link)] = link
-        except OSError:
-            pass
+def side_of_serial(sn: str) -> str:
+    """Odd trailing sequence digit → left, even → right (单左双右)."""
+    seq = sn[-5:-1] if sn[-1] in PATCH_ROLE else sn[-4:]
+    return "left" if int(seq[-1]) % 2 == 1 else "right"
 
-    out = []
-    for d in sorted(glob.glob("/sys/class/video4linux/video*"),
-                    key=lambda p: int(p.rsplit("video", 1)[1])):
-        node = "/dev/" + os.path.basename(d)
-        try:
-            with open(os.path.join(d, "name")) as f:
-                name = f.read().strip()
-        except OSError:
-            name = "?"
-        out.append((node, name, by_id.get(node, "")))
+
+def role_of_serial(sn: str) -> str:
+    return PATCH_ROLE.get(sn[-1], "unknown")
+
+
+def scan_video_devices() -> dict[str, list[dict]]:
+    """Classify the /dev/v4l/by-id capture nodes into wrist / tactile / other."""
+    out = {"wrist": [], "tactile": [], "other": []}
+    for path in sorted(glob.glob(f"{BYID_DIR}/*-video-index0")):
+        cam = CAMERA_SN_RE.search(path)
+        tac = TACTILE_SN_RE.search(path)
+        if cam:
+            sn = cam.group(1)
+            out["wrist"].append({"serial": sn, "path": path,
+                                 "side": side_of_serial(sn),
+                                 "role": role_of_serial(sn)})
+        elif tac:
+            out["tactile"].append({"serial": tac.group(1), "path": path,
+                                   "side": side_of_serial(tac.group(1))})
+        else:
+            out["other"].append({"serial": "", "path": path})
     return out
 
 
 def print_devices() -> None:
-    devs = list_video_devices()
-    if not devs:
-        print("no /dev/video* nodes found — is the camera plugged in?")
-        return
-    print(_bold("\nV4L2 capture nodes"))
-    for node, name, stable in devs:
-        print(f"  {node:<14} {name}")
-        if stable:
-            print(f"                 {stable}")
-    print("\nA UVC camera exposes several nodes; the capture one is normally the"
-          "\nfirst (…-video-index0). Pass it with --device.\n")
+    devs = scan_video_devices()
+    print(_bold("\nXC wrist cameras — what this script can open"))
+    if devs["wrist"]:
+        for d in devs["wrist"]:
+            print(f"  {d['serial']:<14} {d['side']:<5} {d['role']:<9} {d['path']}")
+    else:
+        print("  " + _yellow("none found") +
+              f" — no XC serial under {BYID_DIR}/")
+
+    if devs["tactile"]:
+        print(_bold("\nGSPS visuotactile sensors — NOT openable here"))
+        for d in devs["tactile"]:
+            print(f"  {d['serial']:<14} {d['side']:<5} {'':<9} {d['path']}")
+        print("  这些走 xensesdk,不是本 SDK:"
+              " Sensor.create(<serial>) — 见 docs/USAGE.md")
+
+    if devs["other"]:
+        print(_bold("\nOther V4L2 capture nodes (not Xense devices)"))
+        for d in devs["other"]:
+            print(f"  {'':<14} {'':<5} {'':<9} {d['path']}")
+    print()
 
 
-def resolve_device(requested: str | None) -> str:
-    if requested:
-        return requested
-    # Only auto-pick when there is exactly one stable capture node, so we never
-    # silently grab someone else's webcam.
-    stable = sorted(glob.glob("/dev/v4l/by-id/*-video-index0"))
-    if len(stable) == 1:
-        log.info(f"auto-selected the only capture node: {stable[0]}")
-        return stable[0]
-    print_devices()
-    raise SystemExit("pass --device explicitly (see the nodes above)")
+def resolve_wrist_camera(target: str) -> dict:
+    """Resolve `left` / `right` / an explicit XC serial to one wrist camera.
+
+    Refuses anything that is not an XC device — a GSPS serial and a raw
+    /dev/videoN path are both rejected with an explanation rather than opened,
+    because pointing this script at a visuotactile sensor is the one mistake
+    the device layout invites.
+    """
+    key = target.strip()
+    devs = scan_video_devices()
+
+    if TACTILE_SN_RE.search(key):
+        raise SystemExit(
+            f"{key} 是视触觉(GSPS)传感器,不是腕相机。它的采集与矫正在 xensesdk 里,"
+            "不走本 SDK —— 见 docs/USAGE.md 的触觉一节。")
+    if key.startswith("/dev/"):
+        raise SystemExit(
+            f"不接受设备路径({key})。/dev/videoN 的编号随插拔顺序变,而且紧挨着腕相机的"
+            "那个节点通常是视触觉传感器 —— 请用 left / right 或 XC 序列号。")
+
+    if key.lower() in SIDES:
+        side = key.lower()
+        matches = [d for d in devs["wrist"] if d["side"] == side]
+        if not matches:
+            print_devices()
+            raise SystemExit(f"没有找到 {side} 侧的 XC 腕相机(见上表)。")
+        if len(matches) > 1:
+            names = ", ".join(f"{d['serial']}({d['role']})" for d in matches)
+            raise SystemExit(
+                f"{side} 侧有 {len(matches)} 个腕相机:{names}。"
+                "leader 和 follower 各带一个时请直接给序列号。")
+        return matches[0]
+
+    if CAMERA_SN_RE.fullmatch(key):
+        for d in devs["wrist"]:
+            if d["serial"] == key:
+                return d
+        found = ", ".join(d["serial"] for d in devs["wrist"]) or "无"
+        raise SystemExit(f"序列号 {key} 没插在这台机器上。已连接的腕相机:{found}")
+
+    raise SystemExit(
+        f"无法识别的目标 {target!r} —— 用 left / right,或形如 XCA24Z0003m 的腕相机序列号"
+        "(--list 可以列出连着的设备)。")
 
 
 # ---- calibration source -----------------------------------------------------
@@ -184,42 +267,43 @@ def cal_from_npz(path: str) -> CameraFisheyeCal:
     )
 
 
-def cal_from_gripper(sn: str | None, mcu: str | None) -> tuple[CameraFisheyeCal, str]:
-    """Read the intrinsics off the MCU. Returns (cal, provenance)."""
-    if mcu is None:
-        grippers = scan_grippers()
-        if not grippers:
-            raise RuntimeError("no TacCap gripper found")
-        if sn is not None:
-            match = [g for g in grippers if g.firmware_sn == sn]
-            if not match:
-                found = ", ".join(g.firmware_sn or "<no SN>" for g in grippers)
-                raise RuntimeError(f"SN {sn!r} not found. Connected: {found}")
-            eps = match[0]
-        elif len(grippers) > 1:
-            names = ", ".join(g.firmware_sn or "<no SN>" for g in grippers)
-            raise RuntimeError(f"{len(grippers)} grippers found ({names}) — "
-                               "pass --sn to pick one")
-        else:
-            eps = grippers[0]
-        mcu, role = eps.mcu_device, eps.role
-    else:
-        role = Role.Unknown
+def cal_from_gripper(cam: dict) -> tuple[CameraFisheyeCal, str]:
+    """Read the intrinsics off the MCU of the gripper on the camera's side.
+
+    The wrist camera's own serial already says which side (and which role) it
+    belongs to, so there is nothing extra to select here — that is the point of
+    keeping one `left` / `right` selector for the whole rig.
+    """
+    grippers = scan_grippers()
+    if not grippers:
+        raise RuntimeError("no TacCap gripper found")
+
+    want_side = Side.Left if cam["side"] == "left" else Side.Right
+    want_role = {"leader": Role.Leader, "follower": Role.Follower}.get(cam["role"])
+    matches = [g for g in grippers if g.side == want_side]
+    if want_role is not None and any(g.role == want_role for g in matches):
+        matches = [g for g in matches if g.role == want_role]
+    if not matches:
+        found = ", ".join(f"{g.firmware_sn or '<no SN>'}" for g in grippers) or "无"
+        raise RuntimeError(
+            f"no {cam['side']} gripper on the bus to read the calibration from "
+            f"(connected: {found})")
+    eps = matches[0]
 
     # The fisheye record lives on both roles; the class only decides which
     # command surface we get, so default to leader when the SN can't say.
-    cls = FollowerGripper if role == Role.Follower else LeaderGripper
-    with cls(mcu_device=mcu) as g:
+    cls = FollowerGripper if eps.role == Role.Follower else LeaderGripper
+    with cls(mcu_device=eps.mcu_device) as g:
         # resolve_fisheye() — not read_fisheye() — because an uncalibrated unit
         # answers with an all-zero record rather than a NACK, and remapping with
         # fx = fy = 0 yields a uniformly black frame with nothing raised.
         cal, is_reference, reason = g.calibration.resolve_fisheye()
     if is_reference:
         return cal, f"SDK reference intrinsics ({reason})"
-    return cal, f"read from {mcu}"
+    return cal, f"read from {eps.firmware_sn or eps.mcu_device}"
 
 
-def resolve_calibration(args) -> tuple[CameraFisheyeCal, str, bool]:
+def resolve_calibration(args, cam: dict) -> tuple[CameraFisheyeCal, str, bool]:
     """Returns (cal, provenance, is_reference)."""
     if args.from_npz:
         return cal_from_npz(args.from_npz), f"loaded from {args.from_npz}", False
@@ -227,7 +311,7 @@ def resolve_calibration(args) -> tuple[CameraFisheyeCal, str, bool]:
         return (FISHEYE_FALLBACK_CAL,
                 "SDK reference intrinsics (--no-mcu)", True)
     try:
-        cal, provenance = cal_from_gripper(args.sn, args.mcu)
+        cal, provenance = cal_from_gripper(cam)
     except (RuntimeError, ProtocolError, OSError) as e:
         # The wrist camera is usable without the MCU link, so a failure here
         # degrades to the reference calibration rather than aborting — same
@@ -275,11 +359,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--device", default=None,
-                   help="V4L2 node, e.g. /dev/video2 or a /dev/v4l/by-id/... "
-                        "path. Auto-selected only when exactly one exists.")
+    p.add_argument("target", nargs="?", metavar="left|right|XC-SN",
+                   help="Which wrist camera to open: 'left' / 'right' (resolved "
+                        "by the serial's sequence parity, same rule as the "
+                        "gripper SN), or an explicit XC serial such as "
+                        "XCA24Z0003m. Visuotactile (GSPS) sensors are refused — "
+                        "they belong to xensesdk, not to this SDK.")
     p.add_argument("--list", action="store_true",
-                   help="Print the V4L2 nodes on this machine and exit.")
+                   help="List the connected Xense video devices and exit.")
 
     p.add_argument("--undistort", action=argparse.BooleanOptionalAction,
                    default=True,
@@ -293,10 +380,6 @@ def build_parser() -> argparse.ArgumentParser:
                         "with more black border. Clamped to [0,1].")
 
     src = p.add_argument_group("calibration source")
-    src.add_argument("--sn", default=None,
-                     help="Firmware SN of the gripper to read intrinsics from.")
-    src.add_argument("--mcu", default=None,
-                     help="MCU serial device, skipping discovery.")
     src.add_argument("--from-npz", metavar="FILE", default=None,
                      help="Read K (3x3) and D (4,) from an OpenCV .npz instead "
                           "of from the gripper.")
@@ -335,8 +418,13 @@ def main(argv=None) -> int:
     if args.list:
         print_devices()
         return 0
+    if not args.target:
+        raise SystemExit(
+            "缺少目标 —— 用 left / right,或腕相机序列号(如 XCA24Z0003m);"
+            "--list 可以列出连着的设备。")
 
-    device = resolve_device(args.device)
+    cam_info = resolve_wrist_camera(args.target)
+    device = cam_info["path"]
     color_mode = ColorMode.RGB if args.color_mode == "rgb" else ColorMode.BGR
 
     # The remap tables are defined at the calibrated resolution only. Say so
@@ -353,7 +441,7 @@ def main(argv=None) -> int:
     cal = provenance = None
     is_reference = False
     if calibrated_size:
-        cal, provenance, is_reference = resolve_calibration(args)
+        cal, provenance, is_reference = resolve_calibration(args, cam_info)
         undist = FisheyeUndistorter(cal, CALIB_W, CALIB_H, args.balance)
 
     mode = MODE_RAW
@@ -366,6 +454,8 @@ def main(argv=None) -> int:
                  color_mode=color_mode)
 
     print(_bold("\nWrist camera"))
+    print(f"  serial     : {cam_info['serial']}  "
+          f"({cam_info['side']}, {cam_info['role']})")
     print(f"  device     : {device}")
     print(f"  format     : {args.width}x{args.height} @ {args.fps:g} "
           f"{'YUYV' if args.no_mjpg else 'MJPG'}, {args.color_mode.upper()}")

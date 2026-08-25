@@ -24,7 +24,7 @@ turn raw encoder radians into a 0..1 opening — see
 Usage:
     # Show both records
     python python/examples/fisheye_cal.py show
-    python python/examples/fisheye_cal.py show --sn SN000003
+    python python/examples/fisheye_cal.py show right
 
     # Write fisheye intrinsics + distortion
     python python/examples/fisheye_cal.py set-fisheye \\
@@ -40,7 +40,8 @@ Usage:
     # Or write a known value directly
     python python/examples/fisheye_cal.py set-encoder-max --max-rad 1.30
 
-Tip: list available SNs with
+选择器和其它示例一致:位置参数 left / right(或直接给固件 SN),
+省略则要求只插了一台。列出连着的夹爪:
     python -c "from xense.taccap import scan_grippers; \\
                [print(g.firmware_sn, g.mcu_device) for g in scan_grippers()]"
 """
@@ -55,7 +56,6 @@ from xense.taccap import (
     FollowerGripper,
     LeaderGripper,
     ProtocolError,
-    scan_grippers,
 )
 
 import _calib_flow
@@ -79,25 +79,6 @@ def _green(s):
     return _c("32", s)
 
 
-def resolve_mcu_device(sn: str | None) -> str:
-    """Pick the MCU serial device, by firmware SN when one is given."""
-    grippers = scan_grippers()
-    if not grippers:
-        raise SystemExit("no TacCap gripper found — is one plugged in?")
-    if sn is None:
-        if len(grippers) > 1:
-            names = ", ".join(g.firmware_sn or "<no SN>" for g in grippers)
-            raise SystemExit(
-                f"{len(grippers)} grippers found ({names}) — pass --sn to pick one"
-            )
-        return grippers[0].mcu_device
-    for g in grippers:
-        if g.firmware_sn == sn:
-            return g.mcu_device
-    found = ", ".join(g.firmware_sn or "<no SN>" for g in grippers)
-    raise SystemExit(f"SN {sn!r} not found. Connected: {found}")
-
-
 def open_gripper(args):
     """Open as a follower when asked, else as a leader.
 
@@ -105,7 +86,8 @@ def open_gripper(args):
     classes share the same discovery path, so this is purely about which
     command surface the caller wants.
     """
-    device = resolve_mcu_device(args.sn)
+    eps, _by_side, _all = _calib_flow.resolve_target(args.target)
+    device = eps.mcu_device
     cls = FollowerGripper if getattr(args, "follower", False) else LeaderGripper
     return cls(mcu_device=device)
 
@@ -240,18 +222,23 @@ def cmd_measure_encoder_max(args) -> int:
 
 
 def main() -> int:
-    # Device selection lives on a parent parser so it is accepted either
-    # before or after the subcommand (`--sn X show` and `show --sn X`).
+    # Device selection lives on a parent parser so every subcommand takes the
+    # same positional selector (`show right`, `set-fisheye left ...`) — the one
+    # form used across all the examples.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--sn", help="firmware SN of the gripper to talk to")
+    _calib_flow.add_target_argument(common)
     common.add_argument("--follower", action="store_true",
                         help="open as a FollowerGripper (fisheye only; the "
                              "encoder-max commands are leader-only)")
 
+    # `common` goes on the SUBcommands only. It used to be on the top-level
+    # parser too, so `--sn X show` and `show --sn X` both worked; a positional
+    # selector cannot do that (the first word would be eaten as the target),
+    # and having --follower on both parsers meant the subparser's default
+    # silently overwrote a top-level `--follower` anyway.
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        parents=[common],
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 

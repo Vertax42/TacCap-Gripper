@@ -16,6 +16,10 @@
 夹爪走串口,两个相机走 USB 视频,互不抢占同一个句柄 —— 但它们**共享 USB 带宽**,
 见[三路一起跑](#三路一起跑)。
 
+> **示例脚本一律用位置参数 `left` / `right` 选设备**(或直接给序列号),没有
+> `--sn` / `--side` / `--device` 之类的开关 —— 见
+> [EXAMPLES.md](EXAMPLES.md#选谁统一用-left--right)。
+
 前置的安装、设备权限、`PYTHONPATH` / `LD_LIBRARY_PATH` 陷阱见
 [docs/INSTALL.md](INSTALL.md)。下文假定 `xense-taccap` 环境已激活、
 `import xense.taccap` 能成功。
@@ -34,16 +38,30 @@ for g in scan_grippers():
     s='L' if g.side==Side.Left else 'R'
     print(f'  [{s}] {g.role} ch343={g.mcu_serial} fw_sn={g.firmware_sn!r}')"
 
-# 视觉(腕相机):V4L2 节点,发现层不枚举它
+# 视觉(腕相机)+ 触觉(OG):都在 /dev/v4l/by-id 下,按序列号区分
 python python/examples/wrist_camera.py --list
 
 # 触觉(OG):由 xensesdk 自己扫,返回 {序列号: cam_id}
 python -c "from xensesdk import Sensor; print(Sensor.scanSerialNumber())"
 ```
 
-健康的输出:夹爪那条打出 `[L]` / `[R]` 且 `fw_sn` 非空;OG 那条打出形如
-`{'OG000352': 10}` 的字典。`fw_sn` 为空说明固件还没烧 SN(或固件早于 V1.6),
-此时侧别会是 `Side.Unknown`。
+健康的输出:夹爪那条打出 `[L]` / `[R]` 且 `fw_sn` 非空;`--list` 那条把腕相机
+(`XC…`)和视触觉(`GSPS01…`)分开列出;OG 那条打出形如 `{'OG000352': 10}` 的
+字典。`fw_sn` 为空说明固件还没烧 SN(或固件早于 V1.6),此时侧别会是
+`Side.Unknown`。
+
+> **三类设备靠序列号区分,不靠设备号。** `/dev/videoN` 的编号随插拔顺序变,而且
+> 腕相机和视触觉挨着枚举 —— 认错了就会把触觉传感器当相机打开。序列号语法和
+> 夹爪固件 SN 是同一套(**序号末位单左双右**,`m` = leader / `s` = follower):
+>
+> | 设备 | 语法 | 例 |
+> | --- | --- | --- |
+> | 夹爪 | `TCGU01<批次><产线><序号><m\|s>` | `TCGU01A28Z0116m` |
+> | 腕相机 | `XC<批次><产线><序号><m\|s>` | `XCA28Z0116m` |
+> | 视触觉 | `GSPS01<批次><产线><序号>` | `GSPS01A31Z0049` |
+>
+> 腕相机的序号和它所在夹爪的序号一致,所以 `left` / `right` 一个选择器就能同时
+> 定位夹爪和它的腕相机。
 
 > **腕相机不在发现结果里,这是设计使然。** 发现层只认 MCU:UVC 设备通常由外部
 > 相机服务持有,SDK 不去抢。所以夹爪对象默认 **不打开** 腕相机
@@ -260,16 +278,20 @@ cam.set_undistorter(undist)      # 装进采集路径:read() 和回调拿到的�
 ### 2.4 一条命令看效果
 
 ```bash
-python python/examples/wrist_camera.py --device /dev/video2              # 矫正
-python python/examples/wrist_camera.py --device /dev/video2 --no-undistort  # 原始鱼眼
-python python/examples/wrist_camera.py --device /dev/video2 --compare     # 左右对照
-python python/examples/wrist_camera.py --device /dev/video2 --no-mcu --no-display \
-    --duration 10 --save-dir /tmp/shots                                   # 无头,存图
+python python/examples/wrist_camera.py right                 # 矫正(默认)
+python python/examples/wrist_camera.py right --no-undistort  # 原始鱼眼
+python python/examples/wrist_camera.py right --compare       # 左右对照
+python python/examples/wrist_camera.py XCA28Z0116m           # 也可以直接给序列号
+python python/examples/wrist_camera.py right --no-mcu --no-display \
+    --duration 10 --save-dir /tmp/shots                      # 无头,存图
 ```
 
+选择器就是 `left` / `right`,和其它示例一致 —— 内参会自动去**同侧**的夹爪上读。
 窗口里 `u` 键在 原始 / 矫正 / 对照 之间循环切,`[` `]` 调 balance,`s` 存图。
-没插夹爪时加 `--no-mcu` 走参考内参;`--from-npz` 用离线标定文件。
-完整参数 `--help`。
+没插夹爪时加 `--no-mcu` 走参考内参;`--from-npz` 用离线标定文件。完整参数 `--help`。
+
+> **这个脚本打不开视触觉传感器,是故意的。** 传 GSPS 序列号或 `/dev/videoN` 路径
+> 都会被拒绝并说明原因 —— OG 的采集和矫正在 `xensesdk` 里,不走本 SDK(见下一节)。
 
 ---
 
@@ -313,7 +335,8 @@ finally:
 - **首次 `create()` 慢**是在建每序列号的配置缓存(`~/.xensesdk/config`);
   多传感器场景建议先预热缓存再并发开,否则会撞在一起。
 - **OG 和腕相机都是 `/dev/video*`**,但腕相机**不在** `Sensor.scanSerialNumber()`
-  的结果里 —— 它不是 OG 设备,别指望用触觉 SDK 去枚举它。
+  的结果里 —— 它不是 OG 设备,别指望用触觉 SDK 去枚举它。反过来也一样:
+  `wrist_camera.py` 会拒绝 GSPS 序列号。两边都按序列号语法把对方挡在门外。
 - 力/网格类输出形状是固定的(力分布 `(35, 20, 3)`、合力 `(6,)`),
   图像类的形状随 `rectify_size` 变。
 

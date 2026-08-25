@@ -19,7 +19,7 @@ Calibrate first if this raises "never calibrated":
 
 Usage:
     python python/examples/leader_normalized_position.py
-    python python/examples/leader_normalized_position.py --sn SN000003 --hz 50
+    python python/examples/leader_normalized_position.py right --hz 50
     # Bypass the firmware read (e.g. pre-V2.1 firmware):
     python python/examples/leader_normalized_position.py --encoder-max-rad 1.30
 """
@@ -31,27 +31,9 @@ import math
 import sys
 import time
 
-from xense.taccap import LeaderGripper, ProtocolError, scan_grippers
+from xense.taccap import LeaderGripper, ProtocolError
 
 import _calib_flow
-
-
-def resolve_mcu_device(sn: str | None) -> str:
-    grippers = scan_grippers()
-    if not grippers:
-        raise SystemExit("no TacCap gripper found — is one plugged in?")
-    if sn is None:
-        if len(grippers) > 1:
-            names = ", ".join(g.firmware_sn or "<no SN>" for g in grippers)
-            raise SystemExit(
-                f"{len(grippers)} grippers found ({names}) — pass --sn to pick one"
-            )
-        return grippers[0].mcu_device
-    for g in grippers:
-        if g.firmware_sn == sn:
-            return g.mcu_device
-    found = ", ".join(g.firmware_sn or "<no SN>" for g in grippers)
-    raise SystemExit(f"SN {sn!r} not found. Connected: {found}")
 
 
 def main() -> int:
@@ -59,7 +41,7 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--sn", help="firmware SN of the gripper to open")
+    _calib_flow.add_target_argument(p)
     p.add_argument("--hz", type=int, default=100, help="encoder stream rate")
     p.add_argument("--seconds", type=float, default=0.0,
                    help="stop after N seconds (0 = run until Ctrl-C)")
@@ -68,7 +50,8 @@ def main() -> int:
                         "firmware (rad)")
     args = p.parse_args()
 
-    device = resolve_mcu_device(args.sn)
+    eps, _by_side, _all = _calib_flow.resolve_target(args.target)
+    device = eps.mcu_device
     try:
         gripper = LeaderGripper(
             mcu_device=device,
