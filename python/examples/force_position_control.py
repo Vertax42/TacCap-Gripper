@@ -87,7 +87,7 @@ def main() -> int:
         c.start()               # 校验设备持久化的 0x700B 启动上限,并播种位置保持
         g.motor.enable()
 
-        for target in (1.0, 0.5, 0.0, 1.0):
+        for target in (1.0, 0.0, 1.0):
             c.set_target(target)
             name, s, dt = settle(c)
             print(f"  target={target:.2f} -> {name:16s} pos={s.observation.position:.4f} "
