@@ -55,6 +55,12 @@ answers with `python python/examples/fisheye_cal.py show`.
   `set_target(0..1)` and `observation()`, both non-blocking. See
   [Follower gripper control](#follower-gripper-control-mit-force-position) for
   why the phase matters.
+- **`ForcePositionController`** — contact-aware hybrid grasping for a follower:
+  velocity-damped close, then a pure bounded `tau_ff` hold with `kp=kd=0` so
+  blocked-jaw position error cannot keep increasing torque. Runtime
+  `set_target(0..1, torque)` supports arbitrary opening targets. It separates
+  the device/motion transient limit (up to 6 Nm) from the pure force-hold
+  software ceiling (up to 1.8 Nm).
 - **Normalized position** on both roles — `[0, 1]`, 0 = closed, 1 = open, on
   one-shot reads and on every streamed sample.
 - **`Diagnostics`** (`g.diagnostics`) — the firmware's own UART counters and a

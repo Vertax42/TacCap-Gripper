@@ -372,6 +372,9 @@ does.
   FollowerGripper.set_position(0..1) --> GripperPosition -> raw rad -> submit
   ControlLoop (bg thread @ hz) -------->  submit latest target; motor-status
                                           STREAM -> thread-safe GripperObservation
+  ForcePositionController ------------>  velocity-damped close
+                                          -> contact -> kp=kd=0 torque hold
+                         (device/motion <= 6 Nm; force hold <= 1.8 Nm)
 ```
 
 ---

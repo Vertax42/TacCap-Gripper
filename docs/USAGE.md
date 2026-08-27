@@ -176,6 +176,77 @@ finally:
     f.motor.disable()
 ```
 
+**硬物夹持/限力保持 —— `ForcePositionController`**:普通位置阻抗在物体挡住夹爪后
+会继续积累 `kp × 位置误差`,不适合把目标长期放在完全闭合点。力位混合控制器改用:
+
+1. `kp=0` 的速度阻尼闭合,目标位置误差不参与闭合力矩;
+2. 连续状态帧确认接触(自动阈值为目标力矩的 35%,并限制在 0.25–1.20 Nm);
+3. 接触位置锁存后切到 `kp=kd=0` 的纯 `tau_ff` 力矩保持。
+
+控制器把力矩限制拆成两个职责明确的上限:
+
+- `motion_torque_limit_nm`:闭合/张开/位置保持过程中的速度阻尼和 PD 瞬时力矩上限,
+  最大 **6.0 Nm**;反馈力矩超过它会进入零力矩故障状态。
+- `hold_torque_limit_nm`:检测到接触后 `kp=kd=0` 的纯 `tau_ff` 保持力矩上限,
+  最大 **1.8 Nm**;`grasp_torque_nm` 和运行时传入的目标力矩都不能超过它。
+
+`start()` 会读取 V2.2 的持久化 `0x700B limit_torque`,并要求设备值不高于配置的
+运动上限。这里持久化的是**夹爪 MCU Flash 中的启动配置**,不是电机自身 Flash。
+第一次配置设备上限后必须物理断电重启,让 MCU 在开机时把该值写入电机运行参数
+0x700B:
+
+```python
+f = t.FollowerGripper.open()
+f.motor.set_startup_limit_torque(6.0)   # 写 MCU Flash,只需配置一次
+print(f.motor.get_startup_limit_torque())
+# 此处退出并拔插夹爪;不要在同一次上电中直接继续运动
+```
+
+重启后使用控制器:
+
+```python
+cfg = t.ForcePositionConfig()
+cfg.grasp_torque_nm = 0.35
+cfg.hold_torque_limit_nm = 1.8
+cfg.motion_torque_limit_nm = 6.0
+cfg.close_speed_radps = 0.5
+
+f = t.FollowerGripper.open()
+f.motor.clear_fault()
+grasp = t.ForcePositionController(f, cfg)
+grasp.start()                 # 先验证设备上限,尚不主动闭合
+f.motor.enable()
+try:
+    grasp.grasp()             # 闭合 -> 接触 -> 0.35 Nm 纯力矩保持
+    grasp.set_target(0.35, 0.45)  # 运行时改为 35% 开度、0.45 Nm
+    while running:
+        print(grasp.snapshot())
+    grasp.release()           # 有界速度张开
+finally:
+    grasp.stop()              # 先下发零力矩
+    f.motor.disable()
+```
+
+交互式硬件工具:
+
+```bash
+# 首次设置运动/设备上限;命令完成后拔插夹爪
+python python/examples/force_position_console.py --set-device-limit 6.0
+
+# 重启后测试:t 输入精确 target/力矩,g 重复,o 全开,h 当前位置保持,q 退出
+python python/examples/force_position_console.py --grasp-torque 0.35 \
+  --hold-torque-limit 1.8 --motion-torque-limit 6.0
+```
+
+注意:6 Nm 是允许运动阶段出现更高瞬时力矩,并不把夹爪机构的安全额定值提高到
+6 Nm。如果机构本身不能承受高于 1.8 Nm 的瞬时负载,应把
+`motion_torque_limit_nm` 和设备 `0x700B` 一并设低;软件只能保证进入
+`HoldingForce` 后的命令力矩不超过 1.8 Nm。
+
+该控制器需要 follower 固件 ≥ 1.1.2(支持 V2.2 启动力矩上限读取),并且从爪
+开合行程已经标定。运行期间它独占电机控制与状态流,不要并发使用 `ControlLoop`
+或直接发送其他运动命令。
+
 **相位为什么重要**:主机帧只要在 MCU 发送期间落地,就会让它丢掉正在发的那一帧,
 整帧作废。所以碰撞取决于**落在什么时刻**,不是发了多少 —— `STREAM_LOCKED`
 是每收到一帧状态提交一次,落在 MCU 已知空闲的窗口里,实测 6000 提交 : 6000 帧 :
