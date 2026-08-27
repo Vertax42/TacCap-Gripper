@@ -125,7 +125,11 @@ struct ForcePositionConfig {
     // Travel required before the ratio test arms (TASK_CANMOTOR_STALL_MOVED_RAD),
     // together with peak speed reaching 35% of the commanded speed.
     float contact_moved_rad    = 0.010f;
-    float position_kp          = 8.0f;   // safe current-position/endpoint hold
+    // Matches ControlLoop::Config::kp. Raising it tightens the position hold
+    // without raising the torque ceiling: the PD request is error-clamped
+    // against a torque budget either way, so kp only narrows the error window
+    // (budget/kp), it does not widen the output.
+    float position_kp          = 20.0f;  // safe current-position/endpoint hold
     float position_kd          = 1.0f;
     float brake_distance_rad   = 0.10f;  // switch close velocity -> clamped PD
     // Consecutive confirming status frames. At motor_stream_hz = 100 the
