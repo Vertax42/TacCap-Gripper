@@ -75,6 +75,12 @@ Calibration = _taccap_native.Calibration              # V2.0/V2.1 flash-persiste
 GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
 ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
 SubmitPhase = _taccap_native.SubmitPhase              # ControlLoop send phasing
+ForcePositionState = _taccap_native.ForcePositionState
+ForcePositionConfig = _taccap_native.ForcePositionConfig
+ForcePositionSnapshot = _taccap_native.ForcePositionSnapshot
+ForcePositionController = _taccap_native.ForcePositionController
+FORCE_POSITION_MAX_HOLD_TORQUE_NM = _taccap_native.FORCE_POSITION_MAX_HOLD_TORQUE_NM
+FORCE_POSITION_MAX_MOTION_TORQUE_NM = _taccap_native.FORCE_POSITION_MAX_MOTION_TORQUE_NM
 Diagnostics = _taccap_native.Diagnostics              # firmware UART counters + log control
 UartStats   = _taccap_native.UartStats                # Cmd 0x54 payload
 LogConfig   = _taccap_native.LogConfig                # Cmd 0x55 payload
@@ -176,6 +182,12 @@ __all__ = [
     "GripperObservation",
     "ControlLoop",
     "SubmitPhase",
+    "ForcePositionState",
+    "ForcePositionConfig",
+    "ForcePositionSnapshot",
+    "ForcePositionController",
+    "FORCE_POSITION_MAX_HOLD_TORQUE_NM",
+    "FORCE_POSITION_MAX_MOTION_TORQUE_NM",
     "Diagnostics",
     "UartStats",
     "LogConfig",

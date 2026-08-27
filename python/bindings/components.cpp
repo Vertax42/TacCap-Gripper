@@ -25,6 +25,7 @@
 #include <taccap/components/motor.hpp>
 #include <taccap/components/led.hpp>
 #include <taccap/control_loop.hpp>
+#include <taccap/force_position_controller.hpp>
 #include <taccap/follower_gripper.hpp>
 #include <taccap/leader_gripper.hpp>
 #include <taccap/discovery.hpp>
@@ -1568,6 +1569,108 @@ void bind_components(py::module_& m) {
         })
         .def("__exit__", [](ControlLoop& l, py::object, py::object, py::object) {
             py::gil_scoped_release g; l.stop();
+        });
+
+    // ---- ForcePositionController: contact -> bounded pure-torque hold ----
+    m.attr("FORCE_POSITION_MAX_HOLD_TORQUE_NM") =
+        FORCE_POSITION_MAX_HOLD_TORQUE_NM;
+    m.attr("FORCE_POSITION_MAX_MOTION_TORQUE_NM") =
+        FORCE_POSITION_MAX_MOTION_TORQUE_NM;
+
+    py::enum_<ForcePositionState>(m, "ForcePositionState")
+        .value("IDLE",             ForcePositionState::Idle)
+        .value("HOLDING_POSITION", ForcePositionState::HoldingPosition)
+        .value("CLOSING",          ForcePositionState::Closing)
+        .value("HOLDING_FORCE",    ForcePositionState::HoldingForce)
+        .value("OPENING",          ForcePositionState::Opening)
+        .value("FAULT",            ForcePositionState::Fault)
+        .def("__str__", [](ForcePositionState s) { return to_string(s); });
+
+    py::class_<ForcePositionConfig>(m, "ForcePositionConfig")
+        .def(py::init<>())
+        .def_readwrite("close_position",       &ForcePositionConfig::close_position)
+        .def_readwrite("close_speed_radps",    &ForcePositionConfig::close_speed_radps)
+        .def_readwrite("grasp_torque_nm",      &ForcePositionConfig::grasp_torque_nm)
+        .def_readwrite("hold_torque_limit_nm", &ForcePositionConfig::hold_torque_limit_nm)
+        .def_readwrite("motion_torque_limit_nm", &ForcePositionConfig::motion_torque_limit_nm)
+        .def_readwrite("contact_torque_nm",    &ForcePositionConfig::contact_torque_nm)
+        .def_readwrite("position_kp",          &ForcePositionConfig::position_kp)
+        .def_readwrite("position_kd",          &ForcePositionConfig::position_kd)
+        .def_readwrite("brake_distance_rad",   &ForcePositionConfig::brake_distance_rad)
+        .def_readwrite("contact_samples",      &ForcePositionConfig::contact_samples)
+        .def_readwrite("startup_guard_ms",     &ForcePositionConfig::startup_guard_ms)
+        .def_readwrite("status_timeout_ms",    &ForcePositionConfig::status_timeout_ms)
+        .def_readwrite("motor_stream_hz",      &ForcePositionConfig::motor_stream_hz);
+
+    py::class_<ForcePositionSnapshot>(m, "ForcePositionSnapshot")
+        .def_readonly("running",               &ForcePositionSnapshot::running)
+        .def_readonly("state",                 &ForcePositionSnapshot::state)
+        .def_readonly("observation",           &ForcePositionSnapshot::observation)
+        .def_readonly("target_position",       &ForcePositionSnapshot::target_position)
+        .def_readonly("hold_position",         &ForcePositionSnapshot::hold_position)
+        .def_readonly("grasp_torque_nm",       &ForcePositionSnapshot::grasp_torque_nm)
+        .def_readonly("commanded_torque_nm",   &ForcePositionSnapshot::commanded_torque_nm)
+        .def_readonly("hold_torque_limit_nm",  &ForcePositionSnapshot::hold_torque_limit_nm)
+        .def_readonly("motion_torque_limit_nm", &ForcePositionSnapshot::motion_torque_limit_nm)
+        .def_readonly("device_limit_nm",       &ForcePositionSnapshot::device_limit_nm)
+        .def_readonly("contact_count",         &ForcePositionSnapshot::contact_count)
+        .def_readonly("fault_reason",          &ForcePositionSnapshot::fault_reason)
+        .def("__repr__", [](const ForcePositionSnapshot& s) {
+            char buf[256];
+            std::snprintf(buf, sizeof(buf),
+                "ForcePositionSnapshot(state=%s, pos=%.4f, torque=%.3fNm, "
+                "command=%.3fNm, hold_limit=%.3fNm, motion_limit=%.3fNm, "
+                "device_limit=%.3fNm, age=%.1fms)",
+                to_string(s.state), s.observation.position, s.observation.torque,
+                s.commanded_torque_nm, s.hold_torque_limit_nm,
+                s.motion_torque_limit_nm, s.device_limit_nm,
+                s.observation.age_ms);
+            return std::string(buf);
+        });
+
+    py::class_<ForcePositionController>(m, "ForcePositionController")
+        .def(py::init([](FollowerGripper& g, const ForcePositionConfig& cfg) {
+                return std::make_unique<ForcePositionController>(g, cfg);
+            }), py::arg("gripper"), py::arg("config") = ForcePositionConfig{},
+            py::keep_alive<1, 2>())
+        .def("start", [](ForcePositionController& c) {
+            py::gil_scoped_release g; c.start();
+        })
+        .def("stop", [](ForcePositionController& c) {
+            py::gil_scoped_release g; c.stop();
+        })
+        .def("grasp", [](ForcePositionController& c) {
+            py::gil_scoped_release g; c.grasp();
+        })
+        .def("release", [](ForcePositionController& c) {
+            py::gil_scoped_release g; c.release();
+        })
+        .def("set_target", [](ForcePositionController& c, float position,
+                               const std::optional<float>& grasp_torque_nm) {
+            py::gil_scoped_release g;
+            if (grasp_torque_nm) c.set_target(position, *grasp_torque_nm);
+            else                 c.set_target(position);
+        }, py::arg("position"), py::arg("grasp_torque_nm") = std::nullopt)
+        .def("hold_position", [](ForcePositionController& c) {
+            py::gil_scoped_release g; c.hold_position();
+        })
+        .def("reset", [](ForcePositionController& c) {
+            py::gil_scoped_release g; c.reset();
+        })
+        .def_property_readonly("running", &ForcePositionController::running)
+        .def_property_readonly("state", &ForcePositionController::state)
+        .def_property_readonly("config", [](const ForcePositionController& c) {
+            return c.config();
+        })
+        .def("snapshot", [](const ForcePositionController& c) {
+            py::gil_scoped_release g; return c.snapshot();
+        })
+        .def("__enter__", [](ForcePositionController& c) -> ForcePositionController& {
+            py::gil_scoped_release g; c.start(); return c;
+        })
+        .def("__exit__", [](ForcePositionController& c, py::object, py::object,
+                            py::object) {
+            py::gil_scoped_release g; c.stop();
         });
 }
 
