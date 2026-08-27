@@ -396,8 +396,8 @@ python python/examples/impedance_control.py --set-envelope \
 - **控制期间不要轮询 `read_status()`。** 相位锁只保护遥测帧不保护 ACK,轮询会
   和控制帧对撞导致超时。位置/速度/力矩都从 `observation()` / `snapshot()` 取。
 
-Runnable demos: `python/examples/gripper_control_test.py` (interactive
-open/close via both `set_position` and `ControlLoop`) and
+Runnable demos: `python/examples/impedance_control.py` and
+`python/examples/force_position_control.py` (see above), plus
 `python/examples/motor_mit_control.py` (raw `submit_impedance` + health).
 
 ## Diagnostics

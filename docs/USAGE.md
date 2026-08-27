@@ -312,8 +312,9 @@ st = f.motor.read_status()
 > 做法见 `python/examples/gripper_force_grasp_test.py`:小步闭合 + 位置停滞检测,
 > 而不是力矩阈值(夹爪本身有随开口变化的回复力矩,力矩阈值会误触发)。
 
-可跑的示例:`gripper_control_test.py`(交互式开合)、`motor_mit_control.py`
-(裸 `submit_impedance`)、`gripper_force_grasp_test.py`(柔性抓取)。
+可跑的示例:`impedance_control.py`、`force_position_control.py`(见上)、
+`motor_mit_control.py`(裸 `submit_impedance`)、`gripper_force_grasp_test.py`
+(柔性抓取)。
 
 ---
 
