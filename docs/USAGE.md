@@ -180,15 +180,57 @@ finally:
 会继续积累 `kp × 位置误差`,不适合把目标长期放在完全闭合点。力位混合控制器改用:
 
 1. `kp=0` 的速度阻尼闭合,目标位置误差不参与闭合力矩;
-2. 连续状态帧确认接触(自动阈值为目标力矩的 35%,并限制在 0.25–1.20 Nm);
+2. 接触判定,直接照搬固件开机自标定的做法(见下);
 3. 接触位置锁存后切到 `kp=kd=0` 的纯 `tau_ff` 力矩保持。
+
+**接触判定为什么是这样**:固件的开机自标定要解决的是同一个问题(闭合到堵转来找零
+点),它的做法是**力矩下限 _并且_ 运动停止**,两个条件缺一不可
+(`third_party/firmware/tc-gu-01` `App/tasks/task_canmotor.c`
+`task_canmotor_is_stalled()`):
+
+```
+contact = 停止 AND |力矩| >= contact_torque_nm
+停止    = |vel| <= contact_vel_radps,或(已经走过一段)沿运动方向的速度
+          已跌到命令速度的 contact_vel_ratio 以下
+确认    = 连续 contact_samples 帧(固件对应 stall_hold_ms,默认 30 ms)
+```
+
+| 固件常量 | 值 | SDK 字段 |
+|---|---|---|
+| `TASK_CANMOTOR_STALL_TORQUE_FLOOR_NM` | 0.080 Nm | `contact_torque_nm` |
+| `TASK_CANMOTOR_STALL_VEL_RAD_S` | 0.035 rad/s | `contact_vel_radps` |
+| `TASK_CANMOTOR_STALL_VEL_RATIO` | 0.25 | `contact_vel_ratio` |
+| `TASK_CANMOTOR_STALL_MOVED_RAD` | 0.010 rad | `contact_moved_rad` |
+| `stall_hold_ms` | 30 ms | `contact_samples`(100 Hz 下 3 帧) |
+
+**做分离的是速度门,不是力矩数字。** 在 1.1.5 从爪上实测整段空载闭合(1578 帧):
+自由行程 `|vel|` 始终 ≥ 0.183 rad/s,是 0.035 门限的五倍,同时 `|力矩|` ≤ 0.142 Nm;
+机械止点处 `|vel|` ≈ 0.012 rad/s、`|力矩|` ≈ 0.21 Nm。**没有任何一帧同时满足两个
+条件**。力矩项只需要否掉"停着但没受力",所以默认值直接用固件那个下限 0.080 Nm。
+
+**不要把阈值定成命令力矩上限的比例。** 固件能用 ratio = 1.00,是因为它下发的是
+**速度命令带 `max_torque`**,执行器自己的环会一路顶到那个上限;而 `kd` 形式的 MIT
+帧不会。同一次实测:堵住时命令要 0.359 Nm,反馈只饱和到 0.213 Nm(≈0.59)。把阈值
+放在命令上限处就是**永远够不到** —— 夹爪会一直推下去而从不锁存,正是这个控制器
+本该消灭的堵转。
+
+`brake_distance_rad` 那段减速也受 `grasp_torque_nm` 约束(而不是 6 Nm 运动上限):
+它属于调用方的夹持动作,而且如果按运动上限走,最后 0.10 rad 会退化成误差钳位到
+6 Nm 的 PD 推压 —— 堵转原样保留,并且低命令力矩还会把反馈压在接触下限以下,导致
+什么都锁存不了。
 
 控制器把力矩限制拆成两个职责明确的上限:
 
-- `motion_torque_limit_nm`:闭合/张开/位置保持过程中的速度阻尼和 PD 瞬时力矩上限,
-  最大 **6.0 Nm**;反馈力矩超过它会进入零力矩故障状态。
-- `hold_torque_limit_nm`:检测到接触后 `kp=kd=0` 的纯 `tau_ff` 保持力矩上限,
-  最大 **1.8 Nm**;`grasp_torque_nm` 和运行时传入的目标力矩都不能超过它。
+这两个上限就是**电机自身的两个额定值**,不是随手取的安全裕度:
+
+- `motion_torque_limit_nm`:闭合/张开/位置保持过程中的速度阻尼和 PD **瞬时**力矩
+  上限,最大 **6.0 Nm** —— 电机的**峰值力矩**;反馈力矩超过它会进入零力矩故障状态。
+  6.0 Nm 同时也是固件对 `0x700B` 启动上限的默认值和最大值
+  (`storage.c` `STORAGE_MOTOR_LIMIT_TORQUE_{DEFAULT,MAX}_NM`),所以默认配置和
+  出厂设备是一致的。
+- `hold_torque_limit_nm`:检测到接触后 `kp=kd=0` 的纯 `tau_ff` **长期**保持力矩上限,
+  最大 **1.8 Nm** —— 电机的**额定(标称)力矩**;`grasp_torque_nm` 和运行时传入的
+  目标力矩都不能超过它。
 
 `start()` 会读取 V2.2 的持久化 `0x700B limit_torque`,并要求设备值不高于配置的
 运动上限。这里持久化的是**夹爪 MCU Flash 中的启动配置**,不是电机自身 Flash。
@@ -217,7 +259,7 @@ grasp = t.ForcePositionController(f, cfg)
 grasp.start()                 # 先验证设备上限,尚不主动闭合
 f.motor.enable()
 try:
-    grasp.grasp()             # 闭合 -> 接触 -> 0.35 Nm 纯力矩保持
+    grasp.set_target(0.0)     # 闭合 -> 接触 -> 0.35 Nm 纯力矩保持
     grasp.set_target(0.35, 0.45)  # 运行时改为 35% 开度、0.45 Nm
     while running:
         print(grasp.snapshot())
@@ -238,8 +280,8 @@ python python/examples/force_position_console.py --grasp-torque 0.35 \
   --hold-torque-limit 1.8 --motion-torque-limit 6.0
 ```
 
-注意:6 Nm 是允许运动阶段出现更高瞬时力矩,并不把夹爪机构的安全额定值提高到
-6 Nm。如果机构本身不能承受高于 1.8 Nm 的瞬时负载,应把
+注意:6 Nm 是电机峰值、只允许运动阶段的**瞬时**力矩到这个量级,并不把夹爪机构的
+安全额定值提高到 6 Nm。如果机构本身不能承受高于 1.8 Nm 的瞬时负载,应把
 `motion_torque_limit_nm` 和设备 `0x700B` 一并设低;软件只能保证进入
 `HoldingForce` 后的命令力矩不超过 1.8 Nm。
 

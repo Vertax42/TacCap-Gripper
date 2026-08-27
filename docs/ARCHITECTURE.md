@@ -373,8 +373,11 @@ does.
   ControlLoop (bg thread @ hz) -------->  submit latest target; motor-status
                                           STREAM -> thread-safe GripperObservation
   ForcePositionController ------------>  velocity-damped close
-                                          -> contact -> kp=kd=0 torque hold
-                         (device/motion <= 6 Nm; force hold <= 1.8 Nm)
+                                          -> contact (torque saturated AND
+                                             motion arrested, per firmware
+                                             task_canmotor_is_stalled)
+                                          -> kp=kd=0 torque hold
+                         (motion <= 6 Nm peak; force hold <= 1.8 Nm rated)
 ```
 
 ---

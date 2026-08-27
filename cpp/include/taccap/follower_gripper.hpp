@@ -120,6 +120,21 @@ public:
         std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
     void set_gripper_config(const protocol::GripperConfig& cfg);
 
+    // ---- Motion safety envelope (rides inside GripperConfig 0x66/0x67) -----
+    // Read-modify-write over the gripper config record, so the envelope and the
+    // travel calibration cannot be written independently and one can never
+    // silently clobber the other. Returns flags==0 on a device that has never
+    // had an envelope written.
+    //
+    // The firmware clamps every MIT frame against this: the commanded position
+    // is held within peak_torque_nm/kp of the measured position, the feed-forward
+    // torque against cont_torque_nm. Setting Enforce changes real motion
+    // behaviour — the
+    // jaw will no longer slam a far target — so write it deliberately.
+    protocol::GripperEnvelope get_envelope(
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
+    void set_envelope(const protocol::GripperEnvelope& env);
+
     // ---- Power-on auto-calibration config (V1.9 — Cmd 0x68/0x69) ------------
     // When enabled, the firmware auto-calibrates on power-up (close-to-stall =>
     // zero, open-to-stall => max_open). Read / write that config here.

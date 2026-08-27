@@ -150,6 +150,32 @@ public:
     // path (tc-gu-01 issue #1) and stays worth fixing there.
     enum class SubmitPhase : uint8_t { FreeRunning, StreamLocked };
 
+    // What to do when the jaw is blocked. A position target the jaw cannot
+    // reach makes kp * error a constant torque demand that nothing in this
+    // loop bounds. Measured on follower firmware 1.1.5, kp=8, stepping the
+    // target to fully-closed with a rigid object in the jaws: the jaw
+    // accelerated to 8.5 rad/s (17x the speed a bounded close uses), hit the
+    // object at 5.4 rad/s, and torque went 0.03 -> 2.41 Nm in 20 ms and was
+    // still climbing toward the kp*error plateau of ~4.96 Nm when the test
+    // aborted. It also drove 0.078 rad PAST the object's own stop, deforming
+    // it.
+    //
+    // Nothing below this layer stops that on 1.1.5. The firmware's limit-stall
+    // guard (can_motor.c can_motor_gripper_stop_on_limit_stall) is wired only
+    // into the VELOCITY command paths and only near the travel ends -- the MIT
+    // impedance path has no stall protection at all, leaving the motor's own
+    // 0x700B ceiling (6 Nm, vs a 1.8 Nm rated torque) as the sole backstop.
+    // So the host is the only place this can be caught.
+    enum class StallAction : uint8_t {
+        // Leave the caller's target alone. The pre-guard behaviour.
+        None,
+        // Clamp the effective target at the position the jaw actually reached,
+        // so position error -- and therefore torque -- stops growing. The loop
+        // keeps running and needs no fault clearing; commanding a target back
+        // the other way releases the clamp.
+        HoldPosition,
+    };
+
     struct Config {
         // Target submission rate (Hz). Only consulted by
         // SubmitPhase::FreeRunning -- StreamLocked takes its rate from the
@@ -162,6 +188,89 @@ public:
         float    feedforward_torque  = 0.0f;   // Nm
         unsigned motor_stream_hz     = 100;    // motor-status stream rate (Hz)
         SubmitPhase phase            = SubmitPhase::StreamLocked;
+
+        // Bound the position error the loop is allowed to command, expressed
+        // as the torque it would produce: the commanded target is clamped to
+        // within max_position_torque_nm / kp radians of where the jaw actually
+        // is. 0 disables it.
+        //
+        // This is the primary protection, and it is deliberately NOT a slew
+        // rate limit on the target. A slew limit adds lag to every motion,
+        // including teleoperation where the leader is tracked continuously.
+        // An error clamp costs nothing while the jaw keeps up -- the error is
+        // small and the clamp never binds -- and engages the instant the jaw
+        // falls behind, which is exactly the blocked case.
+        //
+        // It bounds BOTH failure modes measured on 1.1.5, and the stall guard
+        // below only catches one of them:
+        //
+        //   - The approach. An unclamped step to a far target demands
+        //     kp * 1.2 rad = 9.7 Nm (the motor's 0x700B trims it to 6) and the
+        //     jaw reaches 8.5 rad/s. Clamped, the demand is
+        //     max_position_torque_nm and the kd term balances it at roughly
+        //     max_position_torque_nm / kd rad/s -- 1.5 rad/s at the defaults.
+        //   - The stall. kp * error can no longer grow past the clamp, so a
+        //     blocked jaw settles at max_position_torque_nm instead of the
+        //     ~4.96 Nm plateau measured with a rigid object at mid-travel.
+        //
+        // Why the approach matters as much as the stall: measured with a
+        // loose rigid object in the jaws, an unclamped step crossed the
+        // object's position at 5.5 rad/s and knocked it clean out WITHOUT the
+        // torque rising at all (feedback stayed under 0.03 Nm through the
+        // crossing). No post-contact guard can catch that -- there is no
+        // sustained contact to detect. Only not arriving that fast works.
+        float       max_position_torque_nm = 1.5f;
+
+        // Output torque ceiling -- the hard backstop, and the only layer that
+        // acts on what the motor is ACTUALLY producing rather than on what the
+        // loop asked for. The firmware's actual_torque is derived from motor
+        // current, so this is a current measurement.
+        //
+        // When |feedback| stays at or above rated_torque_nm for
+        // rated_hold_ms, the loop stops sending an impedance frame entirely
+        // and sends a pure feed-forward hold: kp=0, kd=0, tau_ff = the ceiling
+        // with the sign the motor was already pushing. With both gains at
+        // zero, position error cannot contribute to the output at all -- the
+        // torque is pinned at the ceiling instead of merely bounded by an
+        // estimate of it. Same primitive ForcePositionController uses after
+        // contact, for the same reason.
+        //
+        // Why this exists on top of max_position_torque_nm: that clamp bounds
+        // kp * error, which is the COMMANDED torque. Measured on 1.1.5, the
+        // feedback at stall ran about 0.59 of the command -- but that ratio is
+        // one unit, one temperature, one load. A ceiling on the measurement
+        // does not care what the ratio is.
+        //
+        // 0 disables it. Note the EduLite05 rated torque is 1.8 Nm; a ceiling
+        // above that is a peak-torque allowance, not a continuous one.
+        float       rated_torque_nm   = 2.0f;
+        unsigned    rated_hold_ms     = 20;
+        // While the ceiling holds, this much travel away from where it engaged
+        // means the obstruction is gone, so impedance control resumes. Without
+        // it a pure tau_ff hold would keep accelerating a jaw that came free.
+        float       rated_release_rad = 0.05f;
+
+        // ---- Stall guard (see StallAction) --------------------------------
+        // Stalled = torque at or above stall_torque_nm while the jaw is slower
+        // than stall_vel_radps, continuously for stall_hold_ms. Both halves
+        // are required: torque alone trips on the impact transient (measured
+        // 1.33 Nm while still moving at 1.94 rad/s), and slowness alone is
+        // just a jaw at rest.
+        //
+        // The default trip sits above anything free motion produces and above
+        // a firm deliberate grasp, but below the motor's 1.8 Nm rated torque,
+        // so it catches the runaway well before the 6 Nm hardware ceiling.
+        // Measured free-motion peaks on 1.1.5: 0.29 Nm stepping a quarter of
+        // the travel, 0.68 Nm on a full 1.0 -> 0.0 step. Note that torque is
+        // NOT what keeps those from tripping the guard -- 0.68 is close to
+        // 1.2 -- the velocity test is: a free jaw runs at several rad/s
+        // through the whole transit, orders of magnitude above
+        // stall_vel_radps. Raise stall_torque_nm only together with a reason
+        // the velocity gate is not doing its job.
+        float       stall_torque_nm  = 1.2f;
+        float       stall_vel_radps  = 0.15f;
+        unsigned    stall_hold_ms    = 60;
+        StallAction stall_action     = StallAction::HoldPosition;
     };
 
     explicit ControlLoop(FollowerGripper& gripper);   // default Config
@@ -190,6 +299,16 @@ public:
     float    submit_hz()    const noexcept { return submit_hz_.load(std::memory_order_relaxed); }
     uint64_t submit_count() const noexcept { return submit_count_.load(std::memory_order_relaxed); }
 
+    // Stall guard state. stalled() is true while the clamp is holding the
+    // effective target back; stall_trips() counts how many times it engaged.
+    bool     stalled()     const noexcept { return stalled_.load(std::memory_order_relaxed); }
+    uint64_t stall_trips() const noexcept { return stall_trips_.load(std::memory_order_relaxed); }
+
+    // Output torque ceiling state. torque_capped() is true while the loop is
+    // sending a pure tau_ff hold instead of an impedance frame.
+    bool     torque_capped() const noexcept { return torque_capped_pub_.load(std::memory_order_relaxed); }
+    uint64_t torque_caps()   const noexcept { return torque_caps_.load(std::memory_order_relaxed); }
+
     const Config& config() const noexcept { return cfg_; }
 
 private:
@@ -202,6 +321,13 @@ private:
     void note_rate_(uint64_t& window_count,
                     std::chrono::steady_clock::time_point& window_start);
     void on_status_(const MotorStatusSample& s);
+    // Called from on_status_ under mu_.
+    void guard_stall_(const MotorStatusSample& s,
+                      std::chrono::steady_clock::time_point now);
+    void guard_torque_(const MotorStatusSample& s,
+                       std::chrono::steady_clock::time_point now);
+    // Called from submit_once_ under mu_. Returns the target actually sent.
+    float clamped_target_() noexcept;
     void start_motor_stream_();
     void stop_motor_stream_();
 
@@ -232,6 +358,23 @@ private:
     Motor::SubId       sub_           = 0;
     bool               sub_active_    = false;
     bool               stream_ours_   = false;   // did we StartStream ourselves?
+
+    // Stall guard, all under mu_ except the two atomics.
+    std::chrono::steady_clock::time_point stall_since_{};
+    bool  stall_clamped_ = false;
+    float stall_clamp_   = 0.0f;   // normalized position the jaw stopped at
+    bool  stall_closing_ = false;  // was the blocked motion toward closed?
+    std::atomic<bool>     stalled_{false};
+    std::atomic<uint64_t> stall_trips_{0};
+
+    // Output torque ceiling, under mu_ except the atomics.
+    std::chrono::steady_clock::time_point cap_since_{};
+    bool  torque_capped_ = false;
+    float cap_sign_      = 1.0f;   // direction the motor was pushing
+    float cap_entry_raw_ = 0.0f;   // raw position where the ceiling engaged
+    bool  cap_closing_   = false;  // was the blocked motion toward closed?
+    std::atomic<bool>     torque_capped_pub_{false};
+    std::atomic<uint64_t> torque_caps_{0};
 
     std::atomic<uint64_t> submit_count_{0};
     std::atomic<float>    submit_hz_{0.0f};

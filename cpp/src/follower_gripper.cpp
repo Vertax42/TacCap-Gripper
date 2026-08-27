@@ -189,6 +189,28 @@ protocol::GripperConfig FollowerGripper::get_gripper_config(
     return protocol::decode_gripper_config(ack.data.data(), ack.data.size());
 }
 
+protocol::GripperEnvelope FollowerGripper::get_envelope(
+        std::chrono::milliseconds timeout) {
+    const protocol::GripperConfig cfg = get_gripper_config(timeout);
+    protocol::GripperEnvelope env{};
+    std::memcpy(&env, cfg.reserved, sizeof(env));
+    return env;
+}
+
+void FollowerGripper::set_envelope(const protocol::GripperEnvelope& env) {
+    // Read-modify-write: the envelope shares its record with the travel
+    // calibration, and the firmware's own sanitiser rebuilds the record from a
+    // zeroed default. Writing a config assembled from scratch here would drop
+    // max_open_rad / min_open_rad on the floor.
+    protocol::GripperConfig cfg = get_gripper_config();
+    std::memcpy(cfg.reserved, &env, sizeof(env));
+    set_gripper_config(cfg);
+    logger()->info(
+        "FollowerGripper envelope written: cont={:.3f}Nm peak={:.3f}Nm "
+        "flags=0x{:04x}",
+        env.cont_torque_nm, env.peak_torque_nm, env.flags);
+}
+
 void FollowerGripper::set_gripper_config(const protocol::GripperConfig& cfg) {
     auto ack = t_.send_cmd(protocol::Cmd::SetGripperConfig, protocol::encode(cfg));
     if (ack.is_nack) {

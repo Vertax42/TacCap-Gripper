@@ -187,8 +187,11 @@ def main() -> int:
     ap.add_argument("--motion-torque-limit", type=float,
                     default=MAX_MOTION_TORQUE_NM,
                     help="motion/device ceiling; cannot exceed 6 Nm")
-    ap.add_argument("--contact-torque", type=float, default=0.0,
-                    help="contact threshold in Nm; 0 clamps 35%% of grasp to 0.25-1.20")
+    ap.add_argument("--contact-torque", type=float, default=0.080,
+                    help="contact torque FLOOR in Nm (default 0.080, the "
+                         "firmware's own value). Contact always also requires "
+                         "the jaw to have stopped -- that is what separates "
+                         "travel from contact, not this number.")
     ap.add_argument("--close-speed", type=float, default=0.5, help="rad/s")
     ap.add_argument("--close-position", type=float, default=0.0,
                     help="normalized close target [0,1], 0=fully closed")

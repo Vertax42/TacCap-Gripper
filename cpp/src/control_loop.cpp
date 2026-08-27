@@ -7,6 +7,7 @@
 #include <taccap/protocol/codec.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace xense::taccap {
 
@@ -77,6 +78,12 @@ void ControlLoop::start() {
         std::lock_guard<std::mutex> lk(mu_);
         target_ = here;
         obs_ = GripperObservation{};   // reset; first stream frame marks it valid
+        stall_clamped_ = false;
+        stall_since_   = {};
+        torque_capped_ = false;
+        cap_since_     = {};
+        torque_capped_pub_.store(false, std::memory_order_relaxed);
+        stalled_.store(false, std::memory_order_relaxed);
     }
 
     start_motor_stream_();
@@ -160,6 +167,112 @@ void ControlLoop::on_status_(const MotorStatusSample& s) {
     obs_.seq     += 1;
     obs_.valid    = true;
     obs_time_     = std::chrono::steady_clock::now();
+    guard_torque_(s, obs_time_);
+    guard_stall_(s, obs_time_);
+}
+
+// The hard backstop: acts on the motor's own current-derived torque, not on
+// what the loop asked for. Once engaged the frame becomes kp=kd=0 + tau_ff, so
+// position error stops contributing to the output entirely.
+void ControlLoop::guard_torque_(const MotorStatusSample& s,
+                                std::chrono::steady_clock::time_point now) {
+    if (cfg_.rated_torque_nm <= 0.0f) return;
+
+    if (torque_capped_) {
+        // Two ways out. Either the jaw travelled away from where the ceiling
+        // engaged -- the obstruction gave way, and a constant tau_ff would
+        // otherwise keep accelerating a free jaw -- or the caller commanded a
+        // target back past the entry point, which is them backing off.
+        const float entry_pos = pos_map_.to_position(cap_entry_raw_);
+        const bool moved_free =
+            std::abs(s.actual_pos - cap_entry_raw_) > cfg_.rated_release_rad;
+        const bool backed_off = cap_closing_ ? (target_ > entry_pos)
+                                             : (target_ < entry_pos);
+        if (moved_free || backed_off) {
+            torque_capped_ = false;
+            cap_since_ = {};
+            torque_capped_pub_.store(false, std::memory_order_relaxed);
+            logger()->info(
+                "ControlLoop torque ceiling released ({}), resuming impedance",
+                moved_free ? "jaw came free" : "caller backed off");
+        }
+        return;
+    }
+
+    if (std::abs(s.actual_torque) < cfg_.rated_torque_nm) {
+        cap_since_ = {};
+        return;
+    }
+    if (cap_since_.time_since_epoch().count() == 0) {
+        cap_since_ = now;
+        return;
+    }
+    if (now - cap_since_ < std::chrono::milliseconds(cfg_.rated_hold_ms)) return;
+
+    torque_capped_ = true;
+    cap_sign_      = (s.actual_torque >= 0.0f) ? 1.0f : -1.0f;
+    cap_entry_raw_ = s.actual_pos;
+    cap_closing_   = target_ < pos_map_.to_position(s.actual_pos);
+    torque_capped_pub_.store(true, std::memory_order_relaxed);
+    torque_caps_.fetch_add(1, std::memory_order_relaxed);
+    logger()->warn(
+        "ControlLoop torque ceiling engaged at {:.3f} Nm feedback: holding "
+        "{:.3f} Nm pure feed-forward with kp=kd=0, so position error can no "
+        "longer add to the output",
+        s.actual_torque, cfg_.rated_torque_nm);
+}
+
+// Torque AND arrested motion, held for stall_hold_ms -- the same shape the
+// firmware's own stall detection uses, and for the same reason: torque alone
+// trips on the impact transient of a fast approach, which is not a stall.
+void ControlLoop::guard_stall_(const MotorStatusSample& s,
+                               std::chrono::steady_clock::time_point now) {
+    if (cfg_.stall_action == StallAction::None) return;
+
+    const bool candidate = std::abs(s.actual_torque) >= cfg_.stall_torque_nm &&
+                           std::abs(s.actual_vel)    <= cfg_.stall_vel_radps;
+    if (!candidate) {
+        stall_since_ = {};
+        stalled_.store(false, std::memory_order_relaxed);
+        return;
+    }
+    if (stall_since_.time_since_epoch().count() == 0) {
+        stall_since_ = now;
+        return;
+    }
+    if (now - stall_since_ < std::chrono::milliseconds(cfg_.stall_hold_ms)) return;
+
+    const float here = pos_map_.to_position(s.actual_pos);
+    if (!stall_clamped_) {
+        stall_clamped_ = true;
+        stall_clamp_   = here;
+        stall_closing_ = target_ < here;
+        stall_trips_.fetch_add(1, std::memory_order_relaxed);
+        logger()->warn(
+            "ControlLoop stall guard engaged: jaw blocked at {:.4f} while the "
+            "target was {:.4f} (torque {:.3f} Nm, |vel| {:.3f} rad/s). Clamping "
+            "the effective target here so position error stops growing; command "
+            "a target the other way to release.",
+            here, target_, s.actual_torque, std::abs(s.actual_vel));
+    }
+    stalled_.store(true, std::memory_order_relaxed);
+}
+
+// The clamp only blocks travel further INTO the obstruction. A target on the
+// other side of the stall point is the caller backing off, and releases it.
+float ControlLoop::clamped_target_() noexcept {
+    if (!stall_clamped_) return target_;
+    const bool released = stall_closing_ ? (target_ > stall_clamp_)
+                                         : (target_ < stall_clamp_);
+    if (released) {
+        stall_clamped_ = false;
+        stalled_.store(false, std::memory_order_relaxed);
+        stall_since_ = {};
+        logger()->info("ControlLoop stall guard released at target {:.4f}", target_);
+        return target_;
+    }
+    return stall_closing_ ? std::max(target_, stall_clamp_)
+                          : std::min(target_, stall_clamp_);
 }
 
 void ControlLoop::run_() {
@@ -169,13 +282,30 @@ void ControlLoop::run_() {
 }
 
 bool ControlLoop::submit_once_() {
-    float p, kp, kd, ff;
+    float raw, kp, kd, ff;
     {
         std::lock_guard<std::mutex> lk(mu_);
-        p = target_; kp = kp_; kd = kd_; ff = ff_;
+        if (torque_capped_) {
+            // Pure feed-forward hold at the ceiling. The position field rides
+            // the measurement so the frame carries no error at all, and with
+            // both gains zero it could not act on one anyway.
+            kp  = 0.0f;
+            kd  = 0.0f;
+            ff  = cap_sign_ * cfg_.rated_torque_nm;
+            raw = obs_.valid ? obs_.raw_pos : pos_map_.to_rad(target_);
+        } else {
+            kp = kp_; kd = kd_; ff = ff_;
+            raw = pos_map_.to_rad(clamped_target_());
+            // Error clamp. Skipped until the stream has told us where the jaw
+            // actually is -- with no measurement there is no error to bound.
+            if (cfg_.max_position_torque_nm > 0.0f && kp > 0.0f && obs_.valid) {
+                const float limit = cfg_.max_position_torque_nm / kp;
+                raw = std::clamp(raw, obs_.raw_pos - limit, obs_.raw_pos + limit);
+            }
+        }
     }
     try {
-        g_.motor().submit_impedance(pos_map_.to_rad(p), kp, kd, ff);
+        g_.motor().submit_impedance(raw, kp, kd, ff);
     } catch (const std::exception& e) {
         logger()->error("ControlLoop submit failed, stopping: {}", e.what());
         stop_flag_.store(true, std::memory_order_release);

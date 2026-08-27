@@ -424,6 +424,30 @@ void bind_components(py::module_& m) {
         });
 
     // ---- GripperAutoCalConfig (V1.9 power-on auto-cal) -------------------
+    py::module_ envmod = m;
+    py::class_<protocol::GripperEnvelope>(envmod, "GripperEnvelope",
+        "Motion safety envelope, carried inside the GripperConfig record "
+        "(Cmd 0x66/0x67 - no new command, no payload size change).\n\n"
+        "The firmware clamps every MIT frame against it: commanded position to "
+        "within peak_torque_nm/kp of the measured position, feed-forward torque "
+        "to cont_torque_nm, velocity feed-forward to max_velocity_rad_s. It "
+        "lives in firmware because the host link is 100 Hz, phase-locked, and "
+        "cannot be polled while controlling.")
+        .def(py::init<>())
+        .def_readwrite("cont_torque_nm",     &protocol::GripperEnvelope::cont_torque_nm)
+        .def_readwrite("peak_torque_nm",     &protocol::GripperEnvelope::peak_torque_nm)
+        .def_readwrite("flags",              &protocol::GripperEnvelope::flags)
+        .def("__repr__", [](const protocol::GripperEnvelope& e) {
+            char buf[192];
+            std::snprintf(buf, sizeof(buf),
+                "GripperEnvelope(cont=%.3f Nm, peak=%.3f Nm, flags=0x%04x%s)",
+                e.cont_torque_nm, e.peak_torque_nm, e.flags,
+                (e.flags & 0x0002) ? " ENFORCE" : " inactive");
+            return std::string(buf);
+        });
+    envmod.attr("GRIPPER_ENVELOPE_VALID")   = (uint16_t)0x0001;
+    envmod.attr("GRIPPER_ENVELOPE_ENFORCE") = (uint16_t)0x0002;
+
     py::class_<protocol::GripperAutoCalConfig>(m, "GripperAutoCalConfig")
         .def(py::init([]() {
             protocol::GripperAutoCalConfig c{};
@@ -1441,6 +1465,12 @@ void bind_components(py::module_& m) {
             g.set_gripper_config(cfg);
         }, py::arg("config"))
         // Power-on auto-calibration config (Cmd 0x68/0x69).
+        .def("get_envelope", [](FollowerGripper& g) {
+            py::gil_scoped_release r; return g.get_envelope();
+        })
+        .def("set_envelope", [](FollowerGripper& g, const protocol::GripperEnvelope& e) {
+            py::gil_scoped_release r; g.set_envelope(e);
+        }, py::arg("envelope"))
         .def("get_auto_cal_config", [](FollowerGripper& g, unsigned timeout_ms) {
             py::gil_scoped_release gil;
             return g.get_auto_cal_config(std::chrono::milliseconds(timeout_ms));
@@ -1532,15 +1562,40 @@ void bind_components(py::module_& m) {
         .value("FREE_RUNNING",  ControlLoop::SubmitPhase::FreeRunning)
         .value("STREAM_LOCKED", ControlLoop::SubmitPhase::StreamLocked);
 
+    py::enum_<ControlLoop::StallAction>(m, "StallAction",
+        "What ControlLoop does when the jaw is blocked.\n\n"
+        "HOLD_POSITION (default) clamps the effective target at the position "
+        "the jaw actually reached, so kp*error -- and therefore torque -- stops "
+        "growing; commanding a target back the other way releases it. NONE is "
+        "the unguarded behaviour: on firmware 1.1.5 nothing below the host "
+        "bounds a blocked impedance target except the motor's 6 Nm 0x700B "
+        "ceiling.")
+        .value("NONE",          ControlLoop::StallAction::None)
+        .value("HOLD_POSITION", ControlLoop::StallAction::HoldPosition);
+
     py::class_<ControlLoop>(m, "ControlLoop")
         .def(py::init([](FollowerGripper& g, unsigned hz, float kp, float kd,
                          float feedforward_torque, unsigned motor_stream_hz,
-                         ControlLoop::SubmitPhase phase) {
+                         ControlLoop::SubmitPhase phase,
+                         float max_position_torque_nm,
+                         float rated_torque_nm, unsigned rated_hold_ms,
+                         float rated_release_rad,
+                         float stall_torque_nm, float stall_vel_radps,
+                         unsigned stall_hold_ms,
+                         ControlLoop::StallAction stall_action) {
                 ControlLoop::Config c;
                 c.hz = hz; c.kp = kp; c.kd = kd;
                 c.feedforward_torque = feedforward_torque;
                 c.motor_stream_hz = motor_stream_hz;
                 c.phase = phase;
+                c.max_position_torque_nm = max_position_torque_nm;
+                c.rated_torque_nm   = rated_torque_nm;
+                c.rated_hold_ms     = rated_hold_ms;
+                c.rated_release_rad = rated_release_rad;
+                c.stall_torque_nm = stall_torque_nm;
+                c.stall_vel_radps = stall_vel_radps;
+                c.stall_hold_ms   = stall_hold_ms;
+                c.stall_action    = stall_action;
                 return std::make_unique<ControlLoop>(g, c);
             }),
             py::arg("gripper"), py::arg("hz") = 100u,
@@ -1548,6 +1603,14 @@ void bind_components(py::module_& m) {
             py::arg("feedforward_torque") = 0.0f,
             py::arg("motor_stream_hz") = 100u,
             py::arg("phase") = ControlLoop::SubmitPhase::StreamLocked,
+            py::arg("max_position_torque_nm") = 1.5f,
+            py::arg("rated_torque_nm") = 2.0f,
+            py::arg("rated_hold_ms") = 20u,
+            py::arg("rated_release_rad") = 0.05f,
+            py::arg("stall_torque_nm") = 1.2f,
+            py::arg("stall_vel_radps") = 0.15f,
+            py::arg("stall_hold_ms") = 60u,
+            py::arg("stall_action") = ControlLoop::StallAction::HoldPosition,
             py::keep_alive<1, 2>())   // keep the gripper alive while the loop lives
         .def("start", [](ControlLoop& l) { py::gil_scoped_release g; l.start(); })
         .def("stop",  [](ControlLoop& l) { py::gil_scoped_release g; l.stop(); })
@@ -1562,6 +1625,10 @@ void bind_components(py::module_& m) {
         .def("observation", [](const ControlLoop& l) {
             py::gil_scoped_release g; return l.observation();
         })
+        .def_property_readonly("torque_capped", &ControlLoop::torque_capped)
+        .def_property_readonly("torque_caps",   &ControlLoop::torque_caps)
+        .def_property_readonly("stalled",      &ControlLoop::stalled)
+        .def_property_readonly("stall_trips",  &ControlLoop::stall_trips)
         .def_property_readonly("submit_hz",    &ControlLoop::submit_hz)
         .def_property_readonly("submit_count", &ControlLoop::submit_count)
         .def("__enter__", [](ControlLoop& l) -> ControlLoop& {
@@ -1594,6 +1661,9 @@ void bind_components(py::module_& m) {
         .def_readwrite("hold_torque_limit_nm", &ForcePositionConfig::hold_torque_limit_nm)
         .def_readwrite("motion_torque_limit_nm", &ForcePositionConfig::motion_torque_limit_nm)
         .def_readwrite("contact_torque_nm",    &ForcePositionConfig::contact_torque_nm)
+        .def_readwrite("contact_vel_radps",    &ForcePositionConfig::contact_vel_radps)
+        .def_readwrite("contact_vel_ratio",    &ForcePositionConfig::contact_vel_ratio)
+        .def_readwrite("contact_moved_rad",    &ForcePositionConfig::contact_moved_rad)
         .def_readwrite("position_kp",          &ForcePositionConfig::position_kp)
         .def_readwrite("position_kd",          &ForcePositionConfig::position_kd)
         .def_readwrite("brake_distance_rad",   &ForcePositionConfig::brake_distance_rad)
@@ -1638,9 +1708,6 @@ void bind_components(py::module_& m) {
         })
         .def("stop", [](ForcePositionController& c) {
             py::gil_scoped_release g; c.stop();
-        })
-        .def("grasp", [](ForcePositionController& c) {
-            py::gil_scoped_release g; c.grasp();
         })
         .def("release", [](ForcePositionController& c) {
             py::gil_scoped_release g; c.release();

@@ -417,9 +417,58 @@ struct GripperConfig {
     uint16_t version;        // GRIPPER_CONFIG_VERSION
     uint16_t flags;          // GripperConfigFlag::* bits
     float    max_open_rad;   // max open span after zeroing (rad)
-    float    min_open_rad;   // reserved, default 0
-    uint8_t  reserved[16];   // future expansion
+    // Raw shaft angle that normalized 0.0 maps to. NOT always zero: the
+    // power-on auto-calibration sets the motor zero while the jaw is held
+    // loaded at close_stall_torque_nm via a VELOCITY command, and a kd-only
+    // MIT frame cannot reproduce that push (measured: 0.359 Nm commanded,
+    // 0.213 Nm fed back). Firmware therefore stores a small inset here so
+    // that normalized 0.0 is a point control can actually reach. Symmetric
+    // with the margin already applied at the open end.
+    float    min_open_rad;
+    uint8_t  reserved[16];   // GripperEnvelope overlays this — see below
 };
+
+// ---- Motion safety envelope (overlays GripperConfig::reserved) ------------
+// Carried inside the existing 32-byte GripperConfig record, so Cmd 0x66/0x67
+// keep their payload length and no new command was added. On a device that has
+// never had one written, reserved is all zeros, so flags is 0 and the envelope
+// is simply inactive.
+//
+// It lives in firmware because the host cannot enforce it in time: this link
+// is 100 Hz, phase-locked, and cannot be polled while controlling (an ACK
+// collides with the control frames). At 8 rad/s a 30 ms host reaction is
+// 0.24 rad of travel — measured, that is enough to cross an object and knock
+// it out before torque even rises.
+//
+// There is deliberately no command-timeout field: an MCU-side timer cannot
+// protect against the MCU itself hanging. The motor's own CAN timeout register
+// (0x7028) is the right layer for that and is independent of this record.
+namespace GripperEnvelopeFlag {
+    constexpr uint16_t Valid   = 0x0001;  // the record has been written
+    constexpr uint16_t Enforce = 0x0002;  // firmware applies it every cycle
+}
+
+struct GripperEnvelope {
+    float    cont_torque_nm;      // indefinitely holdable torque, 0 = unlimited
+    float    peak_torque_nm;      // motion transient ceiling, 0 = unlimited
+    // No speed ceiling here, and that is a measured decision rather than an
+    // omission. The only speed an MIT frame can clamp is the velocity
+    // FEED-FORWARD, and impedance control runs a pure PD path with that field
+    // at zero, so clamping it never fires. The motor's own limit_spd (0x7017)
+    // is the right layer, but private-parameter access is refused outright
+    // while the motor speaks MIT, and switching protocols needs a power cycle
+    // -- there is no runtime path to both.
+    //
+    // Approach speed is set by peak_torque_nm / kd instead: the jaw accelerates
+    // until damping balances the clamped error torque. Measured on firmware
+    // 1.1.5 with peak = 1.5 Nm and kd = 1.0: 1.70 rad/s. Lower peak_torque_nm
+    // to approach more slowly.
+    uint8_t  reserved0[6];        // write 0
+    uint16_t flags;               // GripperEnvelopeFlag::*
+};
+
+static_assert(sizeof(GripperEnvelope) == 16,
+              "GripperEnvelope must overlay GripperConfig::reserved[16]");
 
 // ---- UART counters (fw 1.1.3 — Cmd::GetUartStats 0x54) --------------------
 //

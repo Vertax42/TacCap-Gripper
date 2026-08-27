@@ -61,6 +61,9 @@ MotorStatusSample = _taccap_native.MotorStatusSample
 MotorProtocol = _taccap_native.MotorProtocol          # V1.7
 GripperConfig = _taccap_native.GripperConfig          # V1.7
 GripperAutoCalConfig = _taccap_native.GripperAutoCalConfig  # V1.9 power-on auto-cal
+GripperEnvelope = _taccap_native.GripperEnvelope       # motion safety envelope (in GripperConfig)
+GRIPPER_ENVELOPE_VALID = _taccap_native.GRIPPER_ENVELOPE_VALID
+GRIPPER_ENVELOPE_ENFORCE = _taccap_native.GRIPPER_ENVELOPE_ENFORCE
 GripperPosition = _taccap_native.GripperPosition      # raw rad <-> normalized [0,1]
 CameraFisheyeCal = _taccap_native.CameraFisheyeCal    # V2.0 fisheye intrinsics + distortion
 FisheyeUndistorter = _taccap_native.FisheyeUndistorter  # applies them to frames
@@ -75,6 +78,7 @@ Calibration = _taccap_native.Calibration              # V2.0/V2.1 flash-persiste
 GripperObservation = _taccap_native.GripperObservation  # ControlLoop latest obs
 ControlLoop = _taccap_native.ControlLoop              # fixed-rate send/recv loop
 SubmitPhase = _taccap_native.SubmitPhase              # ControlLoop send phasing
+StallAction = _taccap_native.StallAction              # ControlLoop blocked-jaw guard
 ForcePositionState = _taccap_native.ForcePositionState
 ForcePositionConfig = _taccap_native.ForcePositionConfig
 ForcePositionSnapshot = _taccap_native.ForcePositionSnapshot
@@ -127,6 +131,8 @@ find_left = _taccap_native.find_left
 find_right = _taccap_native.find_right
 find_leader = _taccap_native.find_leader
 find_follower = _taccap_native.find_follower
+find_leader = _taccap_native.find_leader
+find_follower = _taccap_native.find_follower
 
 # ---- Exceptions -------------------------------------------------------------
 ProtocolError = _taccap_native.ProtocolError
@@ -171,6 +177,9 @@ __all__ = [
     "MotorProtocol",
     "GripperConfig",
     "GripperAutoCalConfig",
+    "GripperEnvelope",
+    "GRIPPER_ENVELOPE_VALID",
+    "GRIPPER_ENVELOPE_ENFORCE",
     "GripperPosition",
     "CameraFisheyeCal",
     "FisheyeUndistorter",
@@ -182,6 +191,7 @@ __all__ = [
     "GripperObservation",
     "ControlLoop",
     "SubmitPhase",
+    "StallAction",
     "ForcePositionState",
     "ForcePositionConfig",
     "ForcePositionSnapshot",
@@ -221,6 +231,8 @@ __all__ = [
     "find_one",
     "find_left",
     "find_right",
+    "find_leader",
+    "find_follower",
     "find_leader",
     "find_follower",
     # Exceptions

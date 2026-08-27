@@ -46,11 +46,32 @@ void validate_config(const ForcePositionConfig& cfg) {
         throw std::invalid_argument(
             "ForcePositionConfig.grasp_torque_nm must not exceed hold_torque_limit_nm");
     }
-    if (!finite(cfg.contact_torque_nm) || cfg.contact_torque_nm < 0.0f ||
-        cfg.contact_torque_nm > cfg.motion_torque_limit_nm) {
+    if (!finite(cfg.contact_torque_nm) || cfg.contact_torque_nm <= 0.0f) {
         throw std::invalid_argument(
-            "ForcePositionConfig.contact_torque_nm must be 0 or in "
-            "(0, motion_torque_limit_nm]");
+            "ForcePositionConfig.contact_torque_nm must be > 0");
+    }
+    // A floor above the torque the closing command can produce is unreachable:
+    // the jaw would push at grasp_torque_nm forever and never latch, which is
+    // the stall this controller exists to prevent. Feedback torque runs well
+    // under the command at stall, so the real headroom is smaller than this
+    // check implies -- see the start() warning.
+    if (cfg.contact_torque_nm > cfg.grasp_torque_nm) {
+        throw std::invalid_argument(
+            "ForcePositionConfig.contact_torque_nm must not exceed "
+            "grasp_torque_nm -- the closing command cannot reach it");
+    }
+    if (!finite(cfg.contact_vel_radps) || cfg.contact_vel_radps <= 0.0f) {
+        throw std::invalid_argument(
+            "ForcePositionConfig.contact_vel_radps must be > 0");
+    }
+    if (!finite(cfg.contact_vel_ratio) || cfg.contact_vel_ratio <= 0.0f ||
+        cfg.contact_vel_ratio > 1.0f) {
+        throw std::invalid_argument(
+            "ForcePositionConfig.contact_vel_ratio must be in (0, 1]");
+    }
+    if (!finite(cfg.contact_moved_rad) || cfg.contact_moved_rad < 0.0f) {
+        throw std::invalid_argument(
+            "ForcePositionConfig.contact_moved_rad must be >= 0");
     }
     if (!finite(cfg.position_kp) || cfg.position_kp <= 0.0f ||
         !finite(cfg.position_kd) || cfg.position_kd < 0.0f) {
@@ -81,6 +102,11 @@ void validate_target(const ForcePositionConfig& cfg,
     }
 }
 
+// MotorStatusBit::Stalled (0x0004) is deliberately NOT in this mask. Holding
+// an object is a stall by the motor's own definition, so treating it as a fault
+// would abort every successful grasp the instant it succeeds. Contact detection
+// (contact_candidate_) is what interprets an arrested jaw here; this mask is
+// only for conditions that make further motion unsafe. Do not "complete" it.
 bool has_serious_fault(uint16_t status) noexcept {
     constexpr uint16_t mask =
         protocol::MotorStatusBit::Fault |
@@ -131,17 +157,8 @@ void ForcePositionPolicy::reset(const MotorStatusSample& sample,
     grasp_torque_nm_ = cfg_.grasp_torque_nm;
     commanded_torque_nm_ = 0.0f;
     contact_count_ = 0;
+    begin_motion_(sample);
     fault_reason_.clear();
-}
-
-void ForcePositionPolicy::grasp(std::chrono::steady_clock::time_point now) {
-    if (state_ == ForcePositionState::Fault || state_ == ForcePositionState::Idle) return;
-    state_ = ForcePositionState::Closing;
-    state_started_ = now;
-    target_position_ = cfg_.close_position;
-    grasp_torque_nm_ = cfg_.grasp_torque_nm;
-    commanded_torque_nm_ = 0.0f;
-    contact_count_ = 0;
 }
 
 void ForcePositionPolicy::release(std::chrono::steady_clock::time_point now) {
@@ -152,6 +169,15 @@ void ForcePositionPolicy::release(std::chrono::steady_clock::time_point now) {
     grasp_torque_nm_ = cfg_.grasp_torque_nm;
     commanded_torque_nm_ = 0.0f;
     contact_count_ = 0;
+}
+
+void ForcePositionPolicy::begin_motion_(const MotorStatusSample& sample) {
+    motion_start_raw_ = sample.actual_pos;
+    peak_abs_vel_ = std::abs(sample.actual_vel);
+}
+
+void ForcePositionPolicy::track_motion_(const MotorStatusSample& sample) noexcept {
+    peak_abs_vel_ = std::max(peak_abs_vel_, std::abs(sample.actual_vel));
 }
 
 void ForcePositionPolicy::set_target(
@@ -169,6 +195,7 @@ void ForcePositionPolicy::set_target(
     state_started_ = now;
     commanded_torque_nm_ = 0.0f;
     contact_count_ = 0;
+    begin_motion_(sample);
 
     if (current_position > target_position + kTargetTolerance) {
         state_ = ForcePositionState::Closing;
@@ -187,6 +214,7 @@ void ForcePositionPolicy::hold_position(const MotorStatusSample& sample) {
     hold_raw_ = sample.actual_pos;
     commanded_torque_nm_ = 0.0f;
     contact_count_ = 0;
+    begin_motion_(sample);
 }
 
 void ForcePositionPolicy::fail(std::string reason) {
@@ -201,9 +229,33 @@ float ForcePositionPolicy::direction_open_() const noexcept {
 }
 
 float ForcePositionPolicy::contact_threshold_() const noexcept {
-    if (cfg_.contact_torque_nm > 0.0f) return cfg_.contact_torque_nm;
-    return std::min(cfg_.motion_torque_limit_nm,
-                    std::clamp(grasp_torque_nm_ * 0.35f, 0.25f, 1.20f));
+    // A flat floor. Deliberately NOT derived from the commanded torque -- see
+    // the header: the feedback never reaches the command at stall, so any
+    // cap-derived threshold is unreachable under a kd-only MIT frame.
+    return cfg_.contact_torque_nm;
+}
+
+bool ForcePositionPolicy::contact_candidate_(const MotorStatusSample& sample,
+                                             float motion_sign) const noexcept {
+    // Torque saturation is necessary but NEVER sufficient -- see the header.
+    // The jaw's own restoring torque climbs smoothly through an empty close, so
+    // torque alone would latch part way down with nothing in the jaws.
+    if (std::abs(sample.actual_torque) < contact_threshold_()) return false;
+
+    // Firmware rule "torque": arrested outright, no travel history needed, so a
+    // jaw that starts already against the object still latches. Measured
+    // margin on 1.1.5 hardware: free travel never drops under 0.183 rad/s.
+    if (std::abs(sample.actual_vel) <= cfg_.contact_vel_radps) return true;
+
+    // Firmware rule "velocity": once the jaw has demonstrably moved, motion
+    // collapsing to a fraction of the commanded speed is enough. has_moved is
+    // what keeps a slow-but-free close from qualifying.
+    const float target_speed = cfg_.close_speed_radps;
+    const bool has_moved =
+        peak_abs_vel_ >= target_speed * 0.35f &&
+        std::abs(sample.actual_pos - motion_start_raw_) >= cfg_.contact_moved_rad;
+    if (!has_moved) return false;
+    return sample.actual_vel * motion_sign <= target_speed * cfg_.contact_vel_ratio;
 }
 
 protocol::MotorImpedanceCtrl ForcePositionPolicy::zero_(
@@ -222,25 +274,26 @@ protocol::MotorImpedanceCtrl ForcePositionPolicy::force_hold_() {
 }
 
 protocol::MotorImpedanceCtrl ForcePositionPolicy::position_hold_(
-        const MotorStatusSample& sample, float desired_raw) {
-    // Bound the instantaneous PD request before it reaches the motor. The
-    // motion limit bounds PD transients; motor 0x700B remains the independent
-    // hardware backstop. Force holding uses the separate, lower hold limit.
+        const MotorStatusSample& sample, float desired_raw,
+        float torque_budget) {
+    // Bound the instantaneous PD request before it reaches the motor; motor
+    // 0x700B remains the independent hardware backstop. Force holding uses the
+    // separate, lower hold limit.
+    const float budget = std::clamp(torque_budget, kEpsilon,
+                                    cfg_.motion_torque_limit_nm);
     const float speed = std::abs(sample.actual_vel);
     float kd = cfg_.position_kd;
     if (speed > kEpsilon) {
-        kd = std::min(kd, cfg_.motion_torque_limit_nm / speed);
+        kd = std::min(kd, budget / speed);
     }
     const float damping = -kd * sample.actual_vel;
-    const float position_budget = std::max(0.0f,
-        cfg_.motion_torque_limit_nm - std::abs(damping));
+    const float position_budget = std::max(0.0f, budget - std::abs(damping));
     const float error_limit = position_budget / cfg_.position_kp;
     const float error = std::clamp(desired_raw - sample.actual_pos,
                                    -error_limit, error_limit);
     const float target = sample.actual_pos + error;
     const float predicted = cfg_.position_kp * error + damping;
-    commanded_torque_nm_ = std::min(cfg_.motion_torque_limit_nm,
-                                    std::abs(predicted));
+    commanded_torque_nm_ = std::min(budget, std::abs(predicted));
     return {target, cfg_.position_kp, kd, 0.0f, 0.0f};
 }
 
@@ -264,9 +317,12 @@ protocol::MotorImpedanceCtrl ForcePositionPolicy::step(
     const float open_position = map_.to_position(sample.actual_pos);
 
     if (state_ == ForcePositionState::Closing) {
+        track_motion_(sample);
         const auto guard = std::chrono::milliseconds(cfg_.startup_guard_ms);
         const bool guard_done = now - state_started_ >= guard;
-        const bool contact = std::abs(sample.actual_torque) >= contact_threshold_();
+        // motion_sign: +1 along the closing direction, matching the firmware's
+        // s_auto_close_sign.
+        const bool contact = contact_candidate_(sample, -direction_open_());
         if (guard_done && contact) ++contact_count_;
         else                       contact_count_ = 0;
 
@@ -279,12 +335,19 @@ protocol::MotorImpedanceCtrl ForcePositionPolicy::step(
         if (open_position <= target_position_ + 1e-4f) {
             state_ = ForcePositionState::HoldingPosition;
             hold_raw_ = map_.to_rad(target_position_);
-            return position_hold_(sample, hold_raw_);
+            return position_hold_(sample, hold_raw_, cfg_.motion_torque_limit_nm);
         }
 
         const float close_raw = map_.to_rad(target_position_);
         if (std::abs(sample.actual_pos - close_raw) <= cfg_.brake_distance_rad) {
-            return position_hold_(sample, close_raw);
+            // Decelerating onto the target is still part of the caller's grasp,
+            // so it is bounded by the grasp torque -- NOT by the 6 Nm motion
+            // limit. Measured on hardware: with the motion limit here, a jaw
+            // blocked inside the last brake_distance_rad was a plain
+            // error-clamped PD push, i.e. exactly the stall this class exists
+            // to remove, and its low commanded torque also held the feedback
+            // under the contact floor so nothing ever latched.
+            return position_hold_(sample, close_raw, grasp_torque_nm_);
         }
 
         // Kp=0 prevents target-position error from generating torque. At zero
@@ -307,10 +370,15 @@ protocol::MotorImpedanceCtrl ForcePositionPolicy::step(
     }
 
     if (state_ == ForcePositionState::Opening) {
+        // No contact latch on the way open: an obstruction there is bounded by
+        // the same grasp_torque_nm velocity-damping cap, and stopping short
+        // would strand the jaw. Travel history is still tracked so a following
+        // Closing starts from an honest peak.
+        track_motion_(sample);
         if (open_position >= target_position_ - 1e-4f) {
             state_ = ForcePositionState::HoldingPosition;
             hold_raw_ = map_.to_rad(target_position_);
-            return position_hold_(sample, hold_raw_);
+            return position_hold_(sample, hold_raw_, cfg_.motion_torque_limit_nm);
         }
         const float open_velocity = direction_open_() * cfg_.close_speed_radps;
         const float velocity_error = open_velocity - sample.actual_vel;
@@ -323,7 +391,7 @@ protocol::MotorImpedanceCtrl ForcePositionPolicy::step(
         return {sample.actual_pos, 0.0f, kd, 0.0f, open_velocity};
     }
 
-    return position_hold_(sample, hold_raw_);
+    return position_hold_(sample, hold_raw_, cfg_.motion_torque_limit_nm);
 }
 
 }  // namespace detail
@@ -385,6 +453,50 @@ void ForcePositionController::start() {
             "ForcePositionController: device torque limit {:.3f} Nm is below "
             "motion_torque_limit_nm {:.3f} Nm; the device limit wins",
             device_limit, cfg_.motion_torque_limit_nm);
+    }
+
+    // Cross-check against the firmware's own stall-detection numbers. The
+    // power-on auto-calibration solves the same problem this controller does
+    // (close until the jaw is blocked) and its close_stall_torque_nm is the
+    // per-device value that has been tuned to survive the jaw's restoring
+    // torque. It is advisory here, not a substitute for the caller's force
+    // choice -- but a grasp torque far below it will not saturate against the
+    // mechanism, and one far above it grips harder than the firmware ever
+    // pushes during calibration.
+    try {
+        const auto ac = g_.get_auto_cal_config();
+        if (std::isfinite(ac.close_stall_torque_nm) &&
+            ac.close_stall_torque_nm > 0.0f) {
+            if (cfg_.grasp_torque_nm < ac.close_stall_torque_nm * 0.5f) {
+                logger()->warn(
+                    "ForcePositionController: grasp torque {:.3f} Nm is well "
+                    "below the firmware's own close stall torque {:.3f} Nm; "
+                    "the jaw may not develop enough torque to confirm contact",
+                    cfg_.grasp_torque_nm, ac.close_stall_torque_nm);
+            }
+            logger()->debug(
+                "ForcePositionController: firmware auto-cal close={:.3f}Nm "
+                "open={:.3f}Nm close_speed={:.3f}rad/s stall_hold={}ms",
+                ac.close_stall_torque_nm, ac.open_stall_torque_nm,
+                ac.close_speed_rad_s, ac.stall_hold_ms);
+        }
+    } catch (const std::exception& e) {
+        // Older firmware, or a device that has never stored the record. The
+        // controller does not depend on it.
+        logger()->debug("ForcePositionController: auto-cal config unavailable ({})",
+                        e.what());
+    }
+
+    // Feedback torque runs well under the commanded value once the jaw stalls
+    // (~0.59 measured on 1.1.5 hardware), so a grasp torque only marginally
+    // above the contact floor produces feedback that never reaches it and the
+    // close never latches.
+    if (cfg_.grasp_torque_nm < cfg_.contact_torque_nm * 2.0f) {
+        logger()->warn(
+            "ForcePositionController: grasp torque {:.3f} Nm leaves little "
+            "headroom over the {:.3f} Nm contact floor; stall feedback runs "
+            "well under the commanded torque, so contact may never confirm",
+            cfg_.grasp_torque_nm, cfg_.contact_torque_nm);
     }
 
     const MotorStatusSample initial = g_.motor().read_status();
@@ -484,16 +596,6 @@ void ForcePositionController::request_step_() {
     cv_.notify_one();
 }
 
-void ForcePositionController::grasp() {
-    std::lock_guard<std::mutex> lk(mu_);
-    if (!running() || !policy_ || !have_sample_) {
-        throw std::logic_error("ForcePositionController::grasp called before start");
-    }
-    policy_->set_target(latest_, cfg_.close_position, cfg_.grasp_torque_nm,
-                        std::chrono::steady_clock::now());
-    request_step_();
-}
-
 void ForcePositionController::set_target(float position) {
     set_target(position, cfg_.grasp_torque_nm);
 }
@@ -582,13 +684,19 @@ void ForcePositionController::run_() {
             const auto now = std::chrono::steady_clock::now();
             if (!policy_ || !have_sample_) continue;
 
-            if (!step_requested_) {
-                if (now - latest_time_ < timeout ||
-                    policy_->state() == ForcePositionState::Fault) {
-                    continue;
-                }
+            // Staleness is checked unconditionally. Doing it only in the
+            // !step_requested_ branch let set_target()/release()/hold_position()
+            // walk straight past it: those set step_requested_, so a caller
+            // command issued after the status stream died would be computed
+            // from a stale sample and put on the wire as real motion. Now a
+            // dead stream faults first, and step() answers with zero torque
+            // whatever the caller just asked for.
+            const bool stale = now - latest_time_ >= timeout;
+            if (stale && policy_->state() != ForcePositionState::Fault) {
                 policy_->fail("motor status stream stale");
+                step_requested_ = true;   // push one zero-torque command out
             }
+            if (!step_requested_) continue;
             step_requested_ = false;
             command = policy_->step(latest_, now);
             send = true;

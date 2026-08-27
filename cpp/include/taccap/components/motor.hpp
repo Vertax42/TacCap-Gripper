@@ -198,6 +198,15 @@ public:
     // the motor runs the Private CAN protocol — under MIT these NACK
     // InvalidParam (-> ProtocolError). The firmware whitelists index + R/W. The
     // 4-byte raw_value is interpreted per MotorPrivateParam::type (u8 / f32).
+    // Refused while the motor speaks the MIT protocol, which is the normal
+    // case for a gripper. can_motor_read_private_param() rejects every index
+    // up front when the protocol mode is MIT, so these two always raise
+    // ProtocolError(InvalidParam) there whatever the index -- verified on
+    // firmware 1.1.5 against 0x7017. Reaching them means switching protocols,
+    // which needs a power cycle, so there is no runtime path. They stay because
+    // they remain correct on a private-protocol device; for the 0x700B limit
+    // use set_startup_limit_torque(), which is applied at boot and needs no
+    // private-parameter access.
     protocol::MotorPrivateParam get_private_param(uint16_t index);
     void set_private_param(uint16_t index, uint32_t raw_value);
     protocol::MotorControlStats control_stats(                 // Cmd 0x51
