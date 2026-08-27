@@ -225,10 +225,21 @@ TEST(ForcePositionControllerPty, StaleStatusStreamFaultsWithAZeroTorqueCommand) 
     ASSERT_TRUE(wait_for([&] { return fw.submit_count() >= 2; },
                          std::chrono::milliseconds(1000)));
 
+    const unsigned before = fw.submit_count();
     fw.freeze_stream(true);
-    ASSERT_TRUE(wait_for([&] { return c.state() == tx::ForcePositionState::Fault; },
-                         std::chrono::milliseconds(1000)))
-        << "state stayed " << tx::to_string(c.state());
+
+    // Wait for the zero-torque frame to actually reach the wire, not merely for
+    // the state to flip. policy_->fail() sets Fault while holding the lock, but
+    // the submit happens outside it -- so Fault is observable before the frame
+    // exists, and asserting on state alone races with the write. Waiting on the
+    // submit counter is what the test is really about anyway.
+    ASSERT_TRUE(wait_for([&] {
+                             return c.state() == tx::ForcePositionState::Fault &&
+                                    fw.submit_count() > before;
+                         },
+                         std::chrono::milliseconds(2000)))
+        << "state " << tx::to_string(c.state()) << ", submits "
+        << fw.submit_count() << " (was " << before << ")";
 
     const auto last = fw.last_submit();
     ASSERT_TRUE(last.has_value());
