@@ -164,6 +164,7 @@ void ControlLoop::on_status_(const MotorStatusSample& s) {
     obs_.torque   = s.actual_torque;
     obs_.raw_pos  = s.actual_pos;
     obs_.status   = s.status;
+    obs_.motor_temp_c = s.motor_temp_c;
     obs_.seq     += 1;
     obs_.valid    = true;
     obs_time_     = std::chrono::steady_clock::now();

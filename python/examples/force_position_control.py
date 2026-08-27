@@ -90,9 +90,10 @@ def main() -> int:
         for target in (1.0, 0.0, 1.0):
             c.set_target(target)
             name, s, dt = settle(c)
+            # 位置/力矩/温度全部来自状态流的 snapshot,控制期间不碰总线。
             print(f"  target={target:.2f} -> {name:16s} pos={s.observation.position:.4f} "
                   f"cmd={s.commanded_torque_nm:.3f} 实测={s.observation.torque:+.3f} Nm "
-                  f"用时 {dt:.2f}s")
+                  f"temp={s.observation.motor_temp_c:.0f}°C 用时 {dt:.2f}s")
             if name == "FAULT":
                 print(f"  fault: {s.fault_reason}")
                 break

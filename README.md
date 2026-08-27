@@ -393,8 +393,10 @@ python python/examples/impedance_control.py --set-envelope \
 - **握持力不是常数。** I²t 与温度墙对纯力矩保持同样生效。实测(墙 90/100,
   `cont=1.6`):91 °C 起降额,94 °C / 1.370 Nm 平衡。`grasp_torque_nm` 是设定值,
   固件在下面把实际输出降下来。
-- **控制期间不要轮询 `read_status()`。** 相位锁只保护遥测帧不保护 ACK,轮询会
-  和控制帧对撞导致超时。位置/速度/力矩都从 `observation()` / `snapshot()` 取。
+- **控制期间不要轮询 `read_status()`。** 相位锁只保护遥测帧不保护 ACK:它的请求
+  可能落进 MCU 正在发送的窗口、把那一帧遥测撞废,它的应答也可能被控制循环的提交
+  撞坏(重试可恢复,代价是 ~31 ms 延迟)。位置、速度、力矩、状态位、**温度**
+  全部在 `observation()` / `snapshot()` 里,控制期间不需要碰总线。
 
 Runnable demos: `python/examples/impedance_control.py` and
 `python/examples/force_position_control.py` (see above), plus

@@ -81,9 +81,11 @@ def main() -> int:
             while time.perf_counter() - t0 < 2.0:
                 time.sleep(0.02)
             o = loop.observation()
+            # 全部来自状态流,控制期间不碰总线 —— read_status() 那类需要 ACK 的
+            # 调用会和控制帧对撞,而 observation() 不会。
             print(f"  target={target:.2f} -> pos={o.position:.4f} "
                   f"err={target - o.position:+.4f} tq={o.torque:+.3f} Nm "
-                  f"age={o.age_ms:.1f}ms")
+                  f"temp={o.motor_temp_c:.0f}°C age={o.age_ms:.1f}ms")
 
         print(f"\n[loop] submit_hz={loop.submit_hz:.1f} submits={loop.submit_count} "
               f"堵转保护触发 {loop.stall_trips} 次")

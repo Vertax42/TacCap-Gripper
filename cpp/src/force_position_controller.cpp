@@ -515,6 +515,7 @@ void ForcePositionController::start() {
         observation_.torque = initial.actual_torque;
         observation_.raw_pos = initial.actual_pos;
         observation_.status = initial.status;
+        observation_.motor_temp_c = initial.motor_temp_c;
         observation_.seq = 1;
         stop_requested_ = false;
         step_requested_ = true;
@@ -585,6 +586,7 @@ void ForcePositionController::on_status_(const MotorStatusSample& sample) {
         observation_.torque = sample.actual_torque;
         observation_.raw_pos = sample.actual_pos;
         observation_.status = sample.status;
+        observation_.motor_temp_c = sample.motor_temp_c;
         ++observation_.seq;
         step_requested_ = true;
     }

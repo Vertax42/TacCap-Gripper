@@ -67,6 +67,13 @@ struct GripperObservation {
     float    torque   = 0.0f;    // Nm
     float    raw_pos  = 0.0f;    // raw shaft angle (rad)
     uint16_t status   = 0;       // protocol::MotorStatusBit::*
+    // Motor temperature (deg C). It rides in every status frame already, and
+    // is here so that nothing needs read_status() while a control loop runs.
+    // That call is an ACK round-trip: its request can land inside the MCU's own
+    // transmission and destroy the status frame in flight, and its reply can be
+    // corrupted by the loop's submits. The stream-locked submit phase cannot
+    // protect it -- the loop has no idea when a caller decides to poll.
+    float    motor_temp_c = 0.0f;
     uint64_t seq      = 0;       // count of stream updates received so far
     double   age_ms   = 0.0;     // age of this sample when observation() returned
 };

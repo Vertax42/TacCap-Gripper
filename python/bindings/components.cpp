@@ -1543,14 +1543,15 @@ void bind_components(py::module_& m) {
         .def_readonly("torque",   &GripperObservation::torque)
         .def_readonly("raw_pos",  &GripperObservation::raw_pos)
         .def_readonly("status",   &GripperObservation::status)
+        .def_readonly("motor_temp_c", &GripperObservation::motor_temp_c)
         .def_readonly("seq",      &GripperObservation::seq)
         .def_readonly("age_ms",   &GripperObservation::age_ms)
         .def("__repr__", [](const GripperObservation& o) {
             char buf[128];
             std::snprintf(buf, sizeof(buf),
                 "GripperObservation(valid=%d, position=%.4f, vel=%.4f, "
-                "torque=%.4f, age=%.1fms, seq=%llu)",
-                o.valid, o.position, o.velocity, o.torque, o.age_ms,
+                "torque=%.4f, temp=%.1fC, age=%.1fms, seq=%llu)",
+                o.valid, o.position, o.velocity, o.torque, o.motor_temp_c, o.age_ms,
                 (unsigned long long)o.seq);
             return std::string(buf);
         });
