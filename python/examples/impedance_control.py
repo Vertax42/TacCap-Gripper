@@ -41,7 +41,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--side", default="follower", choices=("left", "right", "follower"))
-    ap.add_argument("--kp", type=float, default=8.0, help="阻抗刚度 Nm/rad")
+    ap.add_argument("--kp", type=float, default=20.0, help="阻抗刚度 Nm/rad")
     ap.add_argument("--kd", type=float, default=1.0, help="阻抗阻尼 Nm·s/rad")
     ap.add_argument("--show-envelope", action="store_true", help="打印包络后退出")
     ap.add_argument("--set-envelope", action="store_true", help="写入包络后继续")

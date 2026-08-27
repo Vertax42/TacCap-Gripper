@@ -307,7 +307,7 @@ only touches `set_target(0..1)` and `observation()`, both non-blocking (no GIL
 fights, no status polling).
 
 ```python
-loop = t.ControlLoop(g, kp=8, kd=1)        # SubmitPhase.STREAM_LOCKED by default
+loop = t.ControlLoop(g, kp=20, kd=1)        # SubmitPhase.STREAM_LOCKED by default
 loop.start()                              # seeds target = current pos (no jump)
 try:
     while running:

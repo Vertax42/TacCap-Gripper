@@ -165,7 +165,7 @@ f.motor.enable()
 你的策略只碰两个非阻塞调用:
 
 ```python
-loop = t.ControlLoop(f, hz=100, kp=8, kd=1)    # 默认 SubmitPhase.STREAM_LOCKED
+loop = t.ControlLoop(f, hz=100, kp=20, kd=1)    # 默认 SubmitPhase.STREAM_LOCKED
 loop.start()                                    # 以当前位置作为初始目标,不会跳
 try:
     while running:

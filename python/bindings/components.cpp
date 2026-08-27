@@ -1604,7 +1604,7 @@ void bind_components(py::module_& m) {
                 return std::make_unique<ControlLoop>(g, c);
             }),
             py::arg("gripper"), py::arg("hz") = 100u,
-            py::arg("kp") = 8.0f, py::arg("kd") = 1.0f,
+            py::arg("kp") = 20.0f, py::arg("kd") = 1.0f,
             py::arg("feedforward_torque") = 0.0f,
             py::arg("motor_stream_hz") = 100u,
             py::arg("phase") = ControlLoop::SubmitPhase::StreamLocked,

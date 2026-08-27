@@ -18,7 +18,7 @@
 // Usage:
 //   FollowerGripper g = ...;
 //   g.motor().enable();
-//   ControlLoop loop(g, {.hz = 100, .kp = 8.0f, .kd = 1.0f});
+//   ControlLoop loop(g, {.hz = 100, .kp = 20.0f, .kd = 1.0f});
 //   loop.start();                       // seeds target = current position
 //   for (;;) {                          // your policy, at its own rate
 //       auto obs = loop.observation();  // latest open amount, non-blocking
@@ -190,7 +190,7 @@ public:
         // produces, so the two phases agree out of the box and switching to
         // FreeRunning does not silently change the rate as well as the phase.
         unsigned hz                  = 100;
-        float    kp                  = 8.0f;   // impedance stiffness (Nm/rad)
+        float    kp                  = 20.0f;  // impedance stiffness (Nm/rad)
         float    kd                  = 1.0f;   // impedance damping (Nm·s/rad)
         float    feedforward_torque  = 0.0f;   // Nm
         unsigned motor_stream_hz     = 100;    // motor-status stream rate (Hz)
