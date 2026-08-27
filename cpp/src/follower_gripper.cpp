@@ -203,12 +203,18 @@ void FollowerGripper::set_envelope(const protocol::GripperEnvelope& env) {
     // zeroed default. Writing a config assembled from scratch here would drop
     // max_open_rad / min_open_rad on the floor.
     protocol::GripperConfig cfg = get_gripper_config();
-    std::memcpy(cfg.reserved, &env, sizeof(env));
+    // Stamp the layout version so firmware built against a different field
+    // order refuses the record instead of misreading it.
+    protocol::GripperEnvelope stamped = env;
+    stamped.flags = static_cast<uint16_t>(
+        (stamped.flags & ~protocol::GripperEnvelopeFlag::LayoutMask) |
+        protocol::GripperEnvelopeFlag::LayoutBits);
+    std::memcpy(cfg.reserved, &stamped, sizeof(stamped));
     set_gripper_config(cfg);
     logger()->info(
         "FollowerGripper envelope written: cont={:.3f}Nm peak={:.3f}Nm "
         "flags=0x{:04x}",
-        env.cont_torque_nm, env.peak_torque_nm, env.flags);
+        stamped.cont_torque_nm, stamped.peak_torque_nm, stamped.flags);
 }
 
 void FollowerGripper::set_gripper_config(const protocol::GripperConfig& cfg) {

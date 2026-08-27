@@ -446,6 +446,27 @@ struct GripperConfig {
 namespace GripperEnvelopeFlag {
     constexpr uint16_t Valid   = 0x0001;  // the record has been written
     constexpr uint16_t Enforce = 0x0002;  // firmware applies it every cycle
+
+    // Layout version, in the top nibble. Forced by a real incident: removing a
+    // float from GripperEnvelope left sizeof at 16 but shifted every field by
+    // four bytes. The SDK wrote the new layout, the firmware read the old one,
+    // and because the SDK reads back what it itself wrote, get_envelope()
+    // looked correct while the clamp behaved as a stale value — peak was set to
+    // 2.2 Nm and enforced as 0.5.
+    //
+    // static_assert on sizeof cannot catch that class: a same-size layout
+    // change is exactly its blind spot, and these 16 bytes are a contract
+    // between two independently built artifacts that never see each other at
+    // compile time. Bump this whenever the layout changes; firmware that does
+    // not recognise the version refuses to enforce rather than misreading.
+    constexpr uint16_t LayoutVersion = 2;
+    constexpr uint16_t LayoutShift   = 12;
+    constexpr uint16_t LayoutMask    = 0xF000;
+    constexpr uint16_t LayoutBits    = LayoutVersion << LayoutShift;
+
+    inline constexpr uint16_t layout_of(uint16_t flags) noexcept {
+        return static_cast<uint16_t>((flags & LayoutMask) >> LayoutShift);
+    }
 }
 
 struct GripperEnvelope {
@@ -463,7 +484,40 @@ struct GripperEnvelope {
     // until damping balances the clamped error torque. Measured on firmware
     // 1.1.5 with peak = 1.5 Nm and kd = 1.0: 1.70 rad/s. Lower peak_torque_nm
     // to approach more slowly.
-    uint8_t  reserved0[6];        // write 0
+    // Temperature wall, degrees C, 0 = firmware default. Fields rather than
+    // firmware constants because they have to be calibrated against the whole
+    // assembly's cooling, and every constant change costs a reflash plus a
+    // power cycle.
+    //
+    // Note the vendor's "-20 to 50 C" is an AMBIENT rating, not a ceiling on
+    // the module's internal temperature -- an easy and consequential thing to
+    // confuse. The real limit is the Class B insulation's 130 C winding rating,
+    // and what this sensor reports is board/case temperature, which runs cooler
+    // than the winding.
+    // Defaults when left 0: derate from 90 C, wall at 100 C.
+    //
+    // Measured behaviour these numbers come out of, all on firmware 1.1.5:
+    //   - equilibrium settles ~6 C under the wall, repeatably: wall 60 -> 55 C
+    //     and 1.05 Nm, wall 70 -> 64 C and 1.28 Nm, wall 80 -> 74 C and
+    //     1.384 Nm (that last one flat for 120 s).
+    //   - the motor's OWN over-temperature protection never fired up to 100 C
+    //     case temperature (297 s at a constant 1.65 Nm, fault word all zero),
+    //     so in the THERMAL direction this wall is the only line. Not so in the
+    //     electrical direction: the motor's undervoltage protection is prompt
+    //     (it is what drops the jaw in the customer's report).
+    //   - what this sensor reads is board/case temperature. The winding is
+    //     hotter by an unmeasured margin; at the 20-40 C typical of such
+    //     modules, a 94 C case implies a 114-134 C winding against the Class B
+    //     130 C rating. Insulation ageing is cumulative and roughly halves life
+    //     per extra 10 C -- it never raises a fault, so it cannot be discovered
+    //     by testing for one.
+    //   - the wall incidentally caps electrical stress too: a wall of 80 settles
+    //     at 1.38 Nm, a wall of 100 at about 1.65 Nm, so sustained current rises
+    //     with it. The undervoltage threshold is only bracketed so far -- 4.5 Nm
+    //     survived, 6.0 Nm untested, and 6.0 is what the customer's failure hit.
+    uint8_t  temp_derate_start_c; // linear derate begins here
+    uint8_t  temp_wall_c;         // only the minimum hold torque above here
+    uint8_t  reserved0[4];        // write 0
     uint16_t flags;               // GripperEnvelopeFlag::*
 };
 

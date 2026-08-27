@@ -64,6 +64,7 @@ GripperAutoCalConfig = _taccap_native.GripperAutoCalConfig  # V1.9 power-on auto
 GripperEnvelope = _taccap_native.GripperEnvelope       # motion safety envelope (in GripperConfig)
 GRIPPER_ENVELOPE_VALID = _taccap_native.GRIPPER_ENVELOPE_VALID
 GRIPPER_ENVELOPE_ENFORCE = _taccap_native.GRIPPER_ENVELOPE_ENFORCE
+GRIPPER_ENVELOPE_LAYOUT_VERSION = _taccap_native.GRIPPER_ENVELOPE_LAYOUT_VERSION
 GripperPosition = _taccap_native.GripperPosition      # raw rad <-> normalized [0,1]
 CameraFisheyeCal = _taccap_native.CameraFisheyeCal    # V2.0 fisheye intrinsics + distortion
 FisheyeUndistorter = _taccap_native.FisheyeUndistorter  # applies them to frames
@@ -180,6 +181,7 @@ __all__ = [
     "GripperEnvelope",
     "GRIPPER_ENVELOPE_VALID",
     "GRIPPER_ENVELOPE_ENFORCE",
+    "GRIPPER_ENVELOPE_LAYOUT_VERSION",
     "GripperPosition",
     "CameraFisheyeCal",
     "FisheyeUndistorter",

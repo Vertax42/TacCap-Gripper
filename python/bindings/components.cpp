@@ -436,16 +436,20 @@ void bind_components(py::module_& m) {
         .def(py::init<>())
         .def_readwrite("cont_torque_nm",     &protocol::GripperEnvelope::cont_torque_nm)
         .def_readwrite("peak_torque_nm",     &protocol::GripperEnvelope::peak_torque_nm)
+        .def_readwrite("temp_derate_start_c", &protocol::GripperEnvelope::temp_derate_start_c)
+        .def_readwrite("temp_wall_c",        &protocol::GripperEnvelope::temp_wall_c)
         .def_readwrite("flags",              &protocol::GripperEnvelope::flags)
         .def("__repr__", [](const protocol::GripperEnvelope& e) {
             char buf[192];
             std::snprintf(buf, sizeof(buf),
-                "GripperEnvelope(cont=%.3f Nm, peak=%.3f Nm, flags=0x%04x%s)",
-                e.cont_torque_nm, e.peak_torque_nm, e.flags,
+                "GripperEnvelope(cont=%.3f Nm, peak=%.3f Nm, temp=%u/%uC, flags=0x%04x%s)",
+                e.cont_torque_nm, e.peak_torque_nm,
+                (unsigned)e.temp_derate_start_c, (unsigned)e.temp_wall_c, e.flags,
                 (e.flags & 0x0002) ? " ENFORCE" : " inactive");
             return std::string(buf);
         });
     envmod.attr("GRIPPER_ENVELOPE_VALID")   = (uint16_t)0x0001;
+    envmod.attr("GRIPPER_ENVELOPE_LAYOUT_VERSION") = protocol::GripperEnvelopeFlag::LayoutVersion;
     envmod.attr("GRIPPER_ENVELOPE_ENFORCE") = (uint16_t)0x0002;
 
     py::class_<protocol::GripperAutoCalConfig>(m, "GripperAutoCalConfig")
