@@ -353,6 +353,51 @@ g.set_auto_cal_config(cfg)                # (close-to-stall) + captures max_open
                                           # (open-to-stall) on power-up
 ```
 
+### 抓取示例与运动安全包络
+
+两个非交互脚本,分别演示两种控制方式(交互版见 `force_position_console.py`):
+
+```bash
+# 阻抗控制 —— ControlLoop,策略侧只碰 set_target(0..1) 与 observation()
+python python/examples/impedance_grasp.py --side right
+
+# 力位混合 —— 速度阻尼闭合 -> 接触判定 -> kp=kd=0 纯 tau_ff 保持
+python python/examples/force_position_grasp.py --side right --grasp-torque 0.35
+```
+
+**先配好运动安全包络。** 它是固件侧的力矩/热保护,默认**不启用**(出厂设备
+`GripperConfig.reserved` 全 0),不开就没有:
+
+```bash
+python python/examples/impedance_grasp.py --show-envelope            # 查看
+python python/examples/impedance_grasp.py --set-envelope        --peak 2.0 --cont 1.6                                          # 写入并启用
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--peak` | 2.0 Nm | 运动瞬态上限。**同时决定接近速度**,约 `peak/kd`(实测 peak=1.5、kd=1.0 → 1.70 rad/s) |
+| `--cont` | 1.6 Nm | 可持续上限,I²t 降额的下限 |
+| `--temp-derate-start` | 0 → 固件 90 °C | 温度降额起点 |
+| `--temp-wall` | 0 → 固件 100 °C | 温度墙,之上只留 0.30 Nm |
+
+包络存在 `GripperConfig` 记录里(命令 `0x66/0x67`,**协议未改动**),掉电保持,
+每台设备配一次即可。它在固件的 MIT 分支执行 —— 那是所有运动命令的必经点,
+**绕过本 SDK 直接调 `motor.submit_impedance()` 也挡得住**。
+
+不开包络的后果是实测过的:`kp=20` 顶硬物体时命令索要约 12 Nm(被 `0x700B`
+削到 6),24 V 下这个电流需求会把母线拉垮 —— 电机欠压保护动作、松手,严重时
+整机掉电重启。开启后同样条件 25 秒稳定夹持。详见
+[`docs/CONTROL_LAYERING.md`](docs/CONTROL_LAYERING.md)。
+
+**两个要知道的行为**:
+
+- **握持力不是常数。** I²t 与温度墙对纯力矩保持同样生效。实测(墙 90/100,
+  `cont=1.6`):91 °C 起降额,94 °C / 1.370 Nm 平衡。上层 `grasp_torque_nm`
+  仍是设定值,固件在下面把实际输出降下来。
+- **控制期间不要轮询 `read_status()`。** 相位锁只保护遥测帧不保护 ACK,轮询会
+  和控制帧对撞导致超时。位置/速度/力矩都从 `observation()` / `snapshot()` 取,
+  温度这类需要 ACK 的量低频读。
+
 Runnable demos: `python/examples/gripper_control_test.py` (interactive
 open/close via both `set_position` and `ControlLoop`) and
 `python/examples/motor_mit_control.py` (raw `submit_impedance` + health).
