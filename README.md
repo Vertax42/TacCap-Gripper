@@ -353,24 +353,23 @@ g.set_auto_cal_config(cfg)                # (close-to-stall) + captures max_open
                                           # (open-to-stall) on power-up
 ```
 
-### 抓取示例与运动安全包络
-
-两个非交互脚本,分别演示两种控制方式(交互版见 `force_position_console.py`):
+### 两个控制器的示例
 
 ```bash
-# 阻抗控制 —— ControlLoop,策略侧只碰 set_target(0..1) 与 observation()
-python python/examples/impedance_grasp.py --side right
+# 阻抗控制 —— ControlLoop:set_target(0..1) + observation()
+python python/examples/impedance_control.py --side right
 
-# 力位混合 —— 速度阻尼闭合 -> 接触判定 -> kp=kd=0 纯 tau_ff 保持
-python python/examples/force_position_grasp.py --side right --grasp-torque 0.35
+# 力位混合 —— ForcePositionController:同样的两个调用,但被挡住后切纯力矩保持
+python python/examples/force_position_control.py --side right
 ```
 
-**先配好运动安全包络。** 它是固件侧的力矩/热保护,默认**不启用**(出厂设备
+**先配好运动安全包络。** 它是固件侧的力矩与热保护,默认**不启用**(出厂设备
 `GripperConfig.reserved` 全 0),不开就没有:
 
 ```bash
-python python/examples/impedance_grasp.py --show-envelope            # 查看
-python python/examples/impedance_grasp.py --set-envelope        --peak 2.0 --cont 1.6                                          # 写入并启用
+python python/examples/impedance_control.py --show-envelope              # 查看
+python python/examples/impedance_control.py --set-envelope \
+       --peak 2.0 --cont 1.6                                             # 写入并启用
 ```
 
 | 参数 | 默认 | 含义 |
@@ -392,11 +391,10 @@ python python/examples/impedance_grasp.py --set-envelope        --peak 2.0 --con
 **两个要知道的行为**:
 
 - **握持力不是常数。** I²t 与温度墙对纯力矩保持同样生效。实测(墙 90/100,
-  `cont=1.6`):91 °C 起降额,94 °C / 1.370 Nm 平衡。上层 `grasp_torque_nm`
-  仍是设定值,固件在下面把实际输出降下来。
+  `cont=1.6`):91 °C 起降额,94 °C / 1.370 Nm 平衡。`grasp_torque_nm` 是设定值,
+  固件在下面把实际输出降下来。
 - **控制期间不要轮询 `read_status()`。** 相位锁只保护遥测帧不保护 ACK,轮询会
-  和控制帧对撞导致超时。位置/速度/力矩都从 `observation()` / `snapshot()` 取,
-  温度这类需要 ACK 的量低频读。
+  和控制帧对撞导致超时。位置/速度/力矩都从 `observation()` / `snapshot()` 取。
 
 Runnable demos: `python/examples/gripper_control_test.py` (interactive
 open/close via both `set_position` and `ControlLoop`) and

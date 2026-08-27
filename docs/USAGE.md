@@ -269,15 +269,16 @@ finally:
     f.motor.disable()
 ```
 
-交互式硬件工具:
+示例:
 
 ```bash
-# 首次设置运动/设备上限;命令完成后拔插夹爪
-python python/examples/force_position_console.py --set-device-limit 6.0
+# 两个控制器的用法
+python python/examples/impedance_control.py --side right
+python python/examples/force_position_control.py --side right --grasp-torque 0.35
 
-# 重启后测试:t 输入精确 target/力矩,g 重复,o 全开,h 当前位置保持,q 退出
-python python/examples/force_position_console.py --grasp-torque 0.35 \
-  --hold-torque-limit 1.8 --motion-torque-limit 6.0
+# 运动安全包络(固件侧的力矩与热保护,默认不启用,每台设备配一次)
+python python/examples/impedance_control.py --show-envelope
+python python/examples/impedance_control.py --set-envelope --peak 2.0 --cont 1.6
 ```
 
 注意:6 Nm 是电机峰值、只允许运动阶段的**瞬时**力矩到这个量级,并不把夹爪机构的
