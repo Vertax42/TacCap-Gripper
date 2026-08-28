@@ -282,17 +282,21 @@ g = t.FollowerGripper.open()
 g.motor.clear_fault()
 g.motor.enable()                 # required before anything moves
 
-# Raw motor control (rad). set_* block on an ACK; submit_* are no-ACK
-# (fire-and-forget) for a host realtime loop. See the note below before
-# picking a submission rate — 500 Hz is not a budget to spend.
-g.motor.set_impedance(target_pos_rad=-0.5, kp_nm_per_rad=8, kd_nm_s_per_rad=1,
-                      feedforward_torque_nm=0.0)
-st = g.motor.read_status()       # actual_pos/vel/torque, target_*, control_mode
+# Motion goes through a controller. The raw motor primitives (set_impedance /
+# submit_impedance / set_position / ...) are C++-only and deliberately not
+# exposed here: they write a control frame straight to the wire with no error
+# clamp, no torque ceiling and no stall guard.
+loop = t.ControlLoop(g, kp=20.0, kd=1.0)
+loop.start()                     # seeds the target with the current position
+loop.set_target(0.35)            # normalized [0,1], 0 = closed
+obs = loop.observation()         # position/velocity/torque/temp, non-blocking
+loop.stop()
 ```
 
 **Normalized position** — work in `[0, 1]` (0 = closed, 1 = open) instead of raw
 radians. Requires a calibrated gripper (`GripperConfig` Valid); throws otherwise.
-Note this is distinct from `g.motor.set_position()` (raw rad).
+Raw-radian motor control is not reachable from Python — see the controllers
+above.
 
 ```python
 print(g.position())                       # -> 0.97   (nearly open)
@@ -399,7 +403,7 @@ python python/examples/impedance_control.py --set-envelope \
 
 包络存在 `GripperConfig` 记录里(命令 `0x66/0x67`,**协议未改动**),掉电保持,
 每台设备配一次即可。它在固件的 MIT 分支执行 —— 那是所有运动命令的必经点,
-**绕过本 SDK 直接调 `motor.submit_impedance()` 也挡得住**。
+**绕过本 SDK 直接发 MIT 帧也挡得住** —— 这正是它必须在固件里的原因。
 
 不开包络的后果是实测过的:`kp=20` 顶硬物体时命令索要约 12 Nm(被 `0x700B`
 削到 6),24 V 下这个电流需求会把母线拉垮 —— 电机欠压保护动作、松手,严重时
@@ -416,9 +420,9 @@ python python/examples/impedance_control.py --set-envelope \
   撞坏(重试可恢复,代价是 ~31 ms 延迟)。位置、速度、力矩、状态位、**温度**
   全部在 `observation()` / `snapshot()` 里,控制期间不需要碰总线。
 
-Runnable demos: `python/examples/impedance_control.py` and
-`python/examples/force_position_control.py` (see above), plus
-`python/examples/motor_mit_control.py` (raw `submit_impedance` + health).
+Runnable demos: `python/examples/impedance_control.py`,
+`python/examples/force_position_control.py` (see above), and
+`python/examples/gripper_console.py` (interactive console, both modes).
 
 ## Diagnostics
 

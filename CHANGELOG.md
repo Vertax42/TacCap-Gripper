@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: the raw motor primitives are no longer exposed to Python.**
+  Removed from the bindings: `Motor.set_impedance` / `set_position` /
+  `set_velocity` / `set_torque`, their no-ACK `submit_*` counterparts, and
+  `FollowerGripper.set_position` (a normalized wrapper that was itself just
+  `motor_.submit_impedance()`).
+
+  Every one of them writes a control frame straight to the wire with no error
+  clamp, no torque ceiling and no stall guard — those live in `ControlLoop` and
+  `ForcePositionController`, and a caller reaching past them gets none of it.
+  This is not hypothetical: a customer console driving `submit_impedance()` at
+  `kp=20` into a rigid object let `kp * error` grow to the motor's own `0x700B`
+  ceiling; at 24 V the current draw browned out the whole board, the gripper
+  dropped what it was holding and the USB link disappeared. See
+  [`docs/CONTROL_LAYERING.md`](docs/CONTROL_LAYERING.md).
+
+  **What breaks:** any Python code calling those methods now raises
+  `AttributeError`. Port it to `ControlLoop` (impedance) or
+  `ForcePositionController` (force/position hybrid), both of which take a
+  normalized `set_target(0..1)` and expose observations without polling the bus.
+
+  **The C++ methods are unchanged** — both controllers and
+  `FollowerGripper::set_position` call them internally. This is a bindings-only
+  change.
+
+- **Example cleanup.** Removed `motor_mit_control.py` (its whole purpose was
+  demonstrating the raw MIT primitive), `gripper_force_grasp_test.py`
+  (host-side contact detection, superseded by `ForcePositionController`),
+  `v4l2_probe.py` / `v4l2_sweep.py`, and `rerun_dual_with_tracker.py`.
+
+### Added
+
+- **`python/examples/read_intrinsics.py`** — read-only wrist-camera intrinsics
+  export as JSON. Goes through `Calibration.resolve_fisheye()` rather than
+  `read_fisheye()`: an uncalibrated unit answers a read with an all-zero record
+  rather than a NACK, and handing that to `FisheyeUndistorter` remaps every
+  frame to black. The `source` field says whether the numbers came from the
+  device (`device`) or the SDK reference values (`reference`); `--require-device`
+  turns the latter into a non-zero exit. JSON goes to stdout and diagnostics to
+  the log, so it pipes cleanly.
+
 - **BREAKING: the wrist camera now hands out RGB by default.** Its consumers are
   vision and learning pipelines and every one of them wants RGB — LeRobot
   datasets store RGB — so a BGR default meant each consumer converting at its own
