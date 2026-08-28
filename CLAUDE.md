@@ -129,8 +129,9 @@ for g in scan_grippers():
     print(f'  [{s}] ch343={g.mcu_serial} fw_sn={g.firmware_sn!r}')"
 ```
 Healthy output: `[L]` + `[R]`, both with non-empty `firmware_sn`. Empty SN
-means firmware hasn't burned the SN yet, or firmware < V1.6 — fall back to
-`python/examples/v4l2_probe.py` for raw V4L2 bringup.
+means firmware hasn't burned the SN yet, or firmware < V1.6. The raw V4L2
+bringup probes were removed in the example cleanup; use `v4l2-ctl --list-devices`
+directly if you need to go below the MCU.
 
 ## Commit convention
 - Conventional commits with subsystem scope:
