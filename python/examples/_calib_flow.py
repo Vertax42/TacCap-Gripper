@@ -116,6 +116,24 @@ def add_target_argument(parser, *, required: bool = False) -> None:
     )
 
 
+def open_follower(target):
+    """``resolve_target()`` + ``FollowerGripper`` -> ``(gripper, endpoint)``.
+
+    Three examples had a byte-identical copy of this, each with its own
+    ``--side`` flag, which contradicted the single positional selector the rest
+    of the examples use (see docs/EXAMPLES.md). One home, one convention.
+
+    The endpoint comes back with the gripper because callers want its SN and
+    side for display, and re-deriving them would mean a second ``scan_grippers()``
+    -- a full USB walk, and a chance for the answer to change in between.
+    """
+    from xense.taccap import FollowerGripper
+
+    endpoint, _by_side, _all = resolve_target(target)
+    print(f"[discovery] {endpoint.firmware_sn}  {endpoint.mcu_device}")
+    return FollowerGripper(mcu_device=endpoint.mcu_device), endpoint
+
+
 # Tolerance for the "did the new zero actually take" check. The firmware
 # latches whatever it sees the instant it processes the command, so any
 # residual is hand-jitter between the read and the latch.

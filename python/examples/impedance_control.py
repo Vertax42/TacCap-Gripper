@@ -15,7 +15,7 @@
 用法
     python python/examples/impedance_control.py --show-envelope
     python python/examples/impedance_control.py --set-envelope --peak 2.0 --cont 1.6
-    python python/examples/impedance_control.py --side right
+    python python/examples/impedance_control.py right
 
 安全:真实运动,退出路径必定下发零力矩并 disable。
 """
@@ -24,23 +24,18 @@ from __future__ import annotations
 import argparse
 import time
 
+import _calib_flow
+
 from xense.taccap import (
     ControlLoop, FollowerGripper, StallAction,
-    GRIPPER_ENVELOPE_VALID, GRIPPER_ENVELOPE_ENFORCE,
-    find_follower, find_left, find_right, log,
+    GRIPPER_ENVELOPE_VALID, GRIPPER_ENVELOPE_ENFORCE, log,
 )
-
-
-def open_gripper(side: str) -> FollowerGripper:
-    eps = {"left": find_left, "right": find_right}.get(side, find_follower)()
-    print(f"[discovery] {eps.firmware_sn}  {eps.mcu_device}")
-    return FollowerGripper(mcu_device=eps.mcu_device)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--side", default="follower", choices=("left", "right", "follower"))
+    _calib_flow.add_target_argument(ap)
     ap.add_argument("--kp", type=float, default=20.0, help="阻抗刚度 Nm/rad")
     ap.add_argument("--kd", type=float, default=1.0, help="阻抗阻尼 Nm·s/rad")
     ap.add_argument("--show-envelope", action="store_true", help="打印包络后退出")
@@ -52,7 +47,7 @@ def main() -> int:
     args = ap.parse_args()
 
     log.set_level("warn")
-    g = open_gripper(args.side)
+    g, _ep = _calib_flow.open_follower(args.target)
     print(f"[fw] {g.firmware_version}")
 
     if args.set_envelope:

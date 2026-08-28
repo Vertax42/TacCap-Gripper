@@ -19,7 +19,7 @@
 降下来,所以握持力不是常数。
 
 用法
-    python python/examples/force_position_control.py --side right
+    python python/examples/force_position_control.py right
     python python/examples/force_position_control.py --grasp-torque 0.35
 
 安全:真实运动 + 夹持力,退出路径必定下发零力矩并 disable。
@@ -29,18 +29,14 @@ from __future__ import annotations
 import argparse
 import time
 
+import _calib_flow
+
 from xense.taccap import (
     FollowerGripper, ForcePositionConfig, ForcePositionController,
-    GRIPPER_ENVELOPE_ENFORCE, find_follower, find_left, find_right, log,
+    GRIPPER_ENVELOPE_ENFORCE, log,
 )
 
 TERMINAL = ("HOLDING_FORCE", "HOLDING_POSITION", "FAULT")
-
-
-def open_gripper(side: str) -> FollowerGripper:
-    eps = {"left": find_left, "right": find_right}.get(side, find_follower)()
-    print(f"[discovery] {eps.firmware_sn}  {eps.mcu_device}")
-    return FollowerGripper(mcu_device=eps.mcu_device)
 
 
 def settle(c: ForcePositionController, budget: float = 8.0):
@@ -59,7 +55,7 @@ def settle(c: ForcePositionController, budget: float = 8.0):
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--side", default="follower", choices=("left", "right", "follower"))
+    _calib_flow.add_target_argument(ap)
     ap.add_argument("--grasp-torque", type=float, default=0.35,
                     help="接触后的纯前馈保持力矩 Nm")
     ap.add_argument("--close-speed", type=float, default=0.5, help="闭合速度 rad/s")
@@ -68,7 +64,7 @@ def main() -> int:
     args = ap.parse_args()
 
     log.set_level("warn")
-    g = open_gripper(args.side)
+    g, _ep = _calib_flow.open_follower(args.target)
     print(f"[fw] {g.firmware_version}")
     env = g.get_envelope()
     print(f"[envelope] {env}")
