@@ -35,7 +35,7 @@ newer commands fail loudly with `ProtocolError(InvalidCmd)` rather than
 misbehaving, and payload length is never a version probe. Check what a device
 answers with `python python/examples/fisheye_cal.py show`.
 
-> **[`firmware/`](firmware/) ships leader 1.2.2 and follower 1.1.5**, both local
+> **[`firmware/`](firmware/) ships leader 1.2.2 and follower 1.1.6**, both local
 > builds, both hardware-validated on two units each. They carry three fixes that
 > live in code the two roles share: a command-channel livelock under sustained
 > high-rate input, a blocking-log path that stalled realtime tasks, and an

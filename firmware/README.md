@@ -10,9 +10,10 @@ directory's git history, not from extra files.
 | Image | Role | Version | Protocol | Source | Size | CRC32 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `tc-gu-01-master.bin` | leader (SN ends **`m`**) | **1.2.2** | V2.1 + 0x54/0x55 | `02bec6f` | 117,980 B | `0x28742359` |
-| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.5** | V2.2 | `8f03cd2` | 156,412 B | `0x01B5A052` |
+| `tc-gu-01-slave.bin` | follower (SN ends **`s`**) | **1.1.6** | V2.2 + envelope | `214d3a9` | 157,392 B | `0xC8C682A1` |
 
-Both from firmware branch `hw_v1.1.0`. `manifest.json` has the same data
+Leader from firmware branch `hw_v1.1.0`, follower from
+`feat/envelope-and-reachable-travel`. `manifest.json` has the same data
 machine-readably, per image — the two roles no longer share one source commit
 or one protocol level, because every V2.2 command is follower-only and the
 leader had no reason to be rebuilt.
@@ -28,10 +29,11 @@ leader had no reason to be rebuilt.
 >
 > **Both are hardware-validated**, on two units each.
 >
-> Follower 1.1.5: the command channel survives sustained 1000 Hz `CMD_NO_ACK`
+> Follower 1.1.6: the command channel survives sustained 1000 Hz `CMD_NO_ACK`
 > input, `rx_overflow` and `debug_tx_bytes` are both 0, and stream-locked
 > control loses no status frames with all cameras streaming and the motor
-> cycling.
+> cycling. The motion safety envelope was validated separately on
+> `TCGU01A28Z0018s` at 24 V — see the 1.1.6 entry below.
 >
 > Leader 1.2.2, upgraded from 1.2.0: IMU and encoder both stream at ~99 Hz
 > under a concurrent 100 Hz command load, with zero retries and zero ACK
@@ -101,6 +103,38 @@ diagnostic commands, so the SDK behaves identically otherwise.
   validated the index against the full port range, which includes the one index
   past the end. `log_init()` hit it every startup. What it corrupted depended on
   linker layout.
+
+**Follower 1.1.6 adds the motion safety envelope** — the reason it is a
+mandatory upgrade rather than a recommendation, and why `FollowerGripper`
+refuses to open anything older.
+
+- **Every MIT frame is now clamped in firmware.** Before 1.1.6 the MIT command
+  path had *no* stall protection at all: `can_motor_gripper_stop_on_limit_stall()`
+  is wired only into the velocity commands and only near the travel ends, so a
+  blocked jaw let `kp * error` grow until the motor's own `0x700B` ceiling.
+  Measured at 24 V with `kp=20` and a rigid object: the command asked for
+  ~12 Nm, the jaw hit the object at 5.5 rad/s, and the current draw browned out
+  the whole board — the gripper dropped its payload and the USB link vanished.
+  The envelope clamps commanded position against `peak_torque_nm / kp` and the
+  feed-forward term against `cont_torque_nm`, every cycle.
+- **I²t derate at zero speed** and a **configurable temperature wall**
+  (defaults 90 °C derate start / 100 °C wall). The motor's own over-temperature
+  protection did not act at 100 °C case temperature over a 297 s hold, so this
+  is the only thermal defence on that axis.
+- **`min_open_rad` now stores the control-reachable travel**, symmetric with the
+  existing `OPEN_LIMIT_MARGIN_RAD` at the open end.
+- The envelope rides inside `gripper_config_t.reserved[16]`, so **commands
+  `0x66`/`0x67`, their payload length and the struct size are all unchanged** —
+  no protocol change. A device that has never had one written reads back
+  `flags = 0` and behaves exactly as before, so **upgrading changes nothing
+  until you write an envelope** (`impedance_control.py --set-envelope`).
+- Hardware-validated on `TCGU01A28Z0018s` at 24 V: peak speed 8.68 → 1.70 rad/s;
+  a stall that should have demanded 5.72 Nm settled at 1.569 Nm; and `kp` raised
+  8 → 120 (15×) moved the resulting torque by 1.4%, which is the strongest
+  evidence the clamp is real — it depends on no absolute number.
+- **`min_open_rad` is only written by the next power-on auto-calibration**, so
+  the mandatory post-flash power cycle matters here for a second reason beyond
+  the usual bank-swap frame loss.
 
 ---
 
