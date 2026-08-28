@@ -11,7 +11,7 @@
     python python/examples/gripper_console.py --kp 20 --kd 1
 
 按键:
-    j / k   — raw 目标弧度 − / +（每次一个 --step）
+    j / k   — 点动 − / +（每次从当前位置移动一个 --step，不累积旧目标）
     o / c   — 到标定的全开 / 全闭端
     e / d   — 以当前位置重新使能 / 保持当前位置后失能
     f       — 清故障并以当前位置重置控制器
@@ -115,7 +115,7 @@ def _redraw(side_name: str, target_rad: float,
         f'  kp={kp:.2f} kd={kd:.2f} grasp={grasp_torque:.2f}Nm'
         f' abort={abort_torque:.2f}Nm cmd={submit_hz:.0f}Hz rx={stream_hz:.0f}Hz'
         f' range=[{pos_min:.2f}, {pos_max:.2f}] rad ===',
-        '  j/k=pos-/+  o=open  c=close  e=enable  d=disable  f=fault_clear  q=quit',
+        '  j/k=点动-/+  o=open  c=close  e=enable  d=disable  f=fault_clear  q=quit',
         f'{"Tgt(rad)":>10}{"Act(rad)":>10}{"Norm[0-1]":>11}'
         f'{"Vel(r/s)":>10}{"Torq(Nm)":>10}{"Cmd(Nm)":>10}{"State":>28}',
         '-' * 99,
@@ -127,6 +127,20 @@ def _redraw(side_name: str, target_rad: float,
     out = '\033[H' + '\r\n'.join(line + '\033[K' for line in lines)
     sys.stdout.write(out)
     sys.stdout.flush()
+
+
+def _point_target(controller: ForcePositionController, pos_map,
+                  actual_rad: float, step: float, delta: float,
+                  pos_min: float, pos_max: float):
+    """Create one point-to-point target from the latest actual position.
+
+    Keyboard control is intentionally jog/point control: every j/k press moves
+    one step from where the jaw is now, instead of accumulating a queue of
+    stale targets while the motor is still travelling.
+    """
+    target = max(pos_min, min(pos_max, actual_rad + delta * step))
+    controller.set_target(pos_map.to_position(target))
+    return target
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -143,7 +157,7 @@ def main() -> int:
     ap.add_argument('--hz', type=float, default=100.0,
                     help='电机状态流频率 Hz（默认 100，最大 100）')
     ap.add_argument('--step', type=float, default=0.05,
-                    help='j/k 步进量（rad，默认 0.05）')
+                    help='j/k 点动步长（rad，默认 0.05；每次从实际位置计算）')
     ap.add_argument('--pos-min', type=float, default=None, dest='pos_min',
                     help='raw rad 下限（默认本机标定下限）')
     ap.add_argument('--pos-max', type=float, default=None, dest='pos_max',
@@ -263,11 +277,15 @@ def main() -> int:
                     last_key = repr(ch)
 
                 if ch == 'j':
-                    target_rad = max(pos_min, target_rad - args.step)
-                    controller.set_target(pos_map.to_position(target_rad))
+                    s = controller.snapshot()
+                    base = s.observation.raw_pos if s.observation.valid else target_rad
+                    target_rad = _point_target(controller, pos_map, base, args.step,
+                                               -1.0, pos_min, pos_max)
                 elif ch == 'k':
-                    target_rad = min(pos_max, target_rad + args.step)
-                    controller.set_target(pos_map.to_position(target_rad))
+                    s = controller.snapshot()
+                    base = s.observation.raw_pos if s.observation.valid else target_rad
+                    target_rad = _point_target(controller, pos_map, base, args.step,
+                                               1.0, pos_min, pos_max)
                 elif ch == 'o':
                     target_rad = open_rad
                     controller.set_target(pos_map.to_position(open_rad))
