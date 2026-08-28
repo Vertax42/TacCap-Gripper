@@ -363,7 +363,8 @@ g.set_auto_cal_config(cfg)                # (close-to-stall) + captures max_open
 整机掉电重启。
 
 ```bash
-python python/examples/ota_update.py firmware/tc-gu-01-slave.bin <SN>
+python python/examples/ota_update.py slave      # role 选择器,自动挑镜像
+python python/examples/ota_update.py --all      # 所有在插的夹爪各刷各的镜像
 # 刷完必须断电重启
 ```
 
