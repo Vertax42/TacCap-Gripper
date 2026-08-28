@@ -353,6 +353,23 @@ g.set_auto_cal_config(cfg)                # (close-to-stall) + captures max_open
                                           # (open-to-stall) on power-up
 ```
 
+### 固件版本要求:从爪 ≥ 1.1.6
+
+`FollowerGripper` 打开时会检查从爪固件版本,**低于 1.1.6 直接拒绝并打印升级提示**。
+这不是建议而是硬性要求:1.1.6 之前的固件在 MIT 命令路径上**没有任何堵转保护**
+(`can_motor_gripper_stop_on_limit_stall` 只挂在速度命令上、且只管行程末端),
+夹爪被挡住时力矩只受电机 `0x700B` 限制。24 V 供电下实测:`kp=20` 顶硬物体时
+命令索要约 12 Nm,夹爪以 5.5 rad/s 撞上去,电流把母线拉垮 —— 松手掉件,严重时
+整机掉电重启。
+
+```bash
+python python/examples/ota_update.py firmware/tc-gu-01-slave.bin <SN>
+# 刷完必须断电重启
+```
+
+OTA 本身走 `LeaderGripper`(角色无关),**不受这个检查影响**,升级通道始终可用。
+确实要在升级前读一台旧设备的配置,用 `allow_outdated_firmware=True` 显式绕过。
+
 ### 两个控制器的示例
 
 ```bash

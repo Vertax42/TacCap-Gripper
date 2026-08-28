@@ -89,6 +89,56 @@ FollowerGripper::FollowerGripper(const Config& cfg)
         "FollowerGripper opened: device={} firmware={} sn={} open_cameras={}",
         cfg_.mcu_device, fw_version_str, fw_sn_str, cfg_.open_cameras);
 
+    // ---- Firmware gate -----------------------------------------------------
+    // 1.1.6 is a mandatory upgrade, not a recommendation: everything older has
+    // no stall protection whatsoever on the MIT command path, so a blocked jaw
+    // is bounded only by the motor's 0x700B ceiling. Refusing here is the point
+    // -- a caller that silently ran on 1.1.5 would be one blocked grasp away
+    // from browning out the board and dropping its payload.
+    if (!cfg_.allow_outdated_firmware) {
+        constexpr uint32_t need = (uint32_t(kMinFirmwareMajor) << 16) |
+                                  (uint32_t(kMinFirmwareMinor) << 8) |
+                                  kMinFirmwarePatch;
+        const bool known = fw_version_.has_value();
+        const uint32_t have =
+            known ? ((uint32_t(fw_version_->major) << 16) |
+                     (uint32_t(fw_version_->minor) << 8) | fw_version_->patch)
+                  : 0u;
+        if (known && have < need) {
+            const std::string msg =
+                "\n"
+                "==========================================================\n"
+                "  从爪固件版本过低,必须升级后才能使用本 SDK\n"
+                "  Follower firmware too old -- upgrade required\n"
+                "----------------------------------------------------------\n"
+                "  当前 / current : " + fw_version_str + "\n"
+                "  需要 / required: 1.1.6 或更高 / or newer\n"
+                "  设备 / device  : " + cfg_.mcu_device + "\n"
+                "  SN             : " + fw_sn_str + "\n"
+                "----------------------------------------------------------\n"
+                "  1.1.6 引入运动安全包络。在此之前的固件,MIT 命令路径上\n"
+                "  没有任何堵转保护 —— 夹爪被挡住时力矩只受电机 0x700B 限制,\n"
+                "  24V 供电下实测会拉垮母线、松手掉件、整机掉电重启。\n"
+                "\n"
+                "  Versions before 1.1.6 have no stall protection at all on\n"
+                "  the MIT path. A blocked jaw browns out the board on 24 V.\n"
+                "----------------------------------------------------------\n"
+                "  升级 / upgrade:\n"
+                "    python python/examples/ota_update.py \\\n"
+                "           firmware/tc-gu-01-slave.bin " + fw_sn_str + "\n"
+                "  刷完后必须断电重启 / power-cycle after flashing\n"
+                "==========================================================";
+            logger()->error(msg);
+            throw ProtocolError(msg);
+        }
+        if (!known) {
+            logger()->warn(
+                "FollowerGripper: 读不到固件版本,无法确认是否 >= 1.1.6。"
+                "若设备固件低于 1.1.6,MIT 路径上没有任何堵转保护。"
+                " (could not read firmware version; 1.1.6 or newer is required)");
+        }
+    }
+
     // The wrist camera is off by default — an external camera service owns the
     // wrist UVC V4L2 device. Only open it when explicitly asked AND a device
     // path is provided.

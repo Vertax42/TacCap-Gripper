@@ -93,7 +93,32 @@ public:
         // swapped channels with nothing raised. Set Bgr here to get the old
         // behaviour back for code that feeds cv::imshow/imwrite directly.
         ColorMode   wrist_color_mode    = ColorMode::Rgb;
+
+        // Refuse to open a follower whose firmware predates 1.1.6.
+        //
+        // 1.1.6 is where the motion safety envelope landed, and it is not
+        // optional: before it, the MIT command path has NO stall protection at
+        // all in firmware (can_motor_gripper_stop_on_limit_stall is wired only
+        // into the velocity commands, and only near the travel ends), so a
+        // blocked jaw lets kp*error grow until the motor's own 0x700B ceiling.
+        // Measured on 24 V with a rigid object and kp=20: the command asked for
+        // ~12 Nm, the jaw hit the object at 5.5 rad/s, and the current draw
+        // browned out the whole board -- the gripper dropped what it was
+        // holding and the USB link disappeared. That is the failure this SDK
+        // now assumes cannot happen.
+        //
+        // Set true only to talk to an old device deliberately (diagnostics,
+        // reading its config before an upgrade). OTA itself is unaffected: it
+        // goes through LeaderGripper, which is role-agnostic, so the upgrade
+        // path is never blocked by this check.
+        bool        allow_outdated_firmware = false;
     };
+
+    // Minimum follower firmware this SDK will drive. See
+    // Config::allow_outdated_firmware for why it is a hard requirement.
+    static constexpr uint8_t kMinFirmwareMajor = 1;
+    static constexpr uint8_t kMinFirmwareMinor = 1;
+    static constexpr uint8_t kMinFirmwarePatch = 6;
 
     explicit FollowerGripper(const Config& cfg);
     ~FollowerGripper();

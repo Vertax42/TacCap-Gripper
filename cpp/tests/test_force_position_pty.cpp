@@ -12,6 +12,7 @@
 
 #include <taccap/force_position_controller.hpp>
 #include <taccap/follower_gripper.hpp>
+#include <taccap/error.hpp>
 #include <taccap/protocol/codec.hpp>
 
 #include <atomic>
@@ -40,7 +41,8 @@ std::vector<uint8_t> pod_bytes(const void* p, std::size_t n) {
 // impedance frames the controller submits.
 class FakeFollower {
 public:
-    explicit FakeFollower(Pty& pty) : pty_(pty) {
+    FakeFollower(Pty& pty, uint8_t major = 1, uint8_t minor = 1, uint8_t patch = 6)
+        : pty_(pty), fw_major_(major), fw_minor_(minor), fw_patch_(patch) {
         status_.actual_pos = 0.60f;
         status_.control_mode = 0;
         thread_ = std::thread([this] { run_(); });
@@ -86,7 +88,7 @@ private:
     void handle_(const xense::taccap::bus::Frame& f) {
         switch (f.cmd) {
             case tp::Cmd::GetVersion: {
-                const tp::FirmwareVersion v{1, 2, 2, 0};
+                const tp::FirmwareVersion v{fw_major_, fw_minor_, fw_patch_, 0};
                 pty_.send_response(f.seq, f.cmd, pod_bytes(&v, sizeof(v)));
                 return;
             }
@@ -158,6 +160,7 @@ private:
     }
 
     Pty& pty_;
+    uint8_t fw_major_, fw_minor_, fw_patch_;
     std::thread thread_;
     std::atomic<bool> stop_{false};
     std::atomic<bool> streaming_{false};
@@ -297,4 +300,45 @@ TEST(ForcePositionControllerPty, StartRefusesADeviceLimitAboveTheMotionLimit) {
     tx::ForcePositionController c(*g, cfg);
     EXPECT_THROW(c.start(), std::runtime_error);
     EXPECT_FALSE(c.running());
+}
+
+// The firmware gate. 1.1.6 is where the motion safety envelope landed, and
+// everything older has no stall protection at all on the MIT command path --
+// a blocked jaw is bounded only by the motor's own 0x700B ceiling, which on
+// 24 V browns out the board. Opening such a device must fail loudly rather
+// than quietly running one blocked grasp away from that.
+TEST(FollowerFirmwareGate, RefusesFirmwareOlderThanTheMinimum) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    FakeFollower fw(pty, 1, 1, 5);          // one patch short
+    EXPECT_THROW(open_follower(pty), xense::taccap::ProtocolError);
+}
+
+TEST(FollowerFirmwareGate, AcceptsTheMinimumAndNewer) {
+    {
+        Pty pty;
+        ASSERT_GE(pty.master(), 0);
+        FakeFollower fw(pty, 1, 1, 6);
+        EXPECT_NO_THROW({ auto g = open_follower(pty); });
+    }
+    {
+        Pty pty;
+        ASSERT_GE(pty.master(), 0);
+        FakeFollower fw(pty, 1, 2, 0);
+        EXPECT_NO_THROW({ auto g = open_follower(pty); });
+    }
+}
+
+// The escape hatch has to work, or a device that needs upgrading could not be
+// inspected first. (OTA itself goes through LeaderGripper and is unaffected.)
+TEST(FollowerFirmwareGate, AllowOutdatedFirmwareOpensAnyway) {
+    Pty pty;
+    ASSERT_GE(pty.master(), 0);
+    FakeFollower fw(pty, 1, 0, 2);
+    tx::FollowerGripper::Config cfg;
+    cfg.mcu_device = pty.slave_path();
+    cfg.ack_timeout_ms = 300;
+    cfg.max_retries = 1;
+    cfg.allow_outdated_firmware = true;
+    EXPECT_NO_THROW({ tx::FollowerGripper g(cfg); });
 }

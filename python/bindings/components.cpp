@@ -1383,7 +1383,8 @@ void bind_components(py::module_& m) {
                          uint32_t baud, unsigned ack_ms, unsigned retries,
                          bool open_cameras,
                          bool undistort_wrist, float fisheye_balance,
-                         ColorMode wrist_color_mode) {
+                         ColorMode wrist_color_mode,
+                         bool allow_outdated_firmware) {
                 FollowerGripper::Config cfg;
                 cfg.mcu_device           = mcu;
                 cfg.wrist_video          = wrist;
@@ -1394,6 +1395,7 @@ void bind_components(py::module_& m) {
                 cfg.undistort_wrist      = undistort_wrist;
                 cfg.fisheye_balance      = fisheye_balance;
                 cfg.wrist_color_mode     = wrist_color_mode;
+                cfg.allow_outdated_firmware = allow_outdated_firmware;
                 py::gil_scoped_release gil;
                 return std::make_unique<FollowerGripper>(cfg);
              }),
@@ -1411,7 +1413,11 @@ void bind_components(py::module_& m) {
              // bare Camera which keeps OpenCV's BGR: this stream feeds vision
              // pipelines, which all want RGB. Pass ColorMode.BGR for code that
              // hands frames straight to cv2.imshow/imwrite.
-             py::arg("wrist_color_mode")    = ColorMode::Rgb)
+             py::arg("wrist_color_mode")    = ColorMode::Rgb,
+             // 固件版本门:低于 1.1.6 直接拒绝打开(那之前 MIT 路径上没有任何
+             // 堵转保护)。置 true 只为了在升级前读一台旧设备的配置;OTA 本身
+             // 走 LeaderGripper,不受影响。
+             py::arg("allow_outdated_firmware") = false)
         .def_property_readonly("firmware_version",
             [](const FollowerGripper& g) -> py::object {
                 auto v = g.firmware_version();
