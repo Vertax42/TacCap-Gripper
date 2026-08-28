@@ -4,6 +4,14 @@ find_package(spdlog REQUIRED)
 pybind11_add_module(_taccap_native MODULE
     bindings/module.cpp
     bindings/components.cpp
+    bindings/bind_sensors.cpp
+    bindings/bind_ota.cpp
+    bindings/bind_gripper_types.cpp
+    bindings/bind_calibration.cpp
+    bindings/bind_motor.cpp
+    bindings/bind_camera.cpp
+    bindings/bind_gripper.cpp
+    bindings/bind_control.cpp
     bindings/log.cpp
 )
 
