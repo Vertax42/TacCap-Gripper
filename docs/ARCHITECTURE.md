@@ -367,6 +367,8 @@ does.
 ```
   set_impedance(pos,kp,kd,ff)  --ACK-->  Cmd::MotorImpedanceCtrl (blocking)
   submit_impedance(...)        --no ACK-> Cmd::MotorImpedanceCtrl (realtime)
+        (C++ only -- not exposed to Python; use ControlLoop /
+         ForcePositionController, which call these internally)
         │                                   firmware runs a 500 Hz control task
         │                                   consuming the latest submitted target
   FollowerGripper.set_position(0..1) --> GripperPosition -> raw rad -> submit

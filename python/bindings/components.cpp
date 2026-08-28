@@ -937,77 +937,19 @@ void bind_components(py::module_& m) {
         .def("enable",      [](Motor& self) { py::gil_scoped_release g; self.enable();      })
         .def("disable",     [](Motor& self) { py::gil_scoped_release g; self.disable();     })
         .def("clear_fault", [](Motor& self) { py::gil_scoped_release g; self.clear_fault(); })
-        .def("set_position", [](Motor& self, float pos, float max_vel, float max_torque) {
-                py::gil_scoped_release g;
-                self.set_position(pos, max_vel, max_torque);
-            },
-            py::arg("target_pos_rad"),
-            py::arg("max_vel_radps"),
-            py::arg("max_torque_nm"))
-        .def("set_velocity", [](Motor& self, float vel, float max_torque, float profile_acc) {
-                py::gil_scoped_release g;
-                self.set_velocity(vel, max_torque, profile_acc);
-            },
-            py::arg("target_vel_radps"),
-            py::arg("max_torque_nm"),
-            py::arg("profile_acc_radps2"))
-        .def("set_torque", [](Motor& self, float torque, float max_vel) {
-                py::gil_scoped_release g;
-                self.set_torque(torque, max_vel);
-            },
-            py::arg("target_torque_nm"),
-            py::arg("max_vel_radps"))
-        .def("set_impedance", [](Motor& self, float pos, float kp, float kd,
-                                 float ff, float ff_vel) {
-                py::gil_scoped_release g;
-                self.set_impedance(pos, kp, kd, ff, ff_vel);
-            },
-            py::arg("target_pos_rad"),
-            py::arg("kp_nm_per_rad"),
-            py::arg("kd_nm_s_per_rad"),
-            py::arg("feedforward_torque_nm"),
-            py::arg("feedforward_vel_radps") = 0.0f)  // V1.7; MIT only
-        // ---- High-rate control submission (no ACK) -------------------------
-        // Fire-and-forget for a realtime loop. The firmware applies the latest
-        // target at 500Hz, but that is not a submission budget: every frame
-        // that lands while the MCU is transmitting costs a status frame, and
-        // whether it collides depends on *when* it lands, not the rate. Prefer
-        // ControlLoop with STREAM_LOCKED. See motor.hpp for the measurements.
-        // No ACK, no NACK, no retry, no throw on a rejected target — the only
-        // exception is IoError on a stopped transport. MIT is assumed. Poll
-        // control_stats() (off the loop) for health: applied_seq, actual_hz,
-        // error_count, last_error. The follow/teleop loop + grasp FSM live in
-        // the upper layer (taccap_gripper_ros2), not here.
-        .def("submit_impedance", [](Motor& self, float pos, float kp, float kd,
-                                    float ff, float ff_vel) {
-                py::gil_scoped_release g;
-                self.submit_impedance(pos, kp, kd, ff, ff_vel);
-            },
-            py::arg("target_pos_rad"),
-            py::arg("kp_nm_per_rad"),
-            py::arg("kd_nm_s_per_rad"),
-            py::arg("feedforward_torque_nm"),
-            py::arg("feedforward_vel_radps") = 0.0f)
-        .def("submit_position", [](Motor& self, float pos, float max_vel, float max_torque) {
-                py::gil_scoped_release g;
-                self.submit_position(pos, max_vel, max_torque);
-            },
-            py::arg("target_pos_rad"),
-            py::arg("max_vel_radps"),
-            py::arg("max_torque_nm"))
-        .def("submit_velocity", [](Motor& self, float vel, float max_torque, float profile_acc) {
-                py::gil_scoped_release g;
-                self.submit_velocity(vel, max_torque, profile_acc);
-            },
-            py::arg("target_vel_radps"),
-            py::arg("max_torque_nm"),
-            py::arg("profile_acc_radps2"))
-        .def("submit_torque", [](Motor& self, float torque, float max_vel) {
-                py::gil_scoped_release g;
-                self.submit_torque(torque, max_vel);
-            },
-            py::arg("target_torque_nm"),
-            py::arg("max_vel_radps"))
+        // ---- 裸电机控制刻意不暴露给 Python -------------------------------
+        // set_position/velocity/torque/impedance 及其 submit_*(无 ACK)对应物
+        // 一律只留在 C++。它们每一个都是把控制帧直接丢上总线:没有误差钳位、
+        // 没有力矩天花板、没有堵转保护 —— 那些都长在 ControlLoop 和
+        // ForcePositionController 里,越过控制器就一个都拿不到。
+        //
+        // 这不是假设。客户的控制台用 submit_impedance() 在 kp=20 下顶住刚性
+        // 物体,kp*误差 一路涨到电机自己的 0x700B 上限;24V 下的电流需求把整块
+        // 板子拉垮,夹爪松手掉件、USB 链路消失。见 docs/CONTROL_LAYERING.md。
+        //
+        // Python 调用方请用 ControlLoop(阻抗)或 ForcePositionController
+        // (力位混合)。C++ 侧的方法保持不变 —— 两个控制器和
+        // FollowerGripper::set_position 内部都在调它们。
         .def("read_status", [](Motor& self, unsigned timeout_ms) {
             py::gil_scoped_release gil;
             return self.read_status(std::chrono::milliseconds(timeout_ms));
@@ -1510,12 +1452,10 @@ void bind_components(py::module_& m) {
             py::gil_scoped_release gil;
             return g.position(std::chrono::milliseconds(timeout_ms));
         }, py::arg("timeout_ms") = 100u)
-        .def("set_position", [](FollowerGripper& g, float position,
-                                float kp, float kd, float ff) {
-            py::gil_scoped_release gil;
-            g.set_position(position, kp, kd, ff);
-        }, py::arg("position"), py::arg("kp_nm_per_rad"),
-           py::arg("kd_nm_s_per_rad"), py::arg("feedforward_torque_nm") = 0.0f)
+        // set_position() 同样不暴露:follower_gripper.cpp 里它就是
+        // motor_.submit_impedance() 外面包了一层归一化,绕开控制器的程度和裸
+        // 原语完全一样,只是名字看起来更像正经 API。用 ControlLoop 或
+        // ForcePositionController 的 set_target()。
         .def("pos_to_rad", [](FollowerGripper& g, float position) {
             py::gil_scoped_release gil;
             return g.pos_to_rad(position);

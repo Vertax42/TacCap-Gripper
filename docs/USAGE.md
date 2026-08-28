@@ -295,26 +295,22 @@ python python/examples/impedance_control.py --set-envelope --peak 2.0 --cont 1.6
 是每收到一帧状态提交一次,落在 MCU 已知空闲的窗口里,实测 6000 提交 : 6000 帧 :
 0 丢失;同一条件下自由跑 100 Hz 每轮丢 156–308 帧。别把 500 Hz 当预算花。
 
-低层写法(知道自己在做什么时用):
+**没有低层写法了。** 裸电机原语(`motor.set_impedance` / `submit_impedance` /
+`set_position` / `set_velocity` / `set_torque`,以及归一化包装
+`FollowerGripper.set_position`)**不再暴露给 Python**。它们都是把控制帧直接丢上
+总线:没有误差钳位、没有力矩天花板、没有堵转保护。走 `ControlLoop` 或
+`ForcePositionController`。C++ 侧保留这些方法,两个控制器内部在用。
 
-```python
-f.set_position(0.5, kp_nm_per_rad=8, kd_nm_s_per_rad=1)   # 归一化,无 ACK,面向实时循环
-f.motor.set_impedance(target_pos_rad=-0.5, kp_nm_per_rad=8,
-                      kd_nm_s_per_rad=1, feedforward_torque_nm=0.0)   # 原始弧度,阻塞等 ACK
-st = f.motor.read_status()
-```
+**反馈频率**:电机 `actual_*` 遥测只有 ~50–100 Hz,读观测请走
+`observation()` / `snapshot()`,别用 `read_status()` 轮询 —— 超过 ~100 Hz 会拖住
+固件自己的刷新,而且控制期间的 ACK 往返会撞坏遥测帧。
 
-注意 `f.set_position()`(归一化 `[0,1]`)和 `f.motor.set_position()`(原始弧度)
-是两个不同的东西。**反馈频率**:电机 `actual_*` 遥测只有 ~50–100 Hz,
-读观测请走**流**,别用 `read_status()` 轮询 —— 超过 ~100 Hz 会拖住固件自己的刷新。
-
-> **抓取力**不要指望位置模式的 `max_torque`,它不是紧的力上限,软物会被压坏。
-> 做法见 `python/examples/gripper_force_grasp_test.py`:小步闭合 + 位置停滞检测,
-> 而不是力矩阈值(夹爪本身有随开口变化的回复力矩,力矩阈值会误触发)。
+> **抓取力**要用 `ForcePositionController`:接触判定之后 `kp=kd=0`,
+> `grasp_torque_nm` 就是保持力矩本身。位置模式的 `max_torque` 不是紧的力上限,
+> 拿它当夹持力会把软物压坏。
 
 可跑的示例:`impedance_control.py`、`force_position_control.py`(见上)、
-`motor_mit_control.py`(裸 `submit_impedance`)、`gripper_force_grasp_test.py`
-(柔性抓取)。
+`gripper_console.py`(交互控制台,两种模式)。
 
 ---
 
