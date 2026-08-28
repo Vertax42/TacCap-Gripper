@@ -33,9 +33,6 @@ taccap.crc32_iso_hdlc = lambda data: 0
 
 taccap.log = types.SimpleNamespace(set_level=lambda *args, **kwargs: None)
 
-sys.modules.setdefault("xense", xense)
-sys.modules["xense.taccap"] = taccap
-
 _calib_flow = types.ModuleType("_calib_flow")
 _calib_flow.format_version = _format_version
 
@@ -45,15 +42,33 @@ def _resolve_target(target):
 
 
 _calib_flow.resolve_target = _resolve_target
-sys.modules["_calib_flow"] = _calib_flow
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "ota_update_example",
     ROOT / "examples" / "ota_update.py",
 )
-mod = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(mod)
+
+# The stubs exist only so ota_update.py's module-level imports resolve without
+# hardware. They MUST be torn down again: pytest imports every test module
+# during collection, so a stub left in sys.modules is still there when the
+# other test modules run, and they silently get the fake `xense.taccap`
+# instead of the real one. That turned a genuine failure in
+# test_numpy_views.py into "TypeError: object() takes no arguments" -- an
+# error that points at a constructor signature and has nothing to do with the
+# actual bug. Anything left installed here would mask future failures too.
+_STUBS = {"xense": xense, "xense.taccap": taccap, "_calib_flow": _calib_flow}
+_SAVED = {name: sys.modules.get(name) for name in _STUBS}
+sys.modules.update(_STUBS)
+try:
+    mod = importlib.util.module_from_spec(SPEC)
+    SPEC.loader.exec_module(mod)
+finally:
+    for name, previous in _SAVED.items():
+        if previous is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
 
 
 class FakeEndpoint:

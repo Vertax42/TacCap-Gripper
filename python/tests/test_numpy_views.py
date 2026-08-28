@@ -54,12 +54,22 @@ def test_fisheye_k_is_a_real_buffer():
 
 @pytest.fixture(scope="module")
 def any_gripper():
-    grippers = scan_grippers()
-    if not grippers:
-        pytest.skip("no TacCap gripper connected")
-    from xense.taccap import LeaderGripper
+    """A *leader*, specifically — the IMU is leader-only.
 
-    g = LeaderGripper(mcu_device=grippers[0].mcu_device)
+    This used to take scan_grippers()[0] on the assumption that whatever is
+    plugged in first has an IMU. It does not: a follower NACKs GetImuData
+    regardless of which class opens it (measured — opening one as either
+    LeaderGripper or FollowerGripper returns "decode ImuData: expected 28
+    bytes, got 1"), so on a bench whose first endpoint is a follower this
+    fixture failed instead of skipping. The endpoint carries its role, so ask.
+    """
+    from xense.taccap import LeaderGripper, Role
+
+    leaders = [g for g in scan_grippers() if g.role == Role.Leader]
+    if not leaders:
+        pytest.skip("no leader gripper connected (the IMU is leader-only)")
+
+    g = LeaderGripper(mcu_device=leaders[0].mcu_device)
     yield g
     g.transport.stop()
 
