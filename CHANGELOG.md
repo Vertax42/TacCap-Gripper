@@ -38,16 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (host-side contact detection, superseded by `ForcePositionController`),
   `v4l2_probe.py` / `v4l2_sweep.py`, and `rerun_dual_with_tracker.py`.
 
-### Added
+- **BREAKING: the example device selector is a positional argument everywhere.**
+  `impedance_control.py`, `force_position_control.py` and the new
+  `gripper_console.py` used to take `--side left|right|follower`; they now take
+  the same positional `left` / `right` / firmware-SN that every other example
+  already used, and omit it when exactly one gripper is plugged in.
 
-- **`python/examples/read_intrinsics.py`** — read-only wrist-camera intrinsics
-  export as JSON. Goes through `Calibration.resolve_fisheye()` rather than
-  `read_fisheye()`: an uncalibrated unit answers a read with an all-zero record
-  rather than a NACK, and handing that to `FisheyeUndistorter` remaps every
-  frame to black. The `source` field says whether the numbers came from the
-  device (`device`) or the SDK reference values (`reference`); `--require-device`
-  turns the latter into a non-zero exit. JSON goes to stdout and diagnostics to
-  the log, so it pipes cleanly.
+  **What breaks:** scripts passing `--side right` to those three. Drop the flag
+  and pass `right`. The convention was already documented in
+  `docs/EXAMPLES.md` — these three were the violators, not the rule.
+
 
 - **BREAKING: the wrist camera now hands out RGB by default.** Its consumers are
   vision and learning pipelines and every one of them wants RGB — LeRobot
@@ -66,6 +66,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already assumes still holds there.
 
 ### Added
+
+
+- **`python/examples/read_intrinsics.py`** — read-only wrist-camera intrinsics
+  export as JSON. Goes through `Calibration.resolve_fisheye()` rather than
+  `read_fisheye()`: an uncalibrated unit answers a read with an all-zero record
+  rather than a NACK, and handing that to `FisheyeUndistorter` remaps every
+  frame to black. The `source` field says whether the numbers came from the
+  device (`device`) or the SDK reference values (`reference`); `--require-device`
+  turns the latter into a non-zero exit. JSON goes to stdout and diagnostics to
+  the log, so it pipes cleanly.
+
+- **`python/examples/gripper_console.py`** — single-gripper keyboard console,
+  with `--mode impedance` (`ControlLoop`) and `--mode force-position`
+  (`ForcePositionController`) sharing one UI. It is also the motion-safety
+  envelope's configuration entry point (`--show-envelope` / `--set-envelope
+  --peak --cont --temp-wall`), and the header carries a permanent
+  `ENFORCED` / `*** INACTIVE ***` marker — the envelope is the only layer on
+  the MIT path that nothing can bypass, and it ships disabled.
+
+
 
 - **`Camera::Config::color_mode`** (`ColorMode::Bgr` / `Rgb`) — the channel order
   a camera hands frames out in, and the mechanism behind the wrist default above.
