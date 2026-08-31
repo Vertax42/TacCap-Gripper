@@ -861,8 +861,9 @@ def main() -> int:
                           f"最小 {JOG_STEP_RAD:.3f}）"))
     ap.add_argument("--jog-timeout", type=float, default=JOG_INPUT_TIMEOUT_S,
                     help="终端停止发送重复字符后自动停止时间（秒，默认 0.65）")
-    ap.add_argument("--grasp-torque", type=float, default=0.35,
-                    help="接触后的 MIT 纯前馈保持力矩 Nm")
+    ap.add_argument("--grasp-torque", type=float, default=None,
+                    help=("接触后的 MIT 纯前馈保持力矩 Nm；未指定且使用 "
+                          "--set-envelope 时默认采用 --cont"))
     ap.add_argument("--hold-torque-offset", type=float,
                     default=HOLD_TORQUE_OFFSET_DEFAULT_NM,
                     help=("最终保持力矩补偿 Nm；用于修正反馈整体偏高，"
@@ -884,6 +885,14 @@ def main() -> int:
     ap.add_argument("--temp-wall", type=int, default=0,
                     help="温度墙 °C，0=固件默认 100")
     args = ap.parse_args()
+
+    # --cont is the firmware continuous envelope limit, while
+    # --grasp-torque is the application hold target.  When a user configures
+    # the envelope and omits an explicit hold target, using the same continuous
+    # value is the least surprising behaviour.  Keep the historical 0.35 Nm
+    # default for ordinary runs without --set-envelope.
+    if args.grasp_torque is None:
+        args.grasp_torque = args.cont if args.set_envelope else 0.35
 
     if args.step_rad is None:
         # Keep one point-jog increment close to one hybrid control period. A

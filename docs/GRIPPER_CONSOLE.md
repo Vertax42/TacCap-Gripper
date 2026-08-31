@@ -70,6 +70,22 @@ g.get_envelope() / g.set_envelope()
 --peak / --cont      固件运动包络的峰值/持续力矩
 ```
 
+当命令包含 `--set-envelope` 且没有显式传入 `--grasp-torque` 时，脚本会自动将
+`--cont` 同时作为本次运行的目标保持力矩。例如：
+
+```bash
+python python/examples/gripper_console.py --set-envelope --peak 2.0 --cont 1.6
+```
+
+该命令会写入 `peak=2.0 Nm`、`cont=1.6 Nm`，并将保持目标设为 `1.6 Nm`；
+默认 `0.05 Nm` 偏置补偿后，保持阶段实际下发约 `1.55 Nm` 的 MIT 前馈力矩。
+如果只想设置包络但保持目标使用其他值，请显式传入：
+
+```bash
+python python/examples/gripper_console.py \\
+  --set-envelope --peak 2.0 --cont 1.6 --grasp-torque 1.2
+```
+
 保持偏置只作用于接触后的 `holding` 状态。例如目标 `1.20 Nm`、默认偏置
 `0.05 Nm` 时，下发保持前馈力矩为 `1.15 Nm`。闭合速度阶段的阻尼力矩不使用该
 偏置，避免改变闭合速度和接触判定。
@@ -85,7 +101,8 @@ g.get_envelope() / g.set_envelope()
 5. 增加闭合速度、张开速度、点动步长、接触阈值、力矩限制等命令行参数。
 6. 增加最终保持力矩的可调固定偏置补偿，默认修正约 `0.05 Nm` 的整体偏高。
 7. 增加 `--set-envelope` 及包络参数配置入口，并在界面显示当前包络和控制参数。
-8. 更新 `docs/EXAMPLES.md`，使新脚本可从示例索引发现。
+8. 未显式指定保持目标时，让 `--set-envelope --cont` 同步作为本次运行的目标保持力矩，避免意外使用 `0.35 Nm` 默认值。
+9. 更新 `docs/EXAMPLES.md`，使新脚本可从示例索引发现。
 
 ## 与 SDK 内置控制器的关系
 
