@@ -144,7 +144,7 @@ directly if you need to go below the MCU.
 ## Pushing
 On **this machine there is exactly one remote**, and it is GitHub:
 ```
-origin  git@github.com:Vertax42/TacCap-Gripper.git
+origin  git@github.com:XenseRobotics-AI/TacCap-Gripper.git
 ```
 So the only push is `git push origin main`. There is no `github` remote here —
 `git fetch github` fails with "does not appear to be a git repository". (Other
@@ -206,8 +206,8 @@ archive format never changes (keeps historical greps parseable).
   wrist-camera only.
 - `third_party/firmware/` is a **clone-on-demand** firmware reference dir,
   **not** a submodule. `.gitignore` already excludes it. Never `git add -f`
-  or convert it into a submodule. It comes from a *different* GitHub org than
-  this repo, which is why searching `Vertax42` for it turns up nothing:
+  or convert it into a submodule. It is a separate repository in the same
+  `XenseRobotics-AI` org as this repo:
   ```bash
   gh repo clone XenseRobotics-AI/tc-gu-01 third_party/firmware/tc-gu-01 -- --depth=1
   ```
