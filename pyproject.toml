@@ -17,7 +17,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Vertax42/TacCap-Gripper"
+Homepage = "https://github.com/XenseRobotics-AI/TacCap-Gripper"
 
 [tool.scikit-build]
 wheel.packages = ["python/xense"]
