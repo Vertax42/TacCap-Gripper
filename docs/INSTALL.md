@@ -13,9 +13,9 @@ to build.
 
 |                       | Required                                                                                            |
 | --------------------- | --------------------------------------------------------------------------------------------------- |
-| OS                    | Linux (Ubuntu 22.04+ tested). The capture path is V4L2 + UVC XU; macOS / Windows are not supported. |
+| OS                    | Linux (Ubuntu 22.04 / 24.04 tested). The capture path is V4L2 + UVC XU; macOS / Windows are not supported. |
 | Toolchain             | gcc/g++ ≥ 13, CMake ≥ 3.20, Ninja, pkg-config                                                       |
-| Python (for bindings) | CPython 3.12                                                                                        |
+| Python (for bindings) | CPython ≥ 3.10 (`requires-python` in `pyproject.toml`); `environment.yml` pins 3.12 as the recommended development interpreter |
 | Recommended           | `mamba` / `conda` — `environment.yml` pins the entire toolchain & C++ deps to a known-good set      |
 
 > **Why mamba is recommended.** `environment.yml` ships gcc-14, OpenCV
@@ -31,6 +31,13 @@ cd taccap-gripper
 ```
 
 There are no git submodules — the SDK builds standalone.
+
+Every command below assumes the SDK root as the working directory. If you
+consume the SDK as a vendored submodule of a downstream repo instead (e.g.
+`xense-taccap-lerobot` carries it at `third_party/taccap-gripper`), skip the
+clone and `cd third_party/taccap-gripper` first — the steps are otherwise the
+same. If all you do is collect data with such a repo you normally never need
+this page: its `setup_env.sh` builds the SDK as part of that environment.
 
 ### 3. Create the development environment
 
@@ -72,8 +79,10 @@ core and the pybind11 extension, then co-locates them inside the wheel
 under `xense/taccap/`:
 
 ```bash
-# Editable / development install (re-runs CMake on every `pip install -e .`):
-pip install -e .
+# Editable / development install (re-runs CMake on every `pip install -e .`).
+# --no-build-isolation builds against the env's pinned pybind11 /
+# scikit-build-core instead of pulling fresh copies into a temp venv:
+pip install -e . --no-build-isolation
 
 # Or a regular install (builds a wheel, installs it):
 pip install .
@@ -127,6 +136,22 @@ CMake options (top-level `CMakeLists.txt:19-21`):
 | `TACCAP_BUILD_EXAMPLES` | `OFF`   | Build the `leader_demo` smoke binary            |
 | `TACCAP_BUILD_TESTS`    | `OFF`   | Build the gtest suite under `cpp/tests/`        |
 
+### 5c. Integrate into another CMake / ROS 2 project
+
+The SDK currently **installs no headers and exports no CMake package config**,
+so `find_package(taccap-gripper)` does not work. Consume it as a source
+subdirectory instead:
+
+```cmake
+add_subdirectory(path/to/taccap-gripper taccap-gripper-build)
+target_link_libraries(my_target PRIVATE taccap_core)
+```
+
+`taccap_core` propagates its public include directory and the OpenCV / spdlog
+dependencies to `my_target`. Copying `libtaccap_core.so` on its own is not
+enough for a C++ integration — you would also need the matching public headers
+and dependencies — so that route is not recommended.
+
 ### 6. Verify
 
 ```bash
@@ -141,6 +166,25 @@ env -u PYTHONPATH pytest python/tests
 # C++ tests (only if TACCAP_BUILD_TESTS=ON)
 ctest --test-dir build --output-on-failure
 ```
+
+**Hardware self-check.** With a gripper plugged in, the scan should print one
+line per connected unit:
+
+```bash
+python -c "from xense.taccap import scan_grippers
+for g in scan_grippers():
+    print(f'side={g.side.name} role={g.role.name} ch343={g.mcu_serial} fw_sn={g.firmware_sn!r}')"
+```
+
+A single line with only one gripper attached is normal — left and right do not
+have to be present together. Under the current SN scheme `firmware_sn` is
+non-empty and `role` is `Leader` / `Follower`. A legacy SN, a unit whose SN was
+never burned, a failed SN read on a cold start, or old firmware can all show an
+empty SN / `Unknown` — do not read that alone as "firmware < V1.6". An empty
+scan usually means the serial permissions from step 4 have not taken effect
+yet, or ModemManager has grabbed the `/dev/ttyACM*` node. The equivalent checks
+for the wrist camera and the visuotactile sensors are in
+[USAGE.md](USAGE.md) §0.
 
 > **If `xense.taccap` resolves somewhere unexpected, check `PYTHONPATH`.**
 > Stacked conda activations can export another env's `site-packages` into
