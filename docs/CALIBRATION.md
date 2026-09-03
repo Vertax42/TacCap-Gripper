@@ -18,7 +18,9 @@ absorbs this two ways:
   pointing at calibration or mechanical issues.
 
 To calibrate a gripper, run `calibrate.py` against the side you want to fix
-(or its SN, if you'd rather be explicit):
+(or its SN, if you'd rather be explicit). It is a **once-per-leader** job: both
+results go to MCU flash (see below), so nothing here needs repeating after a
+power cycle:
 
 ```bash
 python python/examples/calibrate.py left               # by side
@@ -30,7 +32,9 @@ The script:
 1. Resolves `left`/`right` (or the SN you passed) to one `mcu_device`, and
    prints the firmware SN it picked plus every gripper it can see, so the
    pick is verifiable. Side comes from the firmware-burned SN read over the
-   wire (`Cmd::GetSn`), not the CH343 chip serial.
+   wire (`Cmd::GetSn`), not the CH343 chip serial. If two grippers resolve to
+   the same side it refuses and lists both firmware SNs rather than guessing
+   for you.
 2. **Pre-flight:** checks the firmware implements `Cmd::EncoderMaxCal`
    (0x2C). This runs *before* anything is written — step 4 persists a new
    zero, so a pre-V2.1 gripper is refused while still untouched rather than

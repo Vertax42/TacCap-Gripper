@@ -149,6 +149,30 @@ for the single-threaded OTA flow, which is the only user.
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+### 1.1 Components by role and command-set version
+
+Not every component exists on both roles, and several only arrived with a
+particular command-set revision. Calling one the firmware does not implement
+fails loudly with `ProtocolError(InvalidCmd)` rather than misbehaving.
+
+| Component | Leader | Follower | Command set | Notes |
+| --- | --- | --- | --- | --- |
+| `IMU` / `Encoder` — `read_once()`, `on_data(cb)` | yes | no stream | base | Follower firmware streams motor status only; see [USAGE.md](USAGE.md) §1.2 |
+| `Key` | yes | yes | base | |
+| `Led` (WS2812) | yes | yes | V1.9 | |
+| `SensorErrors` | yes | yes | V1.6 | decoded fault words |
+| `OtaSession` | yes | yes | V1.3 | `ota_update.py` drives it through `LeaderGripper` whatever the role |
+| `Motor` | — | yes | V1.7 | Python reaches it only through `ControlLoop` / `ForcePositionController` |
+| `Calibration` — `read_fisheye()` / `write_fisheye()` / `resolve_fisheye()` | yes | yes | V2.0 | |
+| `Calibration` — `read_encoder_max_rad()` / `write_encoder_max_rad()` | yes | NACK (`InvalidCmd`) | V2.1 | |
+| Normalized position `[0, 1]` | yes — from the encoder-max record, or `Config::encoder_max_rad` supplied by the host for pre-V2.1 firmware | yes — from `GripperConfig` | — | see [CALIBRATION.md](CALIBRATION.md) |
+| `Camera` (wrist UVC) | opt-in | opt-in | — | its own capture thread, never the serial transport; `open_cameras=true` or a standalone `Camera` |
+
+A record that was never written normally reads back as an empty `optional`
+(Python `None`) — but not always: the fisheye read can answer with an all-zero
+record instead. [CALIBRATION.md](CALIBRATION.md) covers how `resolve_fisheye()`
+handles that.
+
 ---
 
 ## 2. Module map
@@ -539,6 +563,15 @@ will be implemented later:
 | lerobot integration       | `lerobot-xense`, where TacCap is a **gripper backend** (`type: taccap_follower`) that any arm can mount — not a Robot class of its own |
 | Master→slave follow / teleop loop, grasp state machine (contact/latch), episode orchestration | downstream apps / `taccap_gripper_ros2` — this SDK gives the realtime primitives (`ControlLoop`, `submit_*`, normalized position), not the policy |
 | Higher-level orchestration (episode controller, replay, visualisation) | downstream applications |
+
+One concrete consequence of that boundary: the lerobot adapter
+(`xense-taccap-lerobot`) consumes this SDK for the MCU only and does not use
+the SDK `Camera` at all. Its wrist-camera frames come from LeRobot's own
+`OpenCVCamera`, and its visuotactile images from `XenseTactileCamera` on top
+of the `xensesdk` wheel. That is also why `LeaderGripper.open()` /
+`FollowerGripper.open()` never touch a V4L2 device unless constructed with
+`open_cameras=true` and a device path — whoever already owns `/dev/video*`
+keeps it.
 
 The follower motor stack **is** in this repo now (`Motor`, `FollowerGripper`,
 `GripperPosition`, `ControlLoop`, `Led`) and hardware-validated — what stays

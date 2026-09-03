@@ -36,9 +36,70 @@ python python/examples/ota_update.py --get-status right
 | `fisheye_cal.py`                 | Read/write the flash-persisted calibration records (V2.0/V2.1): `show`, `set-fisheye` (flags or an OpenCV `.npz` holding `K`/`D`), `set-encoder-max`, and `measure-encoder-max` — the guided close-zero → open-sample → store flow that unlocks normalized leader position.                                                                                                                     |
 | `wrist_camera.py`                | Stand-alone wrist-camera viewer, selected by `left` / `right` (or an XC serial) like every other example. **XC wrist cameras only** — a GSPS visuotactile serial or a raw `/dev/videoN` path is refused, since those sensors belong to `xensesdk`. Fisheye undistortion on a switch, **off by default like the SDK itself**: `--undistort` / `--compare` (raw \| rectified side by side), `--balance`, and `u` / `[` `]` to cycle live. Intrinsics come from the same-side gripper via `resolve_fisheye()`, from a `.npz`, or from the SDK reference values with `--no-mcu`. Headless with `--no-display` (+ `--save-dir` for one PNG/s). |
 | `leader_normalized_position.py`  | Streams a leader gripper's opening as `0..1` via `normalize_position=True`, with a live bar. Needs the encoder-max record (or `--encoder-max-rad` to bypass the firmware read).                                                                                                                                                                                                              |
-| `ota_update.py`                  | Firmware OTA flashing CLI with progress + post-flash status probe. **Risky — wrong artefact bricks the MCU.**                                                                                                                                                                                                                                                                               |
+| `ota_update.py`                  | Firmware OTA flashing CLI with progress + post-flash status probe. The released images ship in `firmware/`; pass a bare filename, a role (`master` / `slave`) or `--all` and the script finds the matching image. Every image is identified by CRC32 against `firmware/manifest.json` and a **role-mismatched flash is refused** (`--force` overrides — only if you really mean it). **Risky — wrong artefact bricks the MCU.** Power-cycle after every flash, see [FIRMWARE.md](FIRMWARE.md). |
 | `leader_demo` (C++)              | Reports streaming rates for a single leader gripper over 5 seconds.                                                                                                                                                                                                                                                                                                                         |
 
+
+## C++ 冒烟程序 `leader_demo`
+
+打开 C++ 示例后,直接跑官方 `leader_demo` 就能验证单只主夹爪的 IMU 与编码器流:
+
+```bash
+cmake -B build -G Ninja \
+    -DTACCAP_BUILD_PYTHON=OFF \
+    -DTACCAP_BUILD_EXAMPLES=ON
+cmake --build build -j
+./build/cpp/examples/leader_demo
+```
+
+它用 `LeaderGripper::open()` 自动发现**当前唯一连接**的夹爪并采样 5 秒,结束时报告各路流速率。
+同时插了多只夹爪时 `open()` 会抛错,应改成先扫描端点再显式构造 —— 最小的 C++17 写法如下;
+工程里通过 `add_subdirectory()` 引入 SDK 并链接 `taccap_core`(见 [INSTALL.md](INSTALL.md)):
+
+```cpp
+#include <taccap/discovery.hpp>
+#include <taccap/leader_gripper.hpp>
+
+#include <chrono>
+#include <iostream>
+#include <thread>
+
+int main() {
+    namespace tc = xense::taccap;
+
+    const auto ep = tc::discovery::find_leader();   // 按固件 SN 的 m 后缀选 Leader
+    tc::LeaderGripper::Config cfg;
+    cfg.mcu_device = ep.mcu_device;
+    tc::LeaderGripper gripper(cfg);
+
+    gripper.encoder().on_data([](const auto& sample) {
+        std::cout << "encoder=" << sample.position_rad << "\n";
+    });
+    gripper.start_streaming(100, 100);
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    gripper.stop_streaming();
+    return 0;
+}
+```
+
+## 从夹爪电机控制示例(会驱动真实电机)
+
+> **以下脚本只适用于从夹爪(Follower),而且会让真实电机动起来。** 运行前清空夹爪运动
+> 范围内的东西,确认急停 / 断电手段就在手边,并让手指远离夹爪。主夹爪没有电机,不要在
+> 主夹爪上执行 —— 用错角色不会自动纠正,只会在发命令时 NACK。
+
+- `impedance_control.py`:`ControlLoop` 的归一化开度 `[0,1]` 控制,跑一遍开合序列。
+- `force_position_control.py`:`ForcePositionController`,被挡住后切纯力矩保持,带夹持力。
+- `gripper_console.py`:键盘控制台,两种控制器共用一个 UI。
+
+三者都要求从夹爪的 `GripperConfig` 已完成闭合零点与最大开度标定,并且**先写好运动安全
+包络**(见下一节第 0 步)。设备选择器和其它示例一样是位置参数:
+
+```bash
+python python/examples/impedance_control.py right
+python python/examples/force_position_control.py right --grasp-torque 0.35
+python python/examples/gripper_console.py right --mode force-position
+```
 
 ## 力位混合控制器
 

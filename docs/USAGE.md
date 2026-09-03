@@ -45,10 +45,12 @@ python python/examples/wrist_camera.py --list
 python -c "from xensesdk import Sensor; print(Sensor.scanSerialNumber())"
 ```
 
-健康的输出:夹爪那条打出 `[L]` / `[R]` 且 `fw_sn` 非空;`--list` 那条把腕相机
-(`XC…`)和视触觉(`GSPS01…`)分开列出;OG 那条打出形如 `{'OG000352': 10}` 的
-字典。`fw_sn` 为空说明固件还没烧 SN(或固件早于 V1.6),此时侧别会是
-`Side.Unknown`。
+健康的输出:夹爪那条每台一行,打出 `[L]` / `[R]` 且 `fw_sn` 非空、`role` 是
+`Leader` / `Follower`(只插一台时只有一行,这是正常的,不要求左右同时在);`--list`
+那条把腕相机(`XC…`)和视触觉(`GSPS01…`)分开列出;OG 那条打出形如
+`{'OG000352': 10}` 的字典。`fw_sn` 为空或 `role` 为 `Unknown` 有好几种来源:固件还没
+烧 SN、旧格式序列号、冷启动时那一次 SN 读取失败、或固件早于 V1.6 —— 别只凭空 SN 就
+断定固件旧;这时侧别也可能是 `Side.Unknown`。
 
 > **三类设备靠序列号区分,不靠设备号。** `/dev/videoN` 的编号随插拔顺序变,而且
 > 腕相机和视触觉挨着枚举 —— 认错了就会把触觉传感器当相机打开。序列号语法和
@@ -483,8 +485,8 @@ finally:
 
 | 现象 | 多半是 |
 | --- | --- |
-| `scan_grippers()` 返回空 | 串口权限(见 [INSTALL.md](INSTALL.md))或线没插好 |
-| `fw_sn` 为空 / `Side.Unknown` | 固件没烧 SN,或固件早于 V1.6 |
+| `scan_grippers()` 返回空 | 串口权限(见 [INSTALL.md](INSTALL.md))、ModemManager 抢占了 `/dev/ttyACM*`,或线没插好 |
+| `fw_sn` 为空 / `Side.Unknown` | 固件没烧 SN、旧格式序列号、冷启动那次 SN 读取失败,或固件早于 V1.6 —— 别只凭这个断定固件旧 |
 | 矫正后画面全黑 | 用了 `read_fisheye()` 的全零记录 —— 改用 `resolve_fisheye()` |
 | 矫正后画面偏心 | 未必是错的,主点本来就不一定在画面中心 |
 | 录下来的颜色是反的 | 裸 `Camera` 是 BGR、`wrist_camera` 是 RGB,搞混了 |
